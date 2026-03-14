@@ -123,20 +123,25 @@ function AdminDashboard(props: {
   const monthTeamMinutes = members.reduce((s, mem) => s + getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth), 0);
   const monthApoCostMinutes = teamTotals.decisionMakerApo > 0 ? monthTeamMinutes / teamTotals.decisionMakerApo : null;
 
-  // ダッシュボード表示日付に基づく集計（Supabase kpis / attendance を日付でフィルタ）
+  // ダッシュボード表示日付に基づく集計（Supabase kpis / attendance / open_records を日付でフィルタ）
   const dateKpis = allKpiRecords.filter((k) => k.date === dashboardDate);
   const dateDecision = dateKpis.reduce((s, k) => s + k.decisionMakerApo, 0);
   const dateNonDecision = dateKpis.reduce((s, k) => s + k.nonDecisionMakerApo, 0);
-  const workingCountForDate = new Set(allRecords.filter((r) => r.date === dashboardDate).map((r) => r.userId)).size;
+  // 選択日の「勤務開始」打刻が1回でもあるメンバー数（完了した打刻 or 未終了の打刻のいずれか）
+  const userIdsFromAttendance = allRecords.filter((r) => r.date === dashboardDate).map((r) => r.userId);
+  const userIdsFromOpen = allOpenRecords.filter((r) => r.date === dashboardDate).map((r) => r.userId);
+  const workingCountForDate = new Set([...userIdsFromAttendance, ...userIdsFromOpen]).size;
   const dateTeamMinutes = allRecords.filter((r) => r.date === dashboardDate).reduce((s, r) => s + r.durationMinutes, 0);
   const dateApoCostMinutes = dateDecision > 0 ? dateTeamMinutes / dateDecision : null;
+  // 決裁者アポまたは非決裁者アポが1件以上あるメンバーのみ、決裁者アポ多い順
   const apoListForDate = members
     .map((mem) => {
       const k = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), dashboardDate);
       const dec = k ? k.decisionMakerApo : 0;
-      return { mem, dec };
+      const non = k ? k.nonDecisionMakerApo : 0;
+      return { mem, dec, non };
     })
-    .filter(({ dec }) => dec >= 1)
+    .filter(({ dec, non }) => dec >= 1 || non >= 1)
     .sort((a, b) => b.dec - a.dec);
 
   const handleAdd = async () => {
@@ -229,27 +234,22 @@ function AdminDashboard(props: {
                 <div className="text-2xl font-bold">{dateNonDecision} 件</div>
               </div>
               <div className="rounded-lg bg-amber-600 px-4 py-3 text-white">
-                <div className="text-xs text-amber-100">稼働人数</div>
+                <div className="text-xs text-amber-100">本日の稼働人数</div>
                 <div className="text-2xl font-bold">{workingCountForDate} 名</div>
               </div>
             </div>
             <div>
-              <div className="mb-2 text-xs font-medium text-slate-500">アポ取得一覧（決裁者アポ1件以上のメンバー、件数順）</div>
+              <div className="mb-2 text-xs font-medium text-slate-500">アポ取得一覧（決裁者 or 非決裁者1件以上のメンバー、決裁者アポ多い順）</div>
               {apoListForDate.length === 0 ? (
                 <p className="rounded-lg bg-slate-100 px-4 py-3 text-sm text-slate-500">指定された日のアポ獲得者はまだいません</p>
               ) : (
                 <div className="flex flex-wrap gap-2">
-                  {apoListForDate.map(({ mem, dec }) => {
-                    const k = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), dashboardDate);
-                    const non = k ? k.nonDecisionMakerApo : 0;
-                    return (
-                      <span key={mem.id} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
-                        <span className="font-medium text-slate-800">{mem.name}</span>
-                        <span className="rounded bg-emerald-200 px-1.5 py-0.5 text-xs font-semibold text-emerald-800">決裁 {dec}</span>
-                        <span className="rounded bg-teal-200 px-1.5 py-0.5 text-xs font-semibold text-teal-800">非決裁 {non}</span>
-                      </span>
-                    );
-                  })}
+                  {apoListForDate.map(({ mem, dec, non }) => (
+                    <span key={mem.id} className="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 text-sm text-slate-800">
+                      <span className="font-medium">{mem.name}</span>
+                      <span className="ml-1.5 text-slate-600">：決裁者{dec}件 / 非決裁者{non}件</span>
+                    </span>
+                  ))}
                 </div>
               )}
             </div>
