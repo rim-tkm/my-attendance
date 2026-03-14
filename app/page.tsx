@@ -111,6 +111,7 @@ function AdminDashboard(props: {
   const [editRate, setEditRate] = useState(DEFAULT_HOURLY_RATE);
   const [kpiDate, setKpiDate] = useState(() => toDateString(new Date()));
   const [dashboardDate, setDashboardDate] = useState(() => toDateString(new Date()));
+  const [backupExpanded, setBackupExpanded] = useState(false);
 
   const y = new Date().getFullYear();
   const m = new Date().getMonth() + 1;
@@ -438,98 +439,42 @@ function AdminDashboard(props: {
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-medium text-slate-700">管理設定（メンバー追加・編集・削除）</h2>
 
-          <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <p className="mb-3 text-xs font-medium text-slate-600">データのバックアップ・復元</p>
-            <p className="mb-3 text-xs text-slate-500">エクスポートでJSONファイルをダウンロードし、PCやクラウドに保存できます。復元時はそのファイルを選択してください。</p>
-            <div className="mb-4 flex flex-wrap items-center gap-4">
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    const data = await exportAllDataFromSupabase();
-                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `kado-backup-${data.exportedAt.slice(0, 10)}-${Date.now()}.json`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                  } catch (e) {
-                    alert("エクスポートに失敗しました。");
-                  }
-                }}
-                className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600"
-              >
-                バックアップをダウンロード（エクスポート）
-              </button>
-              <label className="flex cursor-pointer items-center gap-2 rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">
-                <span>ファイルから復元（インポート）</span>
-                <input
-                  type="file"
-                  accept=".json,application/json"
-                  className="hidden"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const reader = new FileReader();
-                    reader.onload = async () => {
-                      try {
-                        const data = JSON.parse(reader.result as string);
-                        if (!data || typeof data !== "object") throw new Error("不正な形式です");
-                        await importAllDataToSupabase(data);
-                        onRefresh();
-                        const mems = await loadMembers();
-                        setMembers(mems ?? []);
-                        alert("復元が完了しました。画面を更新します。");
-                        window.location.reload();
-                      } catch (err) {
-                        alert("復元に失敗しました。正しいバックアップファイルか確認してください。");
-                      }
-                    };
-                    reader.readAsText(file);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-            </div>
-            <p className="mt-2 text-xs text-slate-500">データは Supabase に保存されています。バックアップ用にJSONをダウンロードできます。</p>
-          </div>
-
-          <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <p className="mb-3 text-xs font-medium text-slate-600">新規メンバー追加</p>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5 lg:gap-4">
-              <div className="flex flex-col gap-1.5">
+          <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-5 sm:p-6">
+            <p className="mb-4 text-sm font-medium text-slate-700">新規メンバー追加</p>
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5 lg:gap-6">
+              <div className="flex min-w-0 flex-col gap-2">
                 <label className="text-xs font-medium text-slate-600">名前</label>
-                <input type="text" value={newMemberName} onChange={(e) => setNewMemberName(e.target.value)} placeholder="表示名" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                <input type="text" value={newMemberName} onChange={(e) => setNewMemberName(e.target.value)} placeholder="表示名" className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-2">
                 <label className="text-xs font-medium text-slate-600">ユーザー名（ログイン用）</label>
-                <input type="text" value={newMemberLogin} onChange={(e) => setNewMemberLogin(e.target.value)} placeholder="ログインID" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                <input type="text" value={newMemberLogin} onChange={(e) => setNewMemberLogin(e.target.value)} placeholder="ログインID" className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-2">
                 <label className="text-xs font-medium text-slate-600">パスワード</label>
-                <input type="password" value={newMemberPassword} onChange={(e) => setNewMemberPassword(e.target.value)} placeholder="パスワード" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                <input type="password" value={newMemberPassword} onChange={(e) => setNewMemberPassword(e.target.value)} placeholder="パスワード" className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex min-w-0 flex-col gap-2">
                 <label className="text-xs font-medium text-slate-600">時給単価（円）</label>
-                <input type="number" min={0} value={newMemberHourlyRate} onChange={(e) => setNewMemberHourlyRate(parseInt(e.target.value, 10) || 0)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                <input type="number" min={0} value={newMemberHourlyRate} onChange={(e) => setNewMemberHourlyRate(parseInt(e.target.value, 10) || 0)} className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
               </div>
-              <div className="flex flex-col gap-1.5 justify-end">
-                <label className="text-xs font-medium text-slate-600">操作</label>
-                <button type="button" onClick={handleAdd} className="w-full rounded bg-slate-700 px-3 py-2 text-sm font-medium text-white hover:bg-slate-600">追加</button>
+              <div className="flex min-w-0 flex-col gap-2 lg:justify-end">
+                <label className="text-xs font-medium text-slate-600 lg:invisible">操作</label>
+                <button type="button" onClick={handleAdd} className="h-10 w-full rounded bg-slate-700 px-4 text-sm font-medium text-white hover:bg-slate-600 lg:w-full">追加</button>
               </div>
             </div>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] border-collapse text-sm">
+            <table className="w-full min-w-[720px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
-                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">ログイン名</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">今月稼働</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">概算給与</th>
-                  <th className="px-3 py-2.5 text-center font-medium text-slate-600">操作</th>
+                  <th className="px-2 py-2.5 text-left font-medium text-slate-600">名前</th>
+                  <th className="px-2 py-2.5 text-left font-medium text-slate-600">ログイン名</th>
+                  <th className="px-2 py-2.5 text-left font-medium text-slate-600">パスワード</th>
+                  <th className="px-2 py-2.5 text-right font-medium text-slate-600">今月稼働</th>
+                  <th className="px-2 py-2.5 text-right font-medium text-slate-600">概算給与</th>
+                  <th className="px-2 py-2.5 text-right font-medium text-slate-600 whitespace-nowrap">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -539,14 +484,13 @@ function AdminDashboard(props: {
                   const pay = calcMonthlyPay(monthMin, rate);
                   return (
                     <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                      <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
-                      <td className="px-3 py-2.5 text-slate-600">{mem.loginAccount || "—"}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(monthMin)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-800">¥{pay.toLocaleString()}</td>
-                      <td className="px-3 py-2.5 text-center">
-                        <span className="mr-2">
-                          <button type="button" onClick={() => openDetail(mem)} className="text-slate-600 underline hover:text-slate-800">編集</button>
-                        </span>
+                      <td className="px-2 py-2.5 font-medium text-slate-800">{mem.name}</td>
+                      <td className="px-2 py-2.5 text-slate-600">{mem.loginAccount || "—"}</td>
+                      <td className="px-2 py-2.5 font-mono text-slate-700">{mem.password || "—"}</td>
+                      <td className="px-2 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(monthMin)}</td>
+                      <td className="px-2 py-2.5 text-right tabular-nums font-medium text-slate-800">¥{pay.toLocaleString()}</td>
+                      <td className="px-2 py-2.5 text-right whitespace-nowrap">
+                        <button type="button" onClick={() => openDetail(mem)} className="mr-2 text-slate-600 underline hover:text-slate-800">編集</button>
                         <button
                           type="button"
                           onClick={async () => { if (window.confirm(`${mem.name} を削除しますか？`)) { await deleteMember(mem.id); const mems = await loadMembers(); setMembers(mems ?? []); onRefresh(); } }}
@@ -589,6 +533,76 @@ function AdminDashboard(props: {
               </div>
             </div>
           )}
+
+          <div className="mt-8 border-t border-slate-100 pt-6">
+            {!backupExpanded ? (
+              <button
+                type="button"
+                onClick={() => setBackupExpanded(true)}
+                className="text-xs text-slate-400 hover:text-slate-600 underline"
+              >
+                バックアップ・高度な設定を表示
+              </button>
+            ) : (
+              <div className="rounded border border-slate-100 bg-slate-50/50 p-4">
+                <p className="mb-2 text-xs text-slate-500">データのバックアップ・復元（Supabase のデータをJSONで出し入れできます）</p>
+                <div className="mb-3 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const data = await exportAllDataFromSupabase();
+                        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `kado-backup-${data.exportedAt.slice(0, 10)}-${Date.now()}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      } catch (e) {
+                        alert("エクスポートに失敗しました。");
+                      }
+                    }}
+                    className="rounded border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                  >
+                    バックアップをダウンロード
+                  </button>
+                  <label className="flex cursor-pointer items-center rounded border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50">
+                    <span>ファイルから復元</span>
+                    <input
+                      type="file"
+                      accept=".json,application/json"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = async () => {
+                          try {
+                            const data = JSON.parse(reader.result as string);
+                            if (!data || typeof data !== "object") throw new Error("不正な形式です");
+                            await importAllDataToSupabase(data);
+                            onRefresh();
+                            const mems = await loadMembers();
+                            setMembers(mems ?? []);
+                            alert("復元が完了しました。画面を更新します。");
+                            window.location.reload();
+                          } catch (err) {
+                            alert("復元に失敗しました。正しいバックアップファイルか確認してください。");
+                          }
+                        };
+                        reader.readAsText(file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <button type="button" onClick={() => setBackupExpanded(false)} className="text-xs text-slate-400 hover:text-slate-600 underline">
+                    閉じる
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </section>
       )}
     </div>

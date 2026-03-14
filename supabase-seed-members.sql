@@ -1,5 +1,8 @@
 -- 初期メンバー登録（Supabase SQL Editor で実行）
 -- テーブル public.users が作成済みであること。既存データがある場合は重複エラーになるので、必要なら先に TRUNCATE public.users CASCADE; を実行してください。
+--
+-- 管理者（admin）: パスワード admin123
+-- 一般メンバー: パスワード 12345
 
 -- 管理者アカウント（ID: admin / Pass: admin123）
 INSERT INTO public.users (id, name, login_account, password, hourly_rate)
