@@ -14,15 +14,7 @@ import {
   getTotalMinutesForMonth,
   getTotalMinutesForDate,
   getSelectableMonths,
-  loadRecords,
-  saveRecordsForUser,
-  loadOpenRecords,
   getOpenRecordForUser,
-  setOpenRecordForUser,
-  loadShifts,
-  saveShiftsForUser,
-  loadKpi,
-  saveKpiForUser,
   getRecordsForUser,
   getShiftsForUser,
   getKpiForUser,
@@ -38,18 +30,26 @@ import {
   getShiftsByDateForWeek,
   getKpiRates,
   safeRatePercent,
+  getTotalMinutesForMonthByUser,
+  calcMonthlyPay,
+} from "@/lib/attendance";
+import {
   loadMembers,
   addMember,
   updateMember,
   deleteMember,
-  getTotalMinutesForMonthByUser,
-  calcMonthlyPay,
-  exportAllData,
-  importAllData,
-  saveAutoBackup,
-  getAutoBackupInfo,
-  restoreFromAutoBackup,
-} from "@/lib/attendance";
+  loadRecords,
+  loadOpenRecords,
+  loadShifts,
+  loadKpi,
+  saveRecordsForUser,
+  setOpenRecordForUser,
+  saveShiftsForUser,
+  saveKpiForUser,
+  loginUser,
+  exportAllDataFromSupabase,
+  importAllDataToSupabase,
+} from "@/lib/supabase-data";
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -128,14 +128,15 @@ function AdminDashboard(props: {
   const monthTeamMinutes = members.reduce((s, mem) => s + getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth), 0);
   const monthApoCostMinutes = teamTotals.decisionMakerApo > 0 ? monthTeamMinutes / teamTotals.decisionMakerApo : null;
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (!newMemberName.trim()) return;
-    addMember(newMemberName.trim(), {
+    await addMember(newMemberName.trim(), {
       loginAccount: newMemberLogin.trim(),
       password: newMemberPassword,
       hourlyRate: newMemberHourlyRate >= 0 ? newMemberHourlyRate : DEFAULT_HOURLY_RATE,
     });
-    setMembers(loadMembers());
+    const mems = await loadMembers();
+    setMembers(mems ?? []);
     setNewMemberName("");
     setNewMemberLogin("");
     setNewMemberPassword("");
@@ -151,7 +152,7 @@ function AdminDashboard(props: {
     setEditRate(member.hourlyRate ?? DEFAULT_HOURLY_RATE);
   };
 
-  const saveDetail = () => {
+  const saveDetail = async () => {
     if (!detailId) return;
     const updates: { name: string; loginAccount: string; hourlyRate: number; password?: string } = {
       name: editName.trim(),
@@ -159,8 +160,9 @@ function AdminDashboard(props: {
       hourlyRate: editRate >= 0 ? editRate : DEFAULT_HOURLY_RATE,
     };
     if (editPass !== "") updates.password = editPass;
-    updateMember(detailId, updates);
-    setMembers(loadMembers());
+    await updateMember(detailId, updates);
+    const mems = await loadMembers();
+    setMembers(mems ?? []);
     setDetailId(null);
     onRefresh();
   };
@@ -425,15 +427,19 @@ function AdminDashboard(props: {
             <div className="mb-4 flex flex-wrap items-center gap-4">
               <button
                 type="button"
-                onClick={() => {
-                  const data = exportAllData();
-                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `kado-backup-${data.exportedAt.slice(0, 10)}-${Date.now()}.json`;
-                  a.click();
-                  URL.revokeObjectURL(url);
+                onClick={async () => {
+                  try {
+                    const data = await exportAllDataFromSupabase();
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `kado-backup-${data.exportedAt.slice(0, 10)}-${Date.now()}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  } catch (e) {
+                    alert("エクスポートに失敗しました。");
+                  }
                 }}
                 className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600"
               >
@@ -445,17 +451,18 @@ function AdminDashboard(props: {
                   type="file"
                   accept=".json,application/json"
                   className="hidden"
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
                     const reader = new FileReader();
-                    reader.onload = () => {
+                    reader.onload = async () => {
                       try {
                         const data = JSON.parse(reader.result as string);
                         if (!data || typeof data !== "object") throw new Error("不正な形式です");
-                        importAllData(data);
+                        await importAllDataToSupabase(data);
                         onRefresh();
-                        setMembers(loadMembers());
+                        const mems = await loadMembers();
+                        setMembers(mems ?? []);
                         alert("復元が完了しました。画面を更新します。");
                         window.location.reload();
                       } catch (err) {
@@ -468,35 +475,7 @@ function AdminDashboard(props: {
                 />
               </label>
             </div>
-            <div className="border-t border-slate-200 pt-4">
-              <p className="mb-2 text-xs font-medium text-slate-600">自動バックアップ（3時間ごとに上書き）</p>
-              <p className="mb-2 text-xs text-slate-500">アプリを開いている間、3時間ごとに現在のデータをブラウザ内に自動保存します。誤削除時に「自動バックアップから復元」で戻せます。</p>
-              <p className="mb-2 text-xs text-slate-600">
-                最終自動バックアップ: {((): string => {
-                  const { savedAt } = getAutoBackupInfo();
-                  return savedAt ? new Date(savedAt).toLocaleString("ja-JP") : "まだありません";
-                })()}
-              </p>
-              {getAutoBackupInfo().hasBackup && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!window.confirm("自動バックアップの内容で現在のデータを上書き復元します。よろしいですか？")) return;
-                    if (restoreFromAutoBackup()) {
-                      onRefresh();
-                      setMembers(loadMembers());
-                      alert("復元しました。画面を再読み込みします。");
-                      window.location.reload();
-                    } else {
-                      alert("復元に失敗しました。バックアップが存在しないか、形式が正しくありません。");
-                    }
-                  }}
-                  className="rounded border border-amber-600 bg-amber-50 px-3 py-1.5 text-sm text-amber-800 hover:bg-amber-100"
-                >
-                  自動バックアップから復元
-                </button>
-              )}
-            </div>
+            <p className="mt-2 text-xs text-slate-500">データは Supabase に保存されています。バックアップ用にJSONをダウンロードできます。</p>
           </div>
 
           <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -553,7 +532,7 @@ function AdminDashboard(props: {
                         </span>
                         <button
                           type="button"
-                          onClick={() => { if (window.confirm(`${mem.name} を削除しますか？`)) { deleteMember(mem.id); setMembers(loadMembers()); onRefresh(); } }}
+                          onClick={async () => { if (window.confirm(`${mem.name} を削除しますか？`)) { await deleteMember(mem.id); const mems = await loadMembers(); setMembers(mems ?? []); onRefresh(); } }}
                           className="text-red-600 underline hover:text-red-800"
                         >
                           削除
@@ -1096,44 +1075,81 @@ export default function DashboardPage() {
   const [mounted, setMounted] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const [isAdminMode, setIsAdminMode] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState("");
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [allRecords, setAllRecords] = useState<WorkRecord[]>([]);
   const [allOpenRecords, setAllOpenRecords] = useState<OpenRecord[]>([]);
   const [allShifts, setAllShifts] = useState<Shift[]>([]);
   const [allKpiRecords, setAllKpiRecords] = useState<KpiRecord[]>([]);
   const [selectedMonth, setSelectedMonth] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [showSetup, setShowSetup] = useState(false);
+  const [loginAccount, setLoginAccount] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [setupName, setSetupName] = useState("");
+  const [setupLogin, setSetupLogin] = useState("");
+  const [setupPassword, setSetupPassword] = useState("");
+  const [setupHourlyRate, setSetupHourlyRate] = useState(DEFAULT_HOURLY_RATE);
 
-  const refresh = useCallback(() => {
-    setAllRecords(loadRecords());
-    setAllOpenRecords(loadOpenRecords());
-    setAllShifts(loadShifts());
-    setAllKpiRecords(loadKpi());
-    setMembers(loadMembers());
+  const refresh = useCallback(async () => {
+    try {
+      const [records, openRecs, shifts, kpis, mems] = await Promise.all([
+        loadRecords(),
+        loadOpenRecords(),
+        loadShifts(),
+        loadKpi(),
+        loadMembers(),
+      ]);
+      setAllRecords(records);
+      setAllOpenRecords(openRecs);
+      setAllShifts(shifts);
+      setAllKpiRecords(kpis);
+      setMembers(mems ?? []);
+    } catch (e) {
+      console.error("refresh", e);
+      setLoadError("データの取得に失敗しました。Supabase の設定とテーブルを確認してください。");
+    }
   }, []);
 
-  const hydrate = useCallback(() => {
+  const hydrate = useCallback(async () => {
+    setLoadError(null);
     try {
-      let mems = loadMembers();
-      if (mems.length === 0) {
-        addMember("ユーザー1");
-        mems = loadMembers();
+      const mems = await loadMembers();
+      if (mems === null) {
+        setLoadError("Supabase の設定がありません。.env.local に NEXT_PUBLIC_SUPABASE_URL と NEXT_PUBLIC_SUPABASE_ANON_KEY を設定してください。");
+        setMembers([]);
+        setCurrentUserId(null);
+        return;
       }
       setMembers(mems);
-      setAllRecords(loadRecords());
-      setAllOpenRecords(loadOpenRecords());
-      setAllShifts(loadShifts());
-      setAllKpiRecords(loadKpi());
+      const [records, openRecs, shifts, kpis] = await Promise.all([
+        loadRecords(),
+        loadOpenRecords(),
+        loadShifts(),
+        loadKpi(),
+      ]);
+      setAllRecords(records);
+      setAllOpenRecords(openRecs);
+      setAllShifts(shifts);
+      setAllKpiRecords(kpis);
       const now = new Date();
-      setSelectedMonth((prev) => (prev ? prev : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`));
+      setSelectedMonth((prev) => prev || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
+      if (mems.length === 0) {
+        setShowSetup(true);
+        setCurrentUserId(null);
+        return;
+      }
+      setShowSetup(false);
       setCurrentUserId((prev) => {
         if (prev && mems.some((m) => m.id === prev)) return prev;
-        return mems[0] ? mems[0].id : "";
+        return null;
       });
     } catch (err) {
       console.error("hydrate", err);
-      setMembers([{ id: "default", name: "ユーザー1", loginAccount: "", password: "", hourlyRate: DEFAULT_HOURLY_RATE }]);
-      setCurrentUserId("default");
+      setLoadError("Supabase に接続できません。.env.local の NEXT_PUBLIC_SUPABASE_URL と NEXT_PUBLIC_SUPABASE_ANON_KEY を確認し、supabase-schema.sql でテーブルを作成してください。");
+      setMembers([]);
+      setCurrentUserId(null);
     }
   }, []);
 
@@ -1142,22 +1158,13 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    if (mounted) hydrate();
+    if (mounted) void hydrate();
   }, [mounted, hydrate]);
 
-  // 3時間ごとに自動バックアップを localStorage に上書き保存
-  useEffect(() => {
-    if (!mounted) return;
-    saveAutoBackup(); // 初回はマウント直後に1回実行
-    const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
-    const id = setInterval(saveAutoBackup, THREE_HOURS_MS);
-    return () => clearInterval(id);
-  }, [mounted]);
-
-  const records = isAdminMode ? allRecords : getRecordsForUser(allRecords, currentUserId);
-  const openRecord = getOpenRecordForUser(allOpenRecords, currentUserId);
-  const shifts = isAdminMode ? allShifts : getShiftsForUser(allShifts, currentUserId);
-  const kpiRecords = isAdminMode ? allKpiRecords : getKpiForUser(allKpiRecords, currentUserId);
+  const records = isAdminMode ? allRecords : getRecordsForUser(allRecords, currentUserId ?? "");
+  const openRecord = getOpenRecordForUser(allOpenRecords, currentUserId ?? "");
+  const shifts = isAdminMode ? allShifts : getShiftsForUser(allShifts, currentUserId ?? "");
+  const kpiRecords = isAdminMode ? allKpiRecords : getKpiForUser(allKpiRecords, currentUserId ?? "");
 
   const todayStr = toDateString(new Date());
   const todayMinutes = getTotalMinutesForDate(records, todayStr);
@@ -1171,8 +1178,8 @@ export default function DashboardPage() {
     currentYearMonth === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
   const selectableMonths = getSelectableMonths(records, shifts, kpiRecords);
 
-  const handleStart = () => {
-    if (openRecord) return;
+  const handleStart = async () => {
+    if (openRecord || !currentUserId) return;
     const now = new Date();
     const rounded = roundUpTo15Minutes(now);
     const newOpen: OpenRecord = {
@@ -1182,12 +1189,12 @@ export default function DashboardPage() {
       startRounded: rounded.toISOString(),
       date: toDateString(now),
     };
-    setOpenRecordForUser(currentUserId, newOpen);
-    setAllOpenRecords(loadOpenRecords());
+    await setOpenRecordForUser(currentUserId, newOpen);
+    await refresh();
   };
 
-  const handleEnd = () => {
-    if (!openRecord) return;
+  const handleEnd = async () => {
+    if (!openRecord || !currentUserId) return;
     const now = new Date();
     const endRounded = roundDownTo15Minutes(now);
     const startRounded = new Date(openRecord.startRounded);
@@ -1204,23 +1211,67 @@ export default function DashboardPage() {
     };
     const userRecords = getRecordsForUser(allRecords, currentUserId);
     const next = [newRecord, ...userRecords];
-    saveRecordsForUser(currentUserId, next);
-    setOpenRecordForUser(currentUserId, null);
-    setAllRecords(loadRecords());
-    setAllOpenRecords(loadOpenRecords());
+    await saveRecordsForUser(currentUserId, next);
+    await setOpenRecordForUser(currentUserId, null);
+    await refresh();
   };
 
-  const handleSaveShifts = (newShifts: Shift[]) => {
-    saveShiftsForUser(currentUserId, newShifts);
-    refresh();
+  const handleSaveShifts = async (newShifts: Shift[]) => {
+    if (!currentUserId) return;
+    await saveShiftsForUser(currentUserId, newShifts);
+    await refresh();
   };
 
-  const handleSaveKpi = (newKpi: KpiRecord[]) => {
-    saveKpiForUser(currentUserId, newKpi);
-    refresh();
+  const handleSaveKpi = async (newKpi: KpiRecord[]) => {
+    if (!currentUserId) return;
+    await saveKpiForUser(currentUserId, newKpi);
+    await refresh();
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError("");
+    const user = await loginUser(loginAccount.trim(), loginPassword);
+    if (user) {
+      setCurrentUserId(user.id);
+      setLoginPassword("");
+      if ((user.loginAccount ?? "").toLowerCase() !== "admin") setIsAdminMode(false);
+    } else {
+      setLoginError("ユーザー名またはパスワードが正しくありません。");
+    }
+  };
+
+  const handleSetupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!setupName.trim() || !setupLogin.trim() || !setupPassword) {
+      alert("名前・ユーザー名・パスワードを入力してください。");
+      return;
+    }
+    const newMember = await addMember(setupName.trim(), {
+      loginAccount: setupLogin.trim(),
+      password: setupPassword,
+      hourlyRate: setupHourlyRate >= 0 ? setupHourlyRate : DEFAULT_HOURLY_RATE,
+    });
+    const mems = await loadMembers();
+    setMembers(mems ?? []);
+    setCurrentUserId(newMember.id);
+    setShowSetup(false);
+    setSetupName("");
+    setSetupLogin("");
+    setSetupPassword("");
+    setSetupHourlyRate(DEFAULT_HOURLY_RATE);
+    await refresh();
+  };
+
+  const handleLogout = () => {
+    setCurrentUserId(null);
+    setLoginAccount("");
+    setLoginPassword("");
+    setLoginError("");
   };
 
   const currentMember = members.find((m) => m.id === currentUserId);
+  const isAdminUser = (currentMember?.loginAccount ?? "").toLowerCase() === "admin";
 
   if (!mounted) {
     return (
@@ -1237,9 +1288,76 @@ export default function DashboardPage() {
       >
         <div style={{ textAlign: "center", padding: "2rem" }}>
           <p style={{ fontSize: "1.25rem", fontWeight: 700, color: "#0f172a", margin: 0 }}>読み込み中...</p>
-          <p style={{ fontSize: "0.875rem", color: "#1e293b", marginTop: "0.75rem" }}>
-            <a href="http://localhost:3000" style={{ color: "#1d4ed8", textDecoration: "underline" }}>http://localhost:3000</a> で開いてください
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 max-w-md text-center">
+          <h1 className="text-lg font-semibold text-amber-800 mb-2">接続エラー</h1>
+          <p className="text-sm text-slate-700 mb-4">{loadError}</p>
+          <p className="text-xs text-slate-500 mb-4">
+            プロジェクトの <code className="bg-slate-200 px-1 rounded">supabase-schema.sql</code> を Supabase の SQL Editor で実行するとテーブルが作成されます。
           </p>
+          <button type="button" onClick={() => void hydrate()} className="rounded bg-slate-700 px-4 py-2 text-sm text-white hover:bg-slate-600">
+            再試行
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (showSetup) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-md">
+          <h1 className="text-xl font-semibold text-slate-800 mb-1">初回セットアップ</h1>
+          <p className="text-sm text-slate-500 mb-6">最初のユーザー（管理者）を登録してください。このアカウントでログインし、メンバーを追加できます。</p>
+          <form onSubmit={handleSetupSubmit} className="space-y-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-slate-600">名前</label>
+              <input type="text" value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="表示名" className="rounded border border-slate-300 px-3 py-2 text-sm" required />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-slate-600">ユーザー名（ログインID）</label>
+              <input type="text" value={setupLogin} onChange={(e) => setSetupLogin(e.target.value)} placeholder="ログイン時に使用" className="rounded border border-slate-300 px-3 py-2 text-sm" required />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-slate-600">パスワード</label>
+              <input type="password" value={setupPassword} onChange={(e) => setSetupPassword(e.target.value)} placeholder="パスワード" className="rounded border border-slate-300 px-3 py-2 text-sm" required />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-slate-600">時給（円）</label>
+              <input type="number" min={0} value={setupHourlyRate} onChange={(e) => setSetupHourlyRate(parseInt(e.target.value, 10) || 0)} className="rounded border border-slate-300 px-3 py-2 text-sm" />
+            </div>
+            <button type="submit" className="w-full rounded bg-slate-700 py-2.5 text-sm font-medium text-white hover:bg-slate-600">登録してログイン</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (currentUserId === null) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-md">
+          <h1 className="text-xl font-semibold text-slate-800 mb-1">ログイン</h1>
+          <p className="text-sm text-slate-500 mb-6">ユーザー名とパスワードを入力してください。</p>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-slate-600">ユーザー名</label>
+              <input type="text" value={loginAccount} onChange={(e) => setLoginAccount(e.target.value)} placeholder="ユーザー名" className="rounded border border-slate-300 px-3 py-2 text-sm" autoComplete="username" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-slate-600">パスワード</label>
+              <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} placeholder="パスワード" className="rounded border border-slate-300 px-3 py-2 text-sm" autoComplete="current-password" />
+            </div>
+            {loginError && <p className="text-sm text-red-600">{loginError}</p>}
+            <button type="submit" className="w-full rounded bg-slate-700 py-2.5 text-sm font-medium text-white hover:bg-slate-600">ログイン</button>
+          </form>
         </div>
       </div>
     );
@@ -1263,14 +1381,14 @@ export default function DashboardPage() {
               onClick={() => setTab("home")}
               className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 ${tab === "home" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
             >
-              打刻・ホーム
+              打刻
             </button>
             <button
               type="button"
               onClick={() => setTab("shift")}
               className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 ${tab === "shift" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
             >
-              シフト提出
+              シフト
             </button>
             <button
               type="button"
@@ -1284,7 +1402,7 @@ export default function DashboardPage() {
       )}
 
       <main className="mx-auto max-w-2xl px-4 py-6 sm:px-6 sm:py-8">
-        {isAdminMode ? (
+        {isAdminMode && isAdminUser ? (
           <AdminDashboard
             allRecords={allRecords}
             allOpenRecords={allOpenRecords}
@@ -1364,32 +1482,23 @@ export default function DashboardPage() {
       </main>
 
       <div className="fixed bottom-4 right-4 z-10 flex flex-col gap-2 rounded-xl border border-slate-300 bg-white p-3 shadow-lg">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-slate-600">{isAdminMode ? "管理者" : "ユーザー"}</span>
-          <button
-            type="button"
-            onClick={() => setIsAdminMode(!isAdminMode)}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${isAdminMode ? "bg-slate-700" : "bg-slate-300"}`}
-          >
-            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${isAdminMode ? "translate-x-5" : "translate-x-1"}`} />
-          </button>
-        </div>
-        {!isAdminMode && (
-          <div>
-            <label className="mb-0.5 block text-xs text-slate-500">表示ユーザー</label>
-            <select
-              value={currentUserId}
-              onChange={(e) => setCurrentUserId(e.target.value)}
-              className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-800"
+        {isAdminUser ? (
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-slate-600">{isAdminMode ? "管理者（Admin）" : "一般メンバー"}</span>
+            <button
+              type="button"
+              onClick={() => setIsAdminMode(!isAdminMode)}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${isAdminMode ? "bg-slate-700" : "bg-slate-300"}`}
             >
-              {members.map((mem) => (
-                <option key={mem.id} value={mem.id}>
-                  {mem.name}
-                </option>
-              ))}
-            </select>
+              <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${isAdminMode ? "translate-x-5" : "translate-x-1"}`} />
+            </button>
           </div>
+        ) : (
+          <p className="text-xs text-slate-500">{currentMember?.name ?? ""}</p>
         )}
+        <button type="button" onClick={handleLogout} className="rounded border border-slate-300 px-2 py-1.5 text-xs text-slate-600 hover:bg-slate-50">
+          ログアウト
+        </button>
       </div>
     </div>
   );
