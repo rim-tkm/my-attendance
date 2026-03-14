@@ -1,0 +1,1396 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import type { WorkRecord, OpenRecord, Shift, KpiRecord, Member } from "@/lib/attendance";
+import {
+  DEFAULT_HOURLY_RATE,
+  roundUpTo15Minutes,
+  roundDownTo15Minutes,
+  calcDurationMinutes,
+  toDateString,
+  formatDuration,
+  getRecordsForMonth,
+  getRecordsForDate,
+  getTotalMinutesForMonth,
+  getTotalMinutesForDate,
+  getSelectableMonths,
+  loadRecords,
+  saveRecordsForUser,
+  loadOpenRecords,
+  getOpenRecordForUser,
+  setOpenRecordForUser,
+  loadShifts,
+  saveShiftsForUser,
+  loadKpi,
+  saveKpiForUser,
+  getRecordsForUser,
+  getShiftsForUser,
+  getKpiForUser,
+  getKpiForDate,
+  getKpiForMonth,
+  getMonthlyKpiTotals,
+  get15MinOptions,
+  getShiftPlannedMinutes,
+  getWeekStart,
+  getWeekDates,
+  getTargetWeekStart,
+  getDeadlineForWeek,
+  getShiftsByDateForWeek,
+  getKpiRates,
+  safeRatePercent,
+  loadMembers,
+  addMember,
+  updateMember,
+  deleteMember,
+  getTotalMinutesForMonthByUser,
+  calcMonthlyPay,
+  exportAllData,
+  importAllData,
+  saveAutoBackup,
+  getAutoBackupInfo,
+  restoreFromAutoBackup,
+} from "@/lib/attendance";
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDisplayDate(dateStr: string): string {
+  const parts = dateStr.split("-").map(Number);
+  const y = parts[0];
+  const m = parts[1];
+  const d = parts[2];
+  const date = new Date(y, (m || 1) - 1, d || 1);
+  return date.toLocaleDateString("ja-JP", {
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  });
+}
+
+type Tab = "home" | "shift" | "kpi";
+type AdminSection = "dashboard" | "attendance" | "shift" | "kpi" | "settings";
+
+const KPI_LABELS: { key: keyof Omit<KpiRecord, "id" | "date" | "userId">; label: string }[] = [
+  { key: "totalCalls", label: "総コール数" },
+  { key: "validCalls", label: "有効コール数" },
+  { key: "kcCount", label: "KC数" },
+  { key: "followUpCreated", label: "追いかけ作成数" },
+  { key: "decisionMakerApo", label: "決裁者アポ数" },
+  { key: "nonDecisionMakerApo", label: "非決裁者アポ数" },
+];
+
+function AdminDashboard(props: {
+  allRecords: WorkRecord[];
+  allOpenRecords: OpenRecord[];
+  allShifts: Shift[];
+  allKpiRecords: KpiRecord[];
+  members: Member[];
+  setMembers: (v: Member[] | ((prev: Member[]) => Member[])) => void;
+  onRefresh: () => void;
+}) {
+  const {
+    allRecords,
+    allOpenRecords,
+    allShifts,
+    allKpiRecords,
+    members,
+    setMembers,
+    onRefresh,
+  } = props;
+  const [adminSection, setAdminSection] = useState<AdminSection>("dashboard");
+  const [newMemberName, setNewMemberName] = useState("");
+  const [newMemberLogin, setNewMemberLogin] = useState("");
+  const [newMemberPassword, setNewMemberPassword] = useState("");
+  const [newMemberHourlyRate, setNewMemberHourlyRate] = useState(DEFAULT_HOURLY_RATE);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editLogin, setEditLogin] = useState("");
+  const [editPass, setEditPass] = useState("");
+  const [editRate, setEditRate] = useState(DEFAULT_HOURLY_RATE);
+  const [kpiDate, setKpiDate] = useState(() => toDateString(new Date()));
+
+  const y = new Date().getFullYear();
+  const m = new Date().getMonth() + 1;
+  const currentYearMonth = `${y}-${String(m).padStart(2, "0")}`;
+  const todayStr = toDateString(new Date());
+  const teamTotals = getMonthlyKpiTotals(allKpiRecords, currentYearMonth);
+  const workingCount = allOpenRecords.length;
+  const teamValidRate = safeRatePercent(teamTotals.validCalls, teamTotals.totalCalls);
+  const teamKcRate = safeRatePercent(teamTotals.kcCount, teamTotals.validCalls);
+  const teamApoRate = safeRatePercent(teamTotals.decisionMakerApo, teamTotals.kcCount);
+  const todayKpis = allKpiRecords.filter((k) => k.date === todayStr);
+  const todayDecision = todayKpis.reduce((s, k) => s + k.decisionMakerApo, 0);
+  const todayNonDecision = todayKpis.reduce((s, k) => s + k.nonDecisionMakerApo, 0);
+  const todayTeamMinutes = allRecords.filter((r) => r.date === todayStr).reduce((s, r) => s + r.durationMinutes, 0);
+  const todayApoCostMinutes = todayDecision > 0 ? todayTeamMinutes / todayDecision : null;
+  const monthTeamMinutes = members.reduce((s, mem) => s + getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth), 0);
+  const monthApoCostMinutes = teamTotals.decisionMakerApo > 0 ? monthTeamMinutes / teamTotals.decisionMakerApo : null;
+
+  const handleAdd = () => {
+    if (!newMemberName.trim()) return;
+    addMember(newMemberName.trim(), {
+      loginAccount: newMemberLogin.trim(),
+      password: newMemberPassword,
+      hourlyRate: newMemberHourlyRate >= 0 ? newMemberHourlyRate : DEFAULT_HOURLY_RATE,
+    });
+    setMembers(loadMembers());
+    setNewMemberName("");
+    setNewMemberLogin("");
+    setNewMemberPassword("");
+    setNewMemberHourlyRate(DEFAULT_HOURLY_RATE);
+    onRefresh();
+  };
+
+  const openDetail = (member: Member) => {
+    setDetailId(member.id);
+    setEditName(member.name);
+    setEditLogin(member.loginAccount ?? "");
+    setEditPass("");
+    setEditRate(member.hourlyRate ?? DEFAULT_HOURLY_RATE);
+  };
+
+  const saveDetail = () => {
+    if (!detailId) return;
+    const updates: { name: string; loginAccount: string; hourlyRate: number; password?: string } = {
+      name: editName.trim(),
+      loginAccount: editLogin.trim(),
+      hourlyRate: editRate >= 0 ? editRate : DEFAULT_HOURLY_RATE,
+    };
+    if (editPass !== "") updates.password = editPass;
+    updateMember(detailId, updates);
+    setMembers(loadMembers());
+    setDetailId(null);
+    onRefresh();
+  };
+
+  const targetWeekStart = getTargetWeekStart();
+  const targetWeekDates = getWeekDates(targetWeekStart);
+
+  const navItems: { id: AdminSection; label: string }[] = [
+    { id: "dashboard", label: "ダッシュボード" },
+    { id: "attendance", label: "出退勤状況" },
+    { id: "shift", label: "シフト管理" },
+    { id: "kpi", label: "業務委託KPI" },
+    { id: "settings", label: "管理設定" },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <nav className="flex flex-wrap gap-0 border-b border-slate-200 bg-white shadow-sm">
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setAdminSection(item.id)}
+            className={`px-4 py-3 text-sm font-medium transition ${adminSection === item.id ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      {adminSection === "dashboard" && (
+        <div className="space-y-6">
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-3 text-sm font-medium text-slate-700">本日のチーム成果</h2>
+            <div className="mb-4 flex flex-wrap gap-4">
+              <div className="rounded-lg bg-emerald-700 px-4 py-3 text-white">
+                <div className="text-xs text-emerald-100">本日 決裁者アポ合計</div>
+                <div className="text-2xl font-bold">{todayDecision} 件</div>
+              </div>
+              <div className="rounded-lg bg-teal-700 px-4 py-3 text-white">
+                <div className="text-xs text-teal-100">本日 非決裁者アポ合計</div>
+                <div className="text-2xl font-bold">{todayNonDecision} 件</div>
+              </div>
+              <div className="rounded-lg bg-amber-600 px-4 py-3 text-white">
+                <div className="text-xs text-amber-100">現在 稼働中</div>
+                <div className="text-2xl font-bold">{workingCount} 名</div>
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 text-xs font-medium text-slate-500">本日アポ取得一覧</div>
+              <div className="flex flex-wrap gap-2">
+                {members.map((mem) => {
+                  const k = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), todayStr);
+                  const dec = k ? k.decisionMakerApo : 0;
+                  const non = k ? k.nonDecisionMakerApo : 0;
+                  const total = dec + non;
+                  if (total === 0) {
+                    return (
+                      <span key={mem.id} className="rounded bg-slate-100 px-2 py-1 text-sm text-slate-500">
+                        {mem.name}: 0件
+                      </span>
+                    );
+                  }
+                  return (
+                    <span key={mem.id} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
+                      <span className="font-medium text-slate-800">{mem.name}</span>
+                      <span className="rounded bg-emerald-200 px-1.5 py-0.5 text-xs font-semibold text-emerald-800">決裁 {dec}</span>
+                      <span className="rounded bg-teal-200 px-1.5 py-0.5 text-xs font-semibold text-teal-800">非決裁 {non}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 text-sm font-medium text-slate-700">今月のKPI統計（{currentYearMonth}）</h2>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-lg bg-slate-800 p-4 text-white">
+                <div className="text-xs text-slate-300">総コール数合計</div>
+                <div className="text-2xl font-bold">{teamTotals.totalCalls}</div>
+              </div>
+              <div className="rounded-lg bg-slate-700 p-4 text-white">
+                <div className="text-xs text-slate-300">チーム平均 有効率</div>
+                <div className="text-2xl font-bold">{teamValidRate != null ? `${teamValidRate}%` : "—"}</div>
+              </div>
+              <div className="rounded-lg bg-slate-700 p-4 text-white">
+                <div className="text-xs text-slate-300">チーム平均 KC率</div>
+                <div className="text-2xl font-bold">{teamKcRate != null ? `${teamKcRate}%` : "—"}</div>
+              </div>
+              <div className="rounded-lg bg-slate-700 p-4 text-white">
+                <div className="text-xs text-slate-300">チーム平均 アポ率</div>
+                <div className="text-2xl font-bold">{teamApoRate != null ? `${teamApoRate}%` : "—"}</div>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-4 text-sm text-slate-600">
+              <span>有効コール合計: {teamTotals.validCalls}</span>
+              <span>KC合計: {teamTotals.kcCount}</span>
+              <span>決裁者アポ合計: {teamTotals.decisionMakerApo}</span>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-3 text-sm font-medium text-slate-700">生産性指標（アポ取得単価・時間ベース）</h2>
+            <p className="mb-4 text-xs text-slate-500">決裁者アポ1件あたりの稼働時間。数値が小さいほど効率が良いです。</p>
+            <div className="flex flex-wrap gap-6">
+              <div className="rounded-lg bg-slate-800 px-4 py-3 text-white">
+                <div className="text-xs text-slate-300">本日のアポ取得単価（チーム全体）</div>
+                <div className="text-xl font-bold">
+                  {todayApoCostMinutes != null ? `${formatDuration(Math.round(todayApoCostMinutes))}/件` : "—"}
+                </div>
+              </div>
+              <div className="rounded-lg bg-slate-700 px-4 py-3 text-white">
+                <div className="text-xs text-slate-300">今月の平均アポ取得単価（チーム全体）</div>
+                <div className="text-xl font-bold">
+                  {monthApoCostMinutes != null ? `${formatDuration(Math.round(monthApoCostMinutes))}/件` : "—"}
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {adminSection === "attendance" && (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-4 text-sm font-medium text-slate-700">出退勤状況（本日）</h2>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[500px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
+                  <th className="px-3 py-2.5 text-center font-medium text-slate-600">ステータス</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">本日の稼働時間</th>
+                </tr>
+              </thead>
+              <tbody>
+                {members.map((mem) => {
+                  const open = getOpenRecordForUser(allOpenRecords, mem.id);
+                  const userRecords = getRecordsForUser(allRecords, mem.id);
+                  const todayMin = userRecords.filter((r) => r.date === todayStr).reduce((s, r) => s + r.durationMinutes, 0);
+                  return (
+                    <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                      <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        {open ? (
+                          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">稼働中</span>
+                        ) : (
+                          <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">未稼働</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(todayMin)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {adminSection === "shift" && (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-2 text-sm font-medium text-slate-700">シフト管理</h2>
+          <p className="mb-4 text-xs text-slate-500">対象週: {formatDisplayDate(targetWeekDates[0])} ～ {formatDisplayDate(targetWeekDates[6])}</p>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[600px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
+                  <th className="px-3 py-2.5 text-center font-medium text-slate-600">提出状況</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">提出済みシフト（直近）</th>
+                </tr>
+              </thead>
+              <tbody>
+                {members.map((mem) => {
+                  const userShifts = getShiftsForUser(allShifts, mem.id);
+                  const hasShiftThisWeek = targetWeekDates.some((d) => userShifts.some((s) => s.date === d));
+                  const recentShifts = [...userShifts].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+                  return (
+                    <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                      <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        {hasShiftThisWeek ? (
+                          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">提出済</span>
+                        ) : (
+                          <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">未提出</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-600">
+                        {recentShifts.length === 0 ? "—" : recentShifts.map((s) => `${formatDisplayDate(s.date)} ${s.startPlanned}～${s.endPlanned}`).join(" / ")}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {adminSection === "kpi" && (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-4 text-sm font-medium text-slate-700">業務委託KPI（日別）</h2>
+          <div className="mb-4 flex flex-wrap items-center gap-4">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-slate-600">表示日付</span>
+              <input
+                type="date"
+                value={kpiDate}
+                onChange={(e) => setKpiDate(e.target.value)}
+                className="rounded border border-slate-300 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">総コール</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">有効</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">KC</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">追いかけ</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">決裁者アポ</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">非決裁者アポ</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">有効率</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">KC率</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">アポ率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {members.map((mem) => {
+                  const dayKpi = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), kpiDate);
+                  const rates = dayKpi ? getKpiRates(dayKpi) : null;
+                  return (
+                    <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                      <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{dayKpi ? dayKpi.totalCalls : "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{dayKpi ? dayKpi.validCalls : "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{dayKpi ? dayKpi.kcCount : "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{dayKpi ? dayKpi.followUpCreated : "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{dayKpi ? dayKpi.decisionMakerApo : "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{dayKpi ? dayKpi.nonDecisionMakerApo : "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{rates?.validRate != null ? `${rates.validRate}%` : "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{rates?.kcRate != null ? `${rates.kcRate}%` : "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{rates?.apoRate != null ? `${rates.apoRate}%` : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {adminSection === "settings" && (
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-4 text-sm font-medium text-slate-700">管理設定（メンバー追加・編集・削除）</h2>
+
+          <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="mb-3 text-xs font-medium text-slate-600">データのバックアップ・復元</p>
+            <p className="mb-3 text-xs text-slate-500">エクスポートでJSONファイルをダウンロードし、PCやクラウドに保存できます。復元時はそのファイルを選択してください。</p>
+            <div className="mb-4 flex flex-wrap items-center gap-4">
+              <button
+                type="button"
+                onClick={() => {
+                  const data = exportAllData();
+                  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `kado-backup-${data.exportedAt.slice(0, 10)}-${Date.now()}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600"
+              >
+                バックアップをダウンロード（エクスポート）
+              </button>
+              <label className="flex cursor-pointer items-center gap-2 rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                <span>ファイルから復元（インポート）</span>
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                      try {
+                        const data = JSON.parse(reader.result as string);
+                        if (!data || typeof data !== "object") throw new Error("不正な形式です");
+                        importAllData(data);
+                        onRefresh();
+                        setMembers(loadMembers());
+                        alert("復元が完了しました。画面を更新します。");
+                        window.location.reload();
+                      } catch (err) {
+                        alert("復元に失敗しました。正しいバックアップファイルか確認してください。");
+                      }
+                    };
+                    reader.readAsText(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+            <div className="border-t border-slate-200 pt-4">
+              <p className="mb-2 text-xs font-medium text-slate-600">自動バックアップ（3時間ごとに上書き）</p>
+              <p className="mb-2 text-xs text-slate-500">アプリを開いている間、3時間ごとに現在のデータをブラウザ内に自動保存します。誤削除時に「自動バックアップから復元」で戻せます。</p>
+              <p className="mb-2 text-xs text-slate-600">
+                最終自動バックアップ: {((): string => {
+                  const { savedAt } = getAutoBackupInfo();
+                  return savedAt ? new Date(savedAt).toLocaleString("ja-JP") : "まだありません";
+                })()}
+              </p>
+              {getAutoBackupInfo().hasBackup && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!window.confirm("自動バックアップの内容で現在のデータを上書き復元します。よろしいですか？")) return;
+                    if (restoreFromAutoBackup()) {
+                      onRefresh();
+                      setMembers(loadMembers());
+                      alert("復元しました。画面を再読み込みします。");
+                      window.location.reload();
+                    } else {
+                      alert("復元に失敗しました。バックアップが存在しないか、形式が正しくありません。");
+                    }
+                  }}
+                  className="rounded border border-amber-600 bg-amber-50 px-3 py-1.5 text-sm text-amber-800 hover:bg-amber-100"
+                >
+                  自動バックアップから復元
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="mb-3 text-xs font-medium text-slate-600">新規メンバー追加</p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5 lg:gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-medium text-slate-600">名前</label>
+                <input type="text" value={newMemberName} onChange={(e) => setNewMemberName(e.target.value)} placeholder="表示名" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-medium text-slate-600">ユーザー名（ログイン用）</label>
+                <input type="text" value={newMemberLogin} onChange={(e) => setNewMemberLogin(e.target.value)} placeholder="ログインID" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-medium text-slate-600">パスワード</label>
+                <input type="password" value={newMemberPassword} onChange={(e) => setNewMemberPassword(e.target.value)} placeholder="パスワード" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-medium text-slate-600">時給単価（円）</label>
+                <input type="number" min={0} value={newMemberHourlyRate} onChange={(e) => setNewMemberHourlyRate(parseInt(e.target.value, 10) || 0)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+              <div className="flex flex-col gap-1.5 justify-end">
+                <label className="text-xs font-medium text-slate-600">操作</label>
+                <button type="button" onClick={handleAdd} className="w-full rounded bg-slate-700 px-3 py-2 text-sm font-medium text-white hover:bg-slate-600">追加</button>
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">ログイン名</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">今月稼働</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">概算給与</th>
+                  <th className="px-3 py-2.5 text-center font-medium text-slate-600">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {members.map((mem) => {
+                  const monthMin = getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth);
+                  const rate = mem.hourlyRate != null ? mem.hourlyRate : DEFAULT_HOURLY_RATE;
+                  const pay = calcMonthlyPay(monthMin, rate);
+                  return (
+                    <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                      <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
+                      <td className="px-3 py-2.5 text-slate-600">{mem.loginAccount || "—"}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(monthMin)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-800">¥{pay.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        <span className="mr-2">
+                          <button type="button" onClick={() => openDetail(mem)} className="text-slate-600 underline hover:text-slate-800">編集</button>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => { if (window.confirm(`${mem.name} を削除しますか？`)) { deleteMember(mem.id); setMembers(loadMembers()); onRefresh(); } }}
+                          className="text-red-600 underline hover:text-red-800"
+                        >
+                          削除
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {detailId !== null && (
+            <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <h3 className="mb-3 text-sm font-medium text-slate-700">メンバー詳細設定（編集）</h3>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">名前</label>
+                  <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">ログイン用アカウント名</label>
+                  <input type="text" value={editLogin} onChange={(e) => setEditLogin(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">パスワード</label>
+                  <input type="password" value={editPass} onChange={(e) => setEditPass(e.target.value)} placeholder="変更時のみ。空欄で変更しません" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">時給（円）</label>
+                  <input type="number" min={0} value={editRate} onChange={(e) => setEditRate(parseInt(e.target.value, 10) || 0)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+              </div>
+              <div className="mt-3 flex gap-2">
+                <button type="button" onClick={saveDetail} className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600">保存</button>
+                <button type="button" onClick={() => setDetailId(null)} className="rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">キャンセル</button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function HistorySection(props: {
+  monthRecords: WorkRecord[];
+  monthShifts: Shift[];
+  monthKpi: KpiRecord[];
+  currentYearMonth: string;
+  isCurrentMonth: boolean;
+}) {
+  const { monthRecords, monthShifts, monthKpi, currentYearMonth, isCurrentMonth } = props;
+  const dateToShifts = new Map<string, Shift[]>();
+  monthShifts.forEach((s) => {
+    const list = dateToShifts.get(s.date) || [];
+    list.push(s);
+    dateToShifts.set(s.date, list);
+  });
+  const dateToRecords = new Map<string, WorkRecord[]>();
+  monthRecords.forEach((r) => {
+    const list = dateToRecords.get(r.date) || [];
+    list.push(r);
+    dateToRecords.set(r.date, list);
+  });
+  const dateToKpi = new Map<string, KpiRecord>();
+  monthKpi.forEach((k) => dateToKpi.set(k.date, k));
+  const allDates = new Set<string>();
+  dateToShifts.forEach((_, key) => allDates.add(key));
+  dateToRecords.forEach((_, key) => allDates.add(key));
+  dateToKpi.forEach((_, key) => allDates.add(key));
+  const sortedDates = Array.from(allDates).sort();
+
+  return (
+    <section className="rounded-xl bg-white shadow-sm ring-1 ring-slate-200/80">
+      <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-medium text-slate-600 sm:px-5 sm:py-4">
+        稼働履歴一覧（予定 vs 実績・KPI）
+        {!isCurrentMonth ? `（${currentYearMonth}）` : ""}
+      </h2>
+      <div className="divide-y divide-slate-100">
+        {sortedDates.length === 0 ? (
+          <div className="px-4 py-8 text-center text-slate-500 sm:px-5">この月の履歴はありません</div>
+        ) : (
+          sortedDates.map((dateStr) => {
+            const dayShifts = dateToShifts.get(dateStr) || [];
+            const dayRecords = dateToRecords.get(dateStr) || [];
+            const dayKpi = dateToKpi.get(dateStr);
+            const plannedTotal = dayShifts.reduce((sum, s) => sum + getShiftPlannedMinutes(s), 0);
+            const actualTotal = dayRecords.reduce((sum, r) => sum + r.durationMinutes, 0);
+            const rates = dayKpi ? getKpiRates(dayKpi) : null;
+            return (
+              <div key={dateStr} className="px-4 py-4 sm:px-5">
+                <div className="mb-2 font-medium text-slate-800">{formatDisplayDate(dateStr)}</div>
+                <div className="mb-2 flex flex-wrap gap-4 text-sm">
+                  <span className="text-slate-600">予定: {plannedTotal > 0 ? formatDuration(plannedTotal) : "—"}</span>
+                  <span className="font-medium text-slate-800">実績: {formatDuration(actualTotal)}</span>
+                </div>
+                {dayKpi && (
+                  <div className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                    <span className="font-medium text-slate-700">KPI: </span>
+                    総コール {dayKpi.totalCalls} / 有効 {dayKpi.validCalls} / KC {dayKpi.kcCount} / 追いかけ {dayKpi.followUpCreated} / 決裁者アポ {dayKpi.decisionMakerApo} / 非決裁者アポ {dayKpi.nonDecisionMakerApo}
+                    {rates && (
+                      <div className="mt-1 text-slate-500">
+                        有効率 {rates.validRate != null ? `${rates.validRate}%` : "—"} / KC率 {rates.kcRate != null ? `${rates.kcRate}%` : "—"} / アポ率 {rates.apoRate != null ? `${rates.apoRate}%` : "—"}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <ul className="space-y-1.5 pl-0">
+                  {dayRecords.map((r) => (
+                    <li key={r.id} className="flex justify-between text-sm text-slate-600">
+                      <span>
+                        {formatTime(r.startRounded)} ～ {formatTime(r.endRounded)}
+                      </span>
+                      <span className="font-medium text-slate-700">{formatDuration(r.durationMinutes)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </section>
+  );
+}
+
+type WeekFormState = Record<string, { s1: string; e1: string; s2: string; e2: string }>;
+
+function ShiftTab(props: {
+  userId: string;
+  shifts: Shift[];
+  onSave: (s: Shift[]) => void;
+  onRefresh: () => void;
+}) {
+  const { userId, shifts, onSave, onRefresh } = props;
+  const options = get15MinOptions();
+  const [exceptionMode, setExceptionMode] = useState(false);
+  const [weekStart, setWeekStart] = useState("");
+  const [weekForm, setWeekForm] = useState<WeekFormState>({});
+
+  const targetStart = weekStart || getTargetWeekStart();
+  const weekDates = getWeekDates(targetStart);
+  const deadline = getDeadlineForWeek(targetStart);
+  const isPastDeadline = new Date() > deadline;
+  const byDate = getShiftsByDateForWeek(shifts, targetStart);
+
+  useEffect(() => {
+    const dates = getWeekDates(targetStart);
+    const map = getShiftsByDateForWeek(shifts, targetStart);
+    const next: WeekFormState = {};
+    dates.forEach((dateStr) => {
+      const s = map.get(dateStr);
+      next[dateStr] = {
+        s1: s ? s.startPlanned : "09:00",
+        e1: s ? s.endPlanned : "18:00",
+        s2: s && s.startPlanned2 ? s.startPlanned2 : "",
+        e2: s && s.endPlanned2 ? s.endPlanned2 : "",
+      };
+    });
+    setWeekForm((prev) => ({ ...next, ...prev }));
+  }, [targetStart, shifts]);
+
+  const updateDay = (dateStr: string, field: "s1" | "e1" | "s2" | "e2", value: string) => {
+    setWeekForm((prev) => {
+      const cur = prev[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
+      return { ...prev, [dateStr]: { ...cur, [field]: value } };
+    });
+  };
+
+  const handleSubmitWeek = (e: React.FormEvent) => {
+    e.preventDefault();
+    const otherShifts = shifts.filter((s) => !weekDates.includes(s.date));
+    const newShifts: Shift[] = weekDates.map((dateStr) => {
+      const f = weekForm[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
+      const existing = byDate.get(dateStr);
+      const base = {
+        id: existing ? existing.id : crypto.randomUUID(),
+        userId,
+        date: dateStr,
+        startPlanned: f.s1,
+        endPlanned: f.e1,
+      };
+      if (f.s2 && f.e2) {
+        return { ...base, startPlanned2: f.s2, endPlanned2: f.e2 };
+      }
+      return base;
+    });
+    onSave([...newShifts, ...otherShifts]);
+    onRefresh();
+  };
+
+  const weekOptions: string[] = [];
+  for (let i = -4; i <= 2; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() + 7 * i);
+    weekOptions.push(getWeekStart(d));
+  }
+
+  return (
+    <>
+      <section className="mb-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:p-6">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-medium text-slate-700">週次シフト提出</h2>
+          <p className="text-xs text-slate-500">
+            提出期限: 前週金曜 23:59
+            {isPastDeadline && <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-amber-800">期限経過</span>}
+          </p>
+        </div>
+        {exceptionMode && (
+          <div className="mb-4">
+            <label className="mb-1 block text-sm text-slate-600">対象週を選択</label>
+            <select
+              value={targetStart}
+              onChange={(e) => setWeekStart(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-800 sm:max-w-xs"
+            >
+              {weekOptions.map((ws) => {
+                const [yy, mm, dd] = ws.split("-").map(Number);
+                const mon = new Date(yy, mm - 1, dd);
+                const sun = new Date(mon);
+                sun.setDate(sun.getDate() + 6);
+                const label = `${mon.getMonth() + 1}/${mon.getDate()}～${sun.getMonth() + 1}/${sun.getDate()}`;
+                return (
+                  <option key={ws} value={ws}>
+                    {label}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        )}
+        <p className="mb-4 text-sm text-slate-600">
+          {exceptionMode ? "選択した週のシフトを入力・修正できます。" : `${formatDisplayDate(weekDates[0])} ～ ${formatDisplayDate(weekDates[6])}`}
+        </p>
+        <form onSubmit={handleSubmitWeek} className="space-y-4">
+          {weekDates.map((dateStr) => (
+            <div key={dateStr} className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+              <div className="mb-2 font-medium text-slate-800">{formatDisplayDate(dateStr)}</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="w-14 text-xs text-slate-500">シフト1</span>
+                  <select
+                    value={weekForm[dateStr] ? weekForm[dateStr].s1 : "09:00"}
+                    onChange={(e) => updateDay(dateStr, "s1", e.target.value)}
+                    className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                  >
+                    {options.map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </select>
+                  <span className="text-slate-400">～</span>
+                  <select
+                    value={weekForm[dateStr] ? weekForm[dateStr].e1 : "18:00"}
+                    onChange={(e) => updateDay(dateStr, "e1", e.target.value)}
+                    className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                  >
+                    {options.map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="w-14 text-xs text-slate-500">シフト2</span>
+                  <select
+                    value={weekForm[dateStr] ? weekForm[dateStr].s2 : ""}
+                    onChange={(e) => updateDay(dateStr, "s2", e.target.value)}
+                    className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                  >
+                    <option value="">—</option>
+                    {options.map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </select>
+                  <span className="text-slate-400">～</span>
+                  <select
+                    value={weekForm[dateStr] ? weekForm[dateStr].e2 : ""}
+                    onChange={(e) => updateDay(dateStr, "e2", e.target.value)}
+                    className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                  >
+                    <option value="">—</option>
+                    {options.map((o) => (
+                      <option key={o} value={o}>{o}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          ))}
+          <button type="submit" className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 sm:w-auto">
+            この週を保存
+          </button>
+        </form>
+        <button
+          type="button"
+          onClick={() => {
+            setExceptionMode(!exceptionMode);
+            if (exceptionMode) setWeekStart("");
+            else setWeekStart(getTargetWeekStart());
+          }}
+          className="mt-4 text-sm text-slate-500 underline hover:text-slate-700"
+        >
+          {exceptionMode ? "通常モードに戻る" : "シフト提出を忘れた方はこちら"}
+        </button>
+      </section>
+
+      <section className="rounded-xl bg-white shadow-sm ring-1 ring-slate-200/80">
+        <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-medium text-slate-600 sm:px-5 sm:py-4">登録したシフト一覧</h2>
+        <div className="divide-y divide-slate-100">
+          {shifts.length === 0 ? (
+            <div className="px-4 py-8 text-center text-slate-500 sm:px-5">まだシフトがありません</div>
+          ) : (
+            [...shifts]
+              .sort((a, b) => b.date.localeCompare(a.date))
+              .slice(0, 14)
+              .map((s) => (
+                <div key={s.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-5 sm:py-4">
+                  <div className="text-slate-800">
+                    <span className="font-medium">{formatDisplayDate(s.date)}</span>
+                    <span className="ml-2 text-sm text-slate-500">
+                      {s.startPlanned}～{s.endPlanned}
+                      {s.startPlanned2 && s.endPlanned2 ? ` / ${s.startPlanned2}～${s.endPlanned2}` : ""}
+                    </span>
+                  </div>
+                  <div className="text-right font-semibold text-slate-700">{formatDuration(getShiftPlannedMinutes(s))}</div>
+                </div>
+              ))
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function KpiTab(props: {
+  userId: string;
+  kpiRecords: KpiRecord[];
+  currentYearMonth: string;
+  onSave: (k: KpiRecord[]) => void;
+  onRefresh: () => void;
+}) {
+  const { userId, kpiRecords, currentYearMonth, onSave, onRefresh } = props;
+  const today = toDateString(new Date());
+  const [kpiDate, setKpiDate] = useState(today);
+  const [totalCalls, setTotalCalls] = useState(0);
+  const [validCalls, setValidCalls] = useState(0);
+  const [kcCount, setKcCount] = useState(0);
+  const [followUpCreated, setFollowUpCreated] = useState(0);
+  const [decisionMakerApo, setDecisionMakerApo] = useState(0);
+  const [nonDecisionMakerApo, setNonDecisionMakerApo] = useState(0);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const existing = getKpiForDate(kpiRecords, kpiDate);
+    if (existing) {
+      setTotalCalls(existing.totalCalls);
+      setValidCalls(existing.validCalls);
+      setKcCount(existing.kcCount);
+      setFollowUpCreated(existing.followUpCreated);
+      setDecisionMakerApo(existing.decisionMakerApo);
+      setNonDecisionMakerApo(existing.nonDecisionMakerApo);
+    } else {
+      setTotalCalls(0);
+      setValidCalls(0);
+      setKcCount(0);
+      setFollowUpCreated(0);
+      setDecisionMakerApo(0);
+      setNonDecisionMakerApo(0);
+    }
+    setSaved(false);
+  }, [kpiDate, kpiRecords]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const existingRec = getKpiForDate(kpiRecords, kpiDate);
+    const rec: KpiRecord = {
+      id: existingRec ? existingRec.id : crypto.randomUUID(),
+      userId,
+      date: kpiDate,
+      totalCalls,
+      validCalls,
+      kcCount,
+      followUpCreated,
+      decisionMakerApo,
+      nonDecisionMakerApo,
+    };
+    const next = existingRec
+      ? kpiRecords.map((r) => (r.date === kpiDate ? rec : r))
+      : [rec, ...kpiRecords.filter((r) => r.date !== kpiDate)];
+    onSave(next);
+    onRefresh();
+    setSaved(true);
+  };
+
+  const totals = getMonthlyKpiTotals(kpiRecords, currentYearMonth);
+  const monthKpiList = getKpiForMonth(kpiRecords, currentYearMonth).sort((a, b) => b.date.localeCompare(a.date));
+  const currentKpi = getKpiForDate(kpiRecords, kpiDate);
+  const rates = currentKpi ? getKpiRates(currentKpi) : null;
+  const prevDate = (() => {
+    const d = new Date(kpiDate);
+    d.setDate(d.getDate() - 1);
+    return toDateString(d);
+  })();
+  const prevKpi = getKpiForDate(kpiRecords, prevDate);
+  const prevRates = prevKpi ? getKpiRates(prevKpi) : null;
+  const monthRates =
+    totals.totalCalls > 0
+      ? {
+          validRate: safeRatePercent(totals.validCalls, totals.totalCalls),
+          kcRate: safeRatePercent(totals.kcCount, totals.validCalls),
+          apoRate: safeRatePercent(totals.decisionMakerApo, totals.kcCount),
+        }
+      : null;
+
+  return (
+    <>
+      {currentKpi && rates && (
+        <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:mb-8 sm:p-6">
+          <h2 className="mb-3 text-sm font-medium text-slate-700">生産性カード（{formatDisplayDate(kpiDate)}）</h2>
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div className="rounded-lg bg-slate-50 p-3">
+              <div className="text-xs text-slate-500">有効率</div>
+              <div className="text-lg font-bold text-slate-800">{rates.validRate != null ? `${rates.validRate}%` : "—"}</div>
+              <div className="text-xs text-slate-500">有効÷総コール</div>
+              {prevRates && prevRates.validRate != null && <div className="mt-1 text-xs text-slate-500">前日: {prevRates.validRate}%</div>}
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <div className="text-xs text-slate-500">KC率</div>
+              <div className="text-lg font-bold text-slate-800">{rates.kcRate != null ? `${rates.kcRate}%` : "—"}</div>
+              <div className="text-xs text-slate-500">KC÷有効</div>
+              {prevRates && prevRates.kcRate != null && <div className="mt-1 text-xs text-slate-500">前日: {prevRates.kcRate}%</div>}
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <div className="text-xs text-slate-500">アポ率</div>
+              <div className="text-lg font-bold text-slate-800">{rates.apoRate != null ? `${rates.apoRate}%` : "—"}</div>
+              <div className="text-xs text-slate-500">決裁者アポ÷KC</div>
+              {prevRates && prevRates.apoRate != null && <div className="mt-1 text-xs text-slate-500">前日: {prevRates.apoRate}%</div>}
+            </div>
+          </div>
+          {monthRates && (
+            <div className="mt-3 border-t border-slate-200 pt-3 text-center text-xs text-slate-500">
+              今月平均 有効率 {monthRates.validRate != null ? `${monthRates.validRate}%` : "—"} / KC率 {monthRates.kcRate != null ? `${monthRates.kcRate}%` : "—"} / アポ率 {monthRates.apoRate != null ? `${monthRates.apoRate}%` : "—"}
+            </div>
+          )}
+        </section>
+      )}
+
+      <section className="mb-6 rounded-xl bg-slate-800 p-5 text-white shadow-md sm:mb-8 sm:p-6">
+        <h2 className="mb-3 text-sm font-medium text-slate-300">今月の累計（{currentYearMonth}）</h2>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+          <div>総コール数: <span className="font-semibold">{totals.totalCalls}</span></div>
+          <div>有効コール数: <span className="font-semibold">{totals.validCalls}</span></div>
+          <div>KC数: <span className="font-semibold">{totals.kcCount}</span></div>
+          <div>追いかけ作成: <span className="font-semibold">{totals.followUpCreated}</span></div>
+          <div>決裁者アポ: <span className="font-semibold">{totals.decisionMakerApo}</span></div>
+          <div>非決裁者アポ: <span className="font-semibold">{totals.nonDecisionMakerApo}</span></div>
+        </div>
+        <p className="mt-2 text-sm text-slate-300">合計アポ数: <span className="font-semibold">{totals.totalApo}</span></p>
+      </section>
+
+      <section className="mb-8 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:p-6">
+        <h2 className="mb-4 text-sm font-medium text-slate-700">本日の成果入力</h2>
+        <p className="mb-4 text-sm text-slate-600">日付を選び、数値を入力して保存してください。</p>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-sm text-slate-600">日付</label>
+            <input
+              type="date"
+              value={kpiDate}
+              onChange={(e) => setKpiDate(e.target.value)}
+              required
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-800"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+            {KPI_LABELS.map(({ key, label }) => (
+              <div key={key}>
+                <label className="mb-1 block text-sm text-slate-600">{label}</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={
+                    key === "totalCalls"
+                      ? totalCalls
+                      : key === "validCalls"
+                        ? validCalls
+                        : key === "kcCount"
+                          ? kcCount
+                          : key === "followUpCreated"
+                            ? followUpCreated
+                            : key === "decisionMakerApo"
+                              ? decisionMakerApo
+                              : nonDecisionMakerApo
+                  }
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10) || 0;
+                    if (key === "totalCalls") setTotalCalls(v);
+                    else if (key === "validCalls") setValidCalls(v);
+                    else if (key === "kcCount") setKcCount(v);
+                    else if (key === "followUpCreated") setFollowUpCreated(v);
+                    else if (key === "decisionMakerApo") setDecisionMakerApo(v);
+                    else setNonDecisionMakerApo(v);
+                  }}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-800"
+                />
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            <button type="submit" className="rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600">
+              保存する
+            </button>
+            {saved && <span className="text-sm text-green-600">保存しました</span>}
+          </div>
+        </form>
+      </section>
+
+      <section className="rounded-xl bg-white shadow-sm ring-1 ring-slate-200/80">
+        <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-medium text-slate-600 sm:px-5 sm:py-4">今月のKPI履歴（{currentYearMonth}）</h2>
+        <div className="divide-y divide-slate-100">
+          {monthKpiList.length === 0 ? (
+            <div className="px-4 py-8 text-center text-slate-500 sm:px-5">まだKPIがありません</div>
+          ) : (
+            monthKpiList.map((k) => (
+              <div key={k.id} className="px-4 py-3 sm:px-5 sm:py-4">
+                <div className="mb-1 font-medium text-slate-800">{formatDisplayDate(k.date)}</div>
+                <div className="text-xs text-slate-600 sm:text-sm">
+                  総コール {k.totalCalls} / 有効 {k.validCalls} / KC {k.kcCount} / 追いかけ {k.followUpCreated} / 決裁者アポ {k.decisionMakerApo} / 非決裁者アポ {k.nonDecisionMakerApo}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+    </>
+  );
+}
+
+export default function DashboardPage() {
+  const [mounted, setMounted] = useState(false);
+  const [tab, setTab] = useState<Tab>("home");
+  const [isAdminMode, setIsAdminMode] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState("");
+  const [members, setMembers] = useState<Member[]>([]);
+  const [allRecords, setAllRecords] = useState<WorkRecord[]>([]);
+  const [allOpenRecords, setAllOpenRecords] = useState<OpenRecord[]>([]);
+  const [allShifts, setAllShifts] = useState<Shift[]>([]);
+  const [allKpiRecords, setAllKpiRecords] = useState<KpiRecord[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState("");
+
+  const refresh = useCallback(() => {
+    setAllRecords(loadRecords());
+    setAllOpenRecords(loadOpenRecords());
+    setAllShifts(loadShifts());
+    setAllKpiRecords(loadKpi());
+    setMembers(loadMembers());
+  }, []);
+
+  const hydrate = useCallback(() => {
+    try {
+      let mems = loadMembers();
+      if (mems.length === 0) {
+        addMember("ユーザー1");
+        mems = loadMembers();
+      }
+      setMembers(mems);
+      setAllRecords(loadRecords());
+      setAllOpenRecords(loadOpenRecords());
+      setAllShifts(loadShifts());
+      setAllKpiRecords(loadKpi());
+      const now = new Date();
+      setSelectedMonth((prev) => (prev ? prev : `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`));
+      setCurrentUserId((prev) => {
+        if (prev && mems.some((m) => m.id === prev)) return prev;
+        return mems[0] ? mems[0].id : "";
+      });
+    } catch (err) {
+      console.error("hydrate", err);
+      setMembers([{ id: "default", name: "ユーザー1", loginAccount: "", password: "", hourlyRate: DEFAULT_HOURLY_RATE }]);
+      setCurrentUserId("default");
+    }
+  }, []);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (mounted) hydrate();
+  }, [mounted, hydrate]);
+
+  // 3時間ごとに自動バックアップを localStorage に上書き保存
+  useEffect(() => {
+    if (!mounted) return;
+    saveAutoBackup(); // 初回はマウント直後に1回実行
+    const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
+    const id = setInterval(saveAutoBackup, THREE_HOURS_MS);
+    return () => clearInterval(id);
+  }, [mounted]);
+
+  const records = isAdminMode ? allRecords : getRecordsForUser(allRecords, currentUserId);
+  const openRecord = getOpenRecordForUser(allOpenRecords, currentUserId);
+  const shifts = isAdminMode ? allShifts : getShiftsForUser(allShifts, currentUserId);
+  const kpiRecords = isAdminMode ? allKpiRecords : getKpiForUser(allKpiRecords, currentUserId);
+
+  const todayStr = toDateString(new Date());
+  const todayMinutes = getTotalMinutesForDate(records, todayStr);
+  const currentYearMonth =
+    selectedMonth || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+  const monthRecords = getRecordsForMonth(records, currentYearMonth);
+  const monthShifts = shifts.filter((s) => s.date.startsWith(currentYearMonth));
+  const monthKpi = getKpiForMonth(kpiRecords, currentYearMonth);
+  const totalMinutes = getTotalMinutesForMonth(records, currentYearMonth);
+  const isCurrentMonth =
+    currentYearMonth === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+  const selectableMonths = getSelectableMonths(records, shifts, kpiRecords);
+
+  const handleStart = () => {
+    if (openRecord) return;
+    const now = new Date();
+    const rounded = roundUpTo15Minutes(now);
+    const newOpen: OpenRecord = {
+      id: crypto.randomUUID(),
+      userId: currentUserId,
+      startRaw: now.toISOString(),
+      startRounded: rounded.toISOString(),
+      date: toDateString(now),
+    };
+    setOpenRecordForUser(currentUserId, newOpen);
+    setAllOpenRecords(loadOpenRecords());
+  };
+
+  const handleEnd = () => {
+    if (!openRecord) return;
+    const now = new Date();
+    const endRounded = roundDownTo15Minutes(now);
+    const startRounded = new Date(openRecord.startRounded);
+    const durationMinutes = calcDurationMinutes(startRounded, endRounded);
+    const newRecord: WorkRecord = {
+      id: openRecord.id,
+      userId: currentUserId,
+      startRaw: openRecord.startRaw,
+      startRounded: openRecord.startRounded,
+      endRaw: now.toISOString(),
+      endRounded: endRounded.toISOString(),
+      durationMinutes,
+      date: openRecord.date,
+    };
+    const userRecords = getRecordsForUser(allRecords, currentUserId);
+    const next = [newRecord, ...userRecords];
+    saveRecordsForUser(currentUserId, next);
+    setOpenRecordForUser(currentUserId, null);
+    setAllRecords(loadRecords());
+    setAllOpenRecords(loadOpenRecords());
+  };
+
+  const handleSaveShifts = (newShifts: Shift[]) => {
+    saveShiftsForUser(currentUserId, newShifts);
+    refresh();
+  };
+
+  const handleSaveKpi = (newKpi: KpiRecord[]) => {
+    saveKpiForUser(currentUserId, newKpi);
+    refresh();
+  };
+
+  const currentMember = members.find((m) => m.id === currentUserId);
+
+  if (!mounted) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: "#94a3b8",
+          fontFamily: "system-ui, sans-serif",
+        }}
+      >
+        <div style={{ textAlign: "center", padding: "2rem" }}>
+          <p style={{ fontSize: "1.25rem", fontWeight: 700, color: "#0f172a", margin: 0 }}>読み込み中...</p>
+          <p style={{ fontSize: "0.875rem", color: "#1e293b", marginTop: "0.75rem" }}>
+            <a href="http://localhost:3000" style={{ color: "#1d4ed8", textDecoration: "underline" }}>http://localhost:3000</a> で開いてください
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-100" style={{ minHeight: "100vh", backgroundColor: "#f1f5f9" }}>
+      <header className="bg-slate-800 text-white shadow-md" style={{ backgroundColor: "#1e293b" }}>
+        <div className="mx-auto max-w-2xl px-4 py-4 sm:px-6">
+          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
+            {isAdminMode ? "稼働管理アプリ（管理者）" : `稼働管理アプリ${currentMember ? ` - ${currentMember.name}` : ""}`}
+          </h1>
+        </div>
+      </header>
+
+      {!isAdminMode && (
+        <div className="border-b border-slate-200 bg-white">
+          <div className="mx-auto flex max-w-2xl gap-0">
+            <button
+              type="button"
+              onClick={() => setTab("home")}
+              className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 ${tab === "home" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              打刻・ホーム
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("shift")}
+              className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 ${tab === "shift" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              シフト提出
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("kpi")}
+              className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 ${tab === "kpi" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              KPI入力
+            </button>
+          </div>
+        </div>
+      )}
+
+      <main className="mx-auto max-w-2xl px-4 py-6 sm:px-6 sm:py-8">
+        {isAdminMode ? (
+          <AdminDashboard
+            allRecords={allRecords}
+            allOpenRecords={allOpenRecords}
+            allShifts={allShifts}
+            allKpiRecords={allKpiRecords}
+            members={members}
+            setMembers={setMembers}
+            onRefresh={refresh}
+          />
+        ) : tab === "home" ? (
+          <>
+            <section className="mb-6 rounded-xl bg-slate-800 p-6 text-white shadow-md sm:mb-8">
+              <h2 className="mb-1 text-sm font-medium text-slate-300">本日の総稼働時間</h2>
+              <p className="text-3xl font-bold sm:text-4xl">{formatDuration(todayMinutes)}</p>
+            </section>
+
+            <section className="mb-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:mb-8 sm:p-6">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-medium text-slate-600">{isCurrentMonth ? "今月の合計稼働時間" : "選択月の合計稼働時間"}</h2>
+                <select
+                  value={currentYearMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
+                >
+                  {selectableMonths.map((ym) => {
+                    const [y, m] = ym.split("-");
+                    const label =
+                      ym === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}` ? `${y}年${m}月（今月）` : `${y}年${m}月`;
+                    return (
+                      <option key={ym} value={ym}>
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <p className="text-2xl font-bold text-slate-800 sm:text-3xl">{formatDuration(totalMinutes)}</p>
+            </section>
+
+            <section className="mb-6 sm:mb-8">
+              <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
+                <button
+                  type="button"
+                  onClick={handleStart}
+                  disabled={!!openRecord}
+                  className="flex-1 rounded-xl bg-slate-700 px-6 py-4 text-base font-semibold text-white shadow-md transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50 sm:py-5 sm:text-lg"
+                >
+                  稼働開始
+                </button>
+                <button
+                  type="button"
+                  onClick={handleEnd}
+                  disabled={!openRecord}
+                  className="flex-1 rounded-xl bg-slate-600 px-6 py-4 text-base font-semibold text-white shadow-md transition hover:bg-slate-500 disabled:cursor-not-allowed disabled:opacity-50 sm:py-5 sm:text-lg"
+                >
+                  稼働終了
+                </button>
+              </div>
+              {openRecord && (
+                <p className="mt-3 text-center text-sm text-slate-600">稼働中（開始: {formatTime(openRecord.startRounded)}）</p>
+              )}
+            </section>
+
+            <HistorySection
+              monthRecords={monthRecords}
+              monthShifts={monthShifts}
+              monthKpi={monthKpi}
+              currentYearMonth={currentYearMonth}
+              isCurrentMonth={isCurrentMonth}
+            />
+          </>
+        ) : tab === "shift" ? (
+          <ShiftTab userId={currentUserId} shifts={shifts} onSave={handleSaveShifts} onRefresh={refresh} />
+        ) : (
+          <KpiTab userId={currentUserId} kpiRecords={kpiRecords} currentYearMonth={currentYearMonth} onSave={handleSaveKpi} onRefresh={refresh} />
+        )}
+      </main>
+
+      <div className="fixed bottom-4 right-4 z-10 flex flex-col gap-2 rounded-xl border border-slate-300 bg-white p-3 shadow-lg">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-slate-600">{isAdminMode ? "管理者" : "ユーザー"}</span>
+          <button
+            type="button"
+            onClick={() => setIsAdminMode(!isAdminMode)}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${isAdminMode ? "bg-slate-700" : "bg-slate-300"}`}
+          >
+            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${isAdminMode ? "translate-x-5" : "translate-x-1"}`} />
+          </button>
+        </div>
+        {!isAdminMode && (
+          <div>
+            <label className="mb-0.5 block text-xs text-slate-500">表示ユーザー</label>
+            <select
+              value={currentUserId}
+              onChange={(e) => setCurrentUserId(e.target.value)}
+              className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-800"
+            >
+              {members.map((mem) => (
+                <option key={mem.id} value={mem.id}>
+                  {mem.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

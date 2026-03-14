@@ -1,0 +1,104 @@
+[
+  {
+    "id": "user-1",
+    "loginId": "admin",
+    "name": "管理者",
+    "passwordHash": "$2a$10$6v45UrMS/6sFL3SEDTzcUu4Pb8EclxlPthFlraHq7Suy0iNwrdoze"
+  },
+  {
+    "id": "user-2",
+    "loginId": "tomoyohayakawa",
+    "name": "tomoyohayakawa",
+    "passwordHash": "$2a$10$GRU1UB04kWCQF3AxPPNf7eJksOW9y.jOm1gZDkhRwYL3Ao1EdzjNK"
+  },
+  {
+    "id": "user-3",
+    "loginId": "namiwatanabe",
+    "name": "namiwatanabe",
+    "passwordHash": "$2a$10$u61ExCr6l1R3OvRrKI4iJe2kp4qmqtLMAXoBQitEP4aB0GFKgD8Xu"
+  },
+  {
+    "id": "user-4",
+    "loginId": "kikuesimizu",
+    "name": "kikuesimizu",
+    "passwordHash": "$2a$10$p/.iy2CStw1TGkT6jN3mO.ZxRp5IlAUU7HDR.ApdQ6VDJ0D1otEMa"
+  },
+  {
+    "id": "user-5",
+    "loginId": "tenukin",
+    "name": "tenukin",
+    "passwordHash": "$2a$10$uNUnVgP6M8B..Vqy6Jy02eno8QqgpKEGDKrNJI19J.chFfClTuUKO"
+  },
+  {
+    "id": "user-6",
+    "loginId": "risakondou",
+    "name": "risakondou",
+    "passwordHash": "$2a$10$JaKsReOYn5IgHUe4rJFoouorxarRugIvd8jAd7EPK4C31y08jIs1u"
+  },
+  {
+    "id": "user-7",
+    "loginId": "asukanoro",
+    "name": "asukanoro",
+    "passwordHash": "$2a$10$4qsjmsxF5tA06QgFFY99heGfz26uzx3.lGC.39UYnHlP2HPdKqqxC"
+  },
+  {
+    "id": "user-8",
+    "loginId": "satomiyoshimura",
+    "name": "satomiyoshimura",
+    "passwordHash": "$2a$10$r1LD2bAyuXspqjWhG59dEegiOdDloBR.kmLduz.OyGyxWseIuoveu"
+  },
+  {
+    "id": "user-9",
+    "loginId": "risasuzuki",
+    "name": "risasuzuki",
+    "passwordHash": "$2a$10$8UjVTBKbLZt8gXXG5YdxtOhiEWLGM8it4zgA6jzcwaLMEwhtQ4zyi"
+  },
+  {
+    "id": "user-10",
+    "loginId": "keikokiuchi",
+    "name": "keikokiuchi",
+    "passwordHash": "$2a$10$lyvYS1NGlXLlpFYCMnqjOe16jBZxrIiGwMjR1wZEwLelX74VJItb6"
+  },
+  {
+    "id": "user-11",
+    "loginId": "chiakiyamamoto",
+    "name": "chiakiyamamoto",
+    "passwordHash": "$2a$10$LyIt6QMe1LE4CmBLpX/QUOXsMFHWgrZdGVacc0X/6BMmnSiJhPvKK"
+  },
+  {
+    "id": "user-12",
+    "loginId": "megumiozaki",
+    "name": "megumiozaki",
+    "passwordHash": "$2a$10$ZU1bkyC4axx5YHxRRES6AuOm2fIJfSrBIcMA0U9nRBlsIdVLd0w3K"
+  },
+  {
+    "id": "user-13",
+    "loginId": "ryokato",
+    "name": "ryokato",
+    "passwordHash": "$2a$10$FlqvZ3tLsRDH2jCMHXnxNeiaHdlf8CzswgyQI2conOYXNlrXYsSAm"
+  },
+  {
+    "id": "user-14",
+    "loginId": "akiyoshiito",
+    "name": "akiyoshiito",
+    "passwordHash": "$2a$10$8HLWrUkfu3PcM9nyRMhmoONBblmPE/SF9ZGTBEM.Jhex9ZYw3EK4O"
+  },
+  {
+    "id": "user-15",
+    "loginId": "kazukihara",
+    "name": "kazukihara",
+    "passwordHash": "$2a$10$O2lPTGAXAcZK6uENyj5VNeI/9hk6P.WQvC64jx32cZJmgNaZ1haaW"
+  },
+  {
+    "id": "user-16",
+    "loginId": "tiekoyamamoto",
+    "name": "tiekoyamamoto",
+    "passwordHash": "$2a$10$bo2IdwRLNycylRRdzWybcOoZfgClM6t72Ft66kGMe31i4rd7/h4Gu"
+  },
+  {
+    "id": "user-17",
+    "loginId": "takayukikuribayasi",
+    "name": "takayukikuribayasi",
+    "passwordHash": "$2a$10$SgmyUzEIwYv.hEr3Dr154OQcOmSnZ/eYUu/tzsESgNJcvuJICpWe6"
+  }
+]
