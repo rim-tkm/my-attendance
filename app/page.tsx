@@ -110,23 +110,34 @@ function AdminDashboard(props: {
   const [editPass, setEditPass] = useState("");
   const [editRate, setEditRate] = useState(DEFAULT_HOURLY_RATE);
   const [kpiDate, setKpiDate] = useState(() => toDateString(new Date()));
+  const [dashboardDate, setDashboardDate] = useState(() => toDateString(new Date()));
 
   const y = new Date().getFullYear();
   const m = new Date().getMonth() + 1;
   const currentYearMonth = `${y}-${String(m).padStart(2, "0")}`;
   const todayStr = toDateString(new Date());
   const teamTotals = getMonthlyKpiTotals(allKpiRecords, currentYearMonth);
-  const workingCount = allOpenRecords.length;
   const teamValidRate = safeRatePercent(teamTotals.validCalls, teamTotals.totalCalls);
   const teamKcRate = safeRatePercent(teamTotals.kcCount, teamTotals.validCalls);
   const teamApoRate = safeRatePercent(teamTotals.decisionMakerApo, teamTotals.kcCount);
-  const todayKpis = allKpiRecords.filter((k) => k.date === todayStr);
-  const todayDecision = todayKpis.reduce((s, k) => s + k.decisionMakerApo, 0);
-  const todayNonDecision = todayKpis.reduce((s, k) => s + k.nonDecisionMakerApo, 0);
-  const todayTeamMinutes = allRecords.filter((r) => r.date === todayStr).reduce((s, r) => s + r.durationMinutes, 0);
-  const todayApoCostMinutes = todayDecision > 0 ? todayTeamMinutes / todayDecision : null;
   const monthTeamMinutes = members.reduce((s, mem) => s + getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth), 0);
   const monthApoCostMinutes = teamTotals.decisionMakerApo > 0 ? monthTeamMinutes / teamTotals.decisionMakerApo : null;
+
+  // ダッシュボード表示日付に基づく集計（Supabase kpis / attendance を日付でフィルタ）
+  const dateKpis = allKpiRecords.filter((k) => k.date === dashboardDate);
+  const dateDecision = dateKpis.reduce((s, k) => s + k.decisionMakerApo, 0);
+  const dateNonDecision = dateKpis.reduce((s, k) => s + k.nonDecisionMakerApo, 0);
+  const workingCountForDate = new Set(allRecords.filter((r) => r.date === dashboardDate).map((r) => r.userId)).size;
+  const dateTeamMinutes = allRecords.filter((r) => r.date === dashboardDate).reduce((s, r) => s + r.durationMinutes, 0);
+  const dateApoCostMinutes = dateDecision > 0 ? dateTeamMinutes / dateDecision : null;
+  const apoListForDate = members
+    .map((mem) => {
+      const k = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), dashboardDate);
+      const dec = k ? k.decisionMakerApo : 0;
+      return { mem, dec };
+    })
+    .filter(({ dec }) => dec >= 1)
+    .sort((a, b) => b.dec - a.dec);
 
   const handleAdd = async () => {
     if (!newMemberName.trim()) return;
@@ -196,45 +207,51 @@ function AdminDashboard(props: {
       {adminSection === "dashboard" && (
         <div className="space-y-6">
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-3 text-sm font-medium text-slate-700">本日のチーム成果</h2>
+            <div className="mb-4 flex flex-wrap items-center gap-4">
+              <h2 className="text-sm font-medium text-slate-700">チーム成果</h2>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-slate-500">表示日付</span>
+                <input
+                  type="date"
+                  value={dashboardDate}
+                  onChange={(e) => setDashboardDate(e.target.value)}
+                  className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                />
+            </label>
+            </div>
             <div className="mb-4 flex flex-wrap gap-4">
               <div className="rounded-lg bg-emerald-700 px-4 py-3 text-white">
-                <div className="text-xs text-emerald-100">本日 決裁者アポ合計</div>
-                <div className="text-2xl font-bold">{todayDecision} 件</div>
+                <div className="text-xs text-emerald-100">決裁者アポ合計</div>
+                <div className="text-2xl font-bold">{dateDecision} 件</div>
               </div>
               <div className="rounded-lg bg-teal-700 px-4 py-3 text-white">
-                <div className="text-xs text-teal-100">本日 非決裁者アポ合計</div>
-                <div className="text-2xl font-bold">{todayNonDecision} 件</div>
+                <div className="text-xs text-teal-100">非決裁者アポ合計</div>
+                <div className="text-2xl font-bold">{dateNonDecision} 件</div>
               </div>
               <div className="rounded-lg bg-amber-600 px-4 py-3 text-white">
-                <div className="text-xs text-amber-100">現在 稼働中</div>
-                <div className="text-2xl font-bold">{workingCount} 名</div>
+                <div className="text-xs text-amber-100">稼働人数</div>
+                <div className="text-2xl font-bold">{workingCountForDate} 名</div>
               </div>
             </div>
             <div>
-              <div className="mb-2 text-xs font-medium text-slate-500">本日アポ取得一覧</div>
-              <div className="flex flex-wrap gap-2">
-                {members.map((mem) => {
-                  const k = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), todayStr);
-                  const dec = k ? k.decisionMakerApo : 0;
-                  const non = k ? k.nonDecisionMakerApo : 0;
-                  const total = dec + non;
-                  if (total === 0) {
+              <div className="mb-2 text-xs font-medium text-slate-500">アポ取得一覧（決裁者アポ1件以上のメンバー、件数順）</div>
+              {apoListForDate.length === 0 ? (
+                <p className="rounded-lg bg-slate-100 px-4 py-3 text-sm text-slate-500">指定された日のアポ獲得者はまだいません</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {apoListForDate.map(({ mem, dec }) => {
+                    const k = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), dashboardDate);
+                    const non = k ? k.nonDecisionMakerApo : 0;
                     return (
-                      <span key={mem.id} className="rounded bg-slate-100 px-2 py-1 text-sm text-slate-500">
-                        {mem.name}: 0件
+                      <span key={mem.id} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
+                        <span className="font-medium text-slate-800">{mem.name}</span>
+                        <span className="rounded bg-emerald-200 px-1.5 py-0.5 text-xs font-semibold text-emerald-800">決裁 {dec}</span>
+                        <span className="rounded bg-teal-200 px-1.5 py-0.5 text-xs font-semibold text-teal-800">非決裁 {non}</span>
                       </span>
                     );
-                  }
-                  return (
-                    <span key={mem.id} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm">
-                      <span className="font-medium text-slate-800">{mem.name}</span>
-                      <span className="rounded bg-emerald-200 px-1.5 py-0.5 text-xs font-semibold text-emerald-800">決裁 {dec}</span>
-                      <span className="rounded bg-teal-200 px-1.5 py-0.5 text-xs font-semibold text-teal-800">非決裁 {non}</span>
-                    </span>
-                  );
-                })}
-              </div>
+                  })}
+                </div>
+              )}
             </div>
           </section>
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -269,9 +286,9 @@ function AdminDashboard(props: {
             <p className="mb-4 text-xs text-slate-500">決裁者アポ1件あたりの稼働時間。数値が小さいほど効率が良いです。</p>
             <div className="flex flex-wrap gap-6">
               <div className="rounded-lg bg-slate-800 px-4 py-3 text-white">
-                <div className="text-xs text-slate-300">本日のアポ取得単価（チーム全体）</div>
+                <div className="text-xs text-slate-300">表示日のアポ取得単価（チーム全体）</div>
                 <div className="text-xl font-bold">
-                  {todayApoCostMinutes != null ? `${formatDuration(Math.round(todayApoCostMinutes))}/件` : "—"}
+                  {dateApoCostMinutes != null ? `${formatDuration(Math.round(dateApoCostMinutes))}/件` : "—"}
                 </div>
               </div>
               <div className="rounded-lg bg-slate-700 px-4 py-3 text-white">
