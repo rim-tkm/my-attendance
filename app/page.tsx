@@ -72,6 +72,117 @@ function formatDisplayDate(dateStr: string): string {
   });
 }
 
+/** レポート用：日付文字列から時刻のみ HH:mm を返す */
+function formatTimeForReport(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+}
+
+/** 業務委託実績報告書のHTMLを生成（印刷用・A4） */
+function buildReportHtml(
+  memberName: string,
+  yearMonth: string,
+  hourlyRate: number,
+  totalMinutes: number,
+  workDays: number,
+  estimatedPay: number,
+  totalCalls: number,
+  validCalls: number,
+  kcCount: number,
+  decisionMakerApo: number,
+  validRate: number | null,
+  kcRate: number | null,
+  apoRate: number | null,
+  dailyRows: { date: string; displayDate: string; timeRanges: string[]; apoCount: number }[]
+): string {
+  const [y, m] = yearMonth.split("-");
+  const monthLabel = `${y}年${m}月`;
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>業務委託実績報告書 - ${memberName} - ${monthLabel}</title>
+  <style>
+    @page { size: A4; margin: 18mm; }
+    body { font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif; font-size: 11pt; color: #1e293b; margin: 0; padding: 18px; }
+    .header { text-align: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #1e293b; }
+    .company { font-size: 14pt; font-weight: bold; margin-bottom: 4px; }
+    .logo-space { min-height: 32px; margin-bottom: 8px; }
+    .title { font-size: 16pt; font-weight: bold; }
+    .section { margin-top: 20px; }
+    .section-title { font-size: 12pt; font-weight: bold; margin-bottom: 8px; padding: 4px 0; border-bottom: 1px solid #94a3b8; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border: 1px solid #cbd5e1; padding: 6px 10px; text-align: left; }
+    th { background: #f1f5f9; font-weight: 600; font-size: 10pt; }
+    td { font-size: 10pt; }
+    .text-right { text-align: right; }
+    .info-table td:first-child { width: 140px; background: #f8fafc; }
+    .number { font-variant-numeric: tabular-nums; }
+    .daily-time { white-space: nowrap; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo-space"><!-- 株式会社RIM ロゴ配置スペース --></div>
+    <div class="company">株式会社RIM</div>
+    <h1 class="title">業務委託実績報告書</h1>
+  </div>
+
+  <div class="section">
+    <div class="section-title">1. 基本情報</div>
+    <table class="info-table">
+      <tr><td>メンバー名</td><td>${memberName}</td></tr>
+      <tr><td>対象月</td><td>${monthLabel}</td></tr>
+      <tr><td>委託料単価</td><td class="number">¥${hourlyRate.toLocaleString()} /h</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-title">2. 稼働統計</div>
+    <table class="info-table">
+      <tr><td>総業務時間（合計）</td><td class="number">${formatDuration(totalMinutes)}</td></tr>
+      <tr><td>業務日数</td><td class="number">${workDays} 日</td></tr>
+      <tr><td>概算委託料</td><td class="number">¥${estimatedPay.toLocaleString()}</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-title">3. 生産性スコア</div>
+    <table class="info-table">
+      <tr><td>総架電数</td><td class="number">${totalCalls}</td></tr>
+      <tr><td>有効対話数</td><td class="number">${validCalls}</td></tr>
+      <tr><td>決裁者対話数（KC）</td><td class="number">${kcCount}</td></tr>
+      <tr><td>決裁者アポ数</td><td class="number">${decisionMakerApo}</td></tr>
+      <tr><td>有効率</td><td class="number">${validRate != null ? `${validRate}%` : "—"}</td></tr>
+      <tr><td>KC率（決裁者接続率）</td><td class="number">${kcRate != null ? `${kcRate}%` : "—"}</td></tr>
+      <tr><td>アポ率</td><td class="number">${apoRate != null ? `${apoRate}%` : "—"}</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="section-title">4. 日別明細</div>
+    <table>
+      <thead>
+        <tr>
+          <th>日付</th>
+          <th>業務開始・終了時間</th>
+          <th class="text-right">獲得アポ数</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${dailyRows.length === 0 ? "<tr><td colspan=\"3\">該当データがありません</td></tr>" : dailyRows.map((row) => `<tr>
+          <td>${row.displayDate}</td>
+          <td class="daily-time">${row.timeRanges.join(" / ")}</td>
+          <td class="text-right number">${row.apoCount}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>`;
+}
+
 type Tab = "home" | "shift" | "kpi";
 type AdminSection = "dashboard" | "attendance" | "shift" | "kpi" | "settings";
 
@@ -117,6 +228,11 @@ function AdminDashboard(props: {
   const [backupExpanded, setBackupExpanded] = useState(false);
   const [rangeStart, setRangeStart] = useState(() => getThisWeekMondayDateString());
   const [rangeEnd, setRangeEnd] = useState(() => toDateString(new Date()));
+  const [reportMember, setReportMember] = useState<Member | null>(null);
+  const [reportMonth, setReportMonth] = useState(() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+  });
 
   const y = new Date().getFullYear();
   const m = new Date().getMonth() + 1;
@@ -179,6 +295,68 @@ function AdminDashboard(props: {
     setEditLogin(member.loginAccount ?? "");
     setEditPass("");
     setEditRate(member.hourlyRate ?? DEFAULT_HOURLY_RATE);
+  };
+
+  const openReport = (member: Member) => {
+    setReportMember(member);
+    setReportMonth(currentYearMonth);
+  };
+
+  const handlePrintReport = () => {
+    if (!reportMember) return;
+    const userId = reportMember.id;
+    const userRecords = getRecordsForMonth(getRecordsForUser(allRecords, userId), reportMonth);
+    const userKpi = getKpiForMonth(getKpiForUser(allKpiRecords, userId), reportMonth);
+    const totalMinutes = userRecords.reduce((s, r) => s + r.durationMinutes, 0);
+    const workDays = new Set(userRecords.map((r) => r.date)).size;
+    const rate = reportMember.hourlyRate != null ? reportMember.hourlyRate : DEFAULT_HOURLY_RATE;
+    const estimatedPay = calcMonthlyPay(totalMinutes, rate);
+    const kpiTotals = getKpiTotalsFromRecords(userKpi);
+    const validRate = safeRatePercent(kpiTotals.validCalls, kpiTotals.totalCalls);
+    const kcRate = safeRatePercent(kpiTotals.kcCount, kpiTotals.validCalls);
+    const apoRate = safeRatePercent(kpiTotals.decisionMakerApo, kpiTotals.kcCount);
+    const dateToKpi = new Map(userKpi.map((k) => [k.date, k]));
+    const allDates = new Set<string>([...userRecords.map((r) => r.date), ...userKpi.map((k) => k.date)]);
+    const sortedDates = Array.from(allDates).sort();
+    const dailyRows = sortedDates.map((date) => {
+      const dayRecords = userRecords.filter((r) => r.date === date);
+      const timeRanges = dayRecords.map(
+        (r) => `${formatTimeForReport(r.startRounded)}～${formatTimeForReport(r.endRounded)}`
+      );
+      const k = dateToKpi.get(date);
+      const apoCount = k ? k.decisionMakerApo + k.nonDecisionMakerApo : 0;
+      return {
+        date,
+        displayDate: formatDisplayDate(date),
+        timeRanges,
+        apoCount,
+      };
+    });
+    const html = buildReportHtml(
+      reportMember.name,
+      reportMonth,
+      rate,
+      totalMinutes,
+      workDays,
+      estimatedPay,
+      kpiTotals.totalCalls,
+      kpiTotals.validCalls,
+      kpiTotals.kcCount,
+      kpiTotals.decisionMakerApo,
+      validRate,
+      kcRate,
+      apoRate,
+      dailyRows
+    );
+    const w = window.open("", "_blank");
+    if (w) {
+      w.document.write(html);
+      w.document.close();
+      w.focus();
+      setTimeout(() => {
+        w.print();
+      }, 250);
+    }
   };
 
   const saveDetail = async () => {
@@ -602,6 +780,7 @@ function AdminDashboard(props: {
                       <td className="px-2 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(monthMin)}</td>
                       <td className="px-2 py-2.5 text-right tabular-nums font-medium text-slate-800">¥{pay.toLocaleString()}</td>
                       <td className="px-2 py-2.5 text-right whitespace-nowrap">
+                        <button type="button" onClick={() => openReport(mem)} className="mr-2 text-slate-600 underline hover:text-slate-800">実績レポート(PDF)</button>
                         <button type="button" onClick={() => openDetail(mem)} className="mr-2 text-slate-600 underline hover:text-slate-800">編集</button>
                         <button
                           type="button"
@@ -716,6 +895,40 @@ function AdminDashboard(props: {
             )}
           </div>
         </section>
+      )}
+
+      {reportMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setReportMember(null)}>
+          <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-4 text-sm font-semibold text-slate-800">実績レポート（PDF）</h3>
+            <p className="mb-2 text-xs text-slate-600">{reportMember.name} の月次実績を印刷できます。</p>
+            <div className="mb-4">
+              <label className="mb-1 block text-xs font-medium text-slate-600">対象月</label>
+              <input
+                type="month"
+                value={reportMonth}
+                onChange={(e) => setReportMonth(e.target.value)}
+                className="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handlePrintReport}
+                className="flex-1 rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
+              >
+                印刷してPDFに保存
+              </button>
+              <button
+                type="button"
+                onClick={() => setReportMember(null)}
+                className="rounded border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
