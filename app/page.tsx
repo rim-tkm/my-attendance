@@ -166,8 +166,8 @@ function buildReportHtml(
   <div class="section">
     <div class="section-title">4. 生産性スコア</div>
     <table class="info-table">
-      <tr><td>総架電数合計</td><td class="number">${totalCalls}</td></tr>
-      <tr><td>有効対話数合計</td><td class="number">${validCalls}</td></tr>
+      <tr><td>総コール数</td><td class="number">${totalCalls}</td></tr>
+      <tr><td>総有効コール数</td><td class="number">${validCalls}</td></tr>
       <tr><td>決裁者対話数（KC）</td><td class="number">${kcCount}</td></tr>
       <tr><td>決裁者アポ数</td><td class="number">${decisionMakerApo}</td></tr>
       <tr><td>有効率</td><td class="number">${validRate != null ? `${validRate}%` : "—"}</td></tr>
@@ -263,8 +263,8 @@ type Tab = "home" | "shift" | "kpi";
 type AdminSection = "dashboard" | "attendance" | "shift" | "kpi" | "settings";
 
 const KPI_LABELS: { key: keyof Omit<KpiRecord, "id" | "date" | "userId">; label: string }[] = [
-  { key: "totalCalls", label: "総架電数合計" },
-  { key: "validCalls", label: "有効対話数合計" },
+  { key: "totalCalls", label: "総コール数" },
+  { key: "validCalls", label: "総有効コール数" },
   { key: "kcCount", label: "KC数" },
   { key: "followUpCreated", label: "追いかけ作成数" },
   { key: "decisionMakerApo", label: "決裁者アポ数" },
@@ -475,11 +475,11 @@ function AdminDashboard(props: {
                 <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-500">今月のKPI統計（{currentYearMonth}）</h3>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="rounded-lg bg-slate-800 p-4 text-white">
-                    <div className="text-xs text-slate-300">総架電数合計</div>
+                    <div className="text-xs text-slate-300">総コール数</div>
                     <div className="text-2xl font-bold">{teamTotals.totalCalls}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
-                    <div className="text-xs text-slate-300">有効対話数合計</div>
+                    <div className="text-xs text-slate-300">総有効コール数</div>
                     <div className="text-2xl font-bold">{teamTotals.validCalls}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
@@ -504,11 +504,11 @@ function AdminDashboard(props: {
                 <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-500">今週のKPI統計（月曜〜今日）</h3>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="rounded-lg bg-slate-800 p-4 text-white">
-                    <div className="text-xs text-slate-300">総架電数合計</div>
+                    <div className="text-xs text-slate-300">総コール数</div>
                     <div className="text-2xl font-bold">{weekTotals.totalCalls}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
-                    <div className="text-xs text-slate-300">有効対話数合計</div>
+                    <div className="text-xs text-slate-300">総有効コール数</div>
                     <div className="text-2xl font-bold">{weekTotals.validCalls}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
@@ -665,11 +665,11 @@ function AdminDashboard(props: {
               return (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <div className="rounded-lg bg-slate-800 p-4 text-white">
-                    <div className="text-xs text-slate-300">総架電数合計</div>
+                    <div className="text-xs text-slate-300">総コール数</div>
                     <div className="text-2xl font-bold">{rangeTotals.totalCalls}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
-                    <div className="text-xs text-slate-300">有効対話数合計</div>
+                    <div className="text-xs text-slate-300">総有効コール数</div>
                     <div className="text-2xl font-bold">{rangeTotals.validCalls}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
@@ -711,8 +711,8 @@ function AdminDashboard(props: {
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
                   <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">総架電数合計</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">有効対話数合計</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">総コール数</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">総有効コール数</th>
                   <th className="px-3 py-2.5 text-right font-medium text-slate-600">KC</th>
                   <th className="px-3 py-2.5 text-right font-medium text-slate-600">追いかけ</th>
                   <th className="px-3 py-2.5 text-right font-medium text-slate-600">決裁者アポ</th>
@@ -1014,7 +1014,7 @@ function HistorySection(props: {
                 {dayKpi && (
                   <div className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
                     <span className="font-medium text-slate-700">KPI: </span>
-                    総架電数合計 {dayKpi.totalCalls} / 有効対話数合計 {dayKpi.validCalls} / KC {dayKpi.kcCount} / 追いかけ {dayKpi.followUpCreated} / 決裁者アポ {dayKpi.decisionMakerApo} / 非決裁者アポ {dayKpi.nonDecisionMakerApo}
+                    総コール数 {dayKpi.totalCalls} / 総有効コール数 {dayKpi.validCalls} / KC {dayKpi.kcCount} / 追いかけ {dayKpi.followUpCreated} / 決裁者アポ {dayKpi.decisionMakerApo} / 非決裁者アポ {dayKpi.nonDecisionMakerApo}
                     {rates && (
                       <div className="mt-1 text-slate-500">
                         有効率 {rates.validRate != null ? `${rates.validRate}%` : "—"} / KC率 {rates.kcRate != null ? `${rates.kcRate}%` : "—"} / アポ率 {rates.apoRate != null ? `${rates.apoRate}%` : "—"}
@@ -1336,7 +1336,7 @@ function KpiTab(props: {
             <div className="rounded-lg bg-slate-50 p-3">
               <div className="text-xs text-slate-500">有効率</div>
               <div className="text-lg font-bold text-slate-800">{rates.validRate != null ? `${rates.validRate}%` : "—"}</div>
-              <div className="text-xs text-slate-500">有効対話数合計÷総架電数合計</div>
+              <div className="text-xs text-slate-500">総有効コール数÷総コール数</div>
               {prevRates && prevRates.validRate != null && <div className="mt-1 text-xs text-slate-500">前日: {prevRates.validRate}%</div>}
             </div>
             <div className="rounded-lg bg-slate-50 p-3">
@@ -1363,8 +1363,8 @@ function KpiTab(props: {
       <section className="mb-6 rounded-xl bg-slate-800 p-5 text-white shadow-md sm:mb-8 sm:p-6">
         <h2 className="mb-3 text-sm font-medium text-slate-300">今月の累計（{currentYearMonth}）</h2>
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
-          <div>総架電数合計: <span className="font-semibold">{totals.totalCalls}</span></div>
-          <div>有効対話数合計: <span className="font-semibold">{totals.validCalls}</span></div>
+          <div>総コール数: <span className="font-semibold">{totals.totalCalls}</span></div>
+          <div>総有効コール数: <span className="font-semibold">{totals.validCalls}</span></div>
           <div>KC数: <span className="font-semibold">{totals.kcCount}</span></div>
           <div>追いかけ作成: <span className="font-semibold">{totals.followUpCreated}</span></div>
           <div>決裁者アポ: <span className="font-semibold">{totals.decisionMakerApo}</span></div>
@@ -1440,7 +1440,7 @@ function KpiTab(props: {
               <div key={k.id} className="px-4 py-3 sm:px-5 sm:py-4">
                 <div className="mb-1 font-medium text-slate-800">{formatDisplayDate(k.date)}</div>
                 <div className="text-xs text-slate-600 sm:text-sm">
-                  総架電数合計 {k.totalCalls} / 有効対話数合計 {k.validCalls} / KC {k.kcCount} / 追いかけ {k.followUpCreated} / 決裁者アポ {k.decisionMakerApo} / 非決裁者アポ {k.nonDecisionMakerApo}
+                  総コール数 {k.totalCalls} / 総有効コール数 {k.validCalls} / KC {k.kcCount} / 追いかけ {k.followUpCreated} / 決裁者アポ {k.decisionMakerApo} / 非決裁者アポ {k.nonDecisionMakerApo}
                 </div>
               </div>
             ))

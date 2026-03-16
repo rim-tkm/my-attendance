@@ -51,8 +51,8 @@ export interface KpiRecord {
   id: string;
   userId: string;
   date: string; // YYYY-MM-DD
-  totalCalls: number; // 総架電数合計
-  validCalls: number; // 有効対話数合計
+  totalCalls: number; // 総コール数
+  validCalls: number; // 総有効コール数
   kcCount: number; // KC（担当者接続）数
   followUpCreated: number; // 追いかけ作成数
   decisionMakerApo: number; // 決裁者アポ数
