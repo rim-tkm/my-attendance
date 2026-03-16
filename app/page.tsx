@@ -87,25 +87,51 @@ function getLastMonthString(): string {
   return `${y}-${String(m).padStart(2, "0")}`;
 }
 
-/** 請求書No.を日付ベースで生成（例: 2026031001） */
-function getInvoiceNumber(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}${m}${day}01`;
+/** 請求書No.を [西暦4桁][月2桁][請求管理番号3桁] で生成（例: 202603001）。管理番号は0埋め */
+function getInvoiceNumber(yearMonth: string, managementNumber: string | null | undefined): string {
+  const [y, m] = yearMonth.split("-");
+  const year = (y ?? "").slice(0, 4);
+  const month = (m ?? "").padStart(2, "0");
+  const num = String(managementNumber ?? "0").replace(/\D/g, "").slice(-3);
+  const padded = num.padStart(3, "0");
+  return `${year}${month}${padded}`;
 }
 
-/** 請求書の本文HTML（差出人・宛名 株式会社RIM 御中・電話番号対応） */
+/** 対象月の翌月15日を支払期限として返す（例: 2026-03 → 2026/04/15） */
+function getPaymentDueDate(yearMonth: string): string {
+  const [y, m] = yearMonth.split("-").map(Number);
+  const next = new Date(y, m, 15);
+  const yy = next.getFullYear();
+  const mm = String(next.getMonth() + 1).padStart(2, "0");
+  const dd = String(next.getDate()).padStart(2, "0");
+  return `${yy}/${mm}/${dd}`;
+}
+
+/** 請求書用：委託料単価を税込として合計→小計・消費税を逆算（雛形に合わせた端数処理） */
+function calcInvoiceAmounts(totalMinutes: number, hourlyRateTaxInclusive: number): { totalWithTax: number; subtotal: number; taxRate: number } {
+  const totalWithTax = Math.round((totalMinutes / 60) * hourlyRateTaxInclusive);
+  const subtotal = Math.floor(totalWithTax / 1.1);
+  const taxRate = totalWithTax - subtotal;
+  return { totalWithTax, subtotal, taxRate };
+}
+
+/** 稼働分数から時間表示（数量用・整数なら整数、それ以外は小数1桁） */
+function formatHoursForInvoice(totalMinutes: number): string {
+  const h = totalMinutes / 60;
+  return h % 1 === 0 ? String(h) : h.toFixed(1);
+}
+
+/** 請求書の本文HTML（雛形準拠：合計強調・明細テーブル・宛名左上・差出人右上黄色） */
 function buildInvoiceBody(
   memberName: string,
   yearMonth: string,
   totalMinutes: number,
-  hourlyRate: number,
+  hourlyRateTaxInclusive: number,
   subtotal: number,
   taxRate: number,
   totalWithTax: number,
   invoiceNo: string,
+  paymentDueDate: string,
   postalCode: string,
   address: string,
   phoneNumber: string,
@@ -113,42 +139,62 @@ function buildInvoiceBody(
   branchName: string,
   accountType: string,
   accountNumber: string,
-  accountHolder: string,
-  invoiceNumber: string | null | undefined
+  accountHolder: string
 ): string {
   const [y, m] = yearMonth.split("-");
   const monthLabel = `${y}年${m}月`;
   const lastDay = new Date(Number(y), Number(m), 0).getDate();
   const periodLabel = `${y}年${m}月1日 ～ ${y}年${m}月${lastDay}日`;
-  const invoiceLabel = invoiceNumber ? `インボイス番号: ${invoiceNumber}` : "インボイス番号: なし";
+  const hoursLabel = formatHoursForInvoice(totalMinutes);
   return `
   <div class="invoice-sheet">
-    <div class="invoice-top">
-      <div class="invoice-sender">
-        <div class="sender-name">${memberName}</div>
-        <div class="sender-address">${postalCode ? `〒${postalCode}` : ""} ${address || ""}</div>
-        <div class="sender-phone">${phoneNumber ? `TEL: ${phoneNumber}` : ""}</div>
-      </div>
-      <div class="invoice-meta">
-        <div>請求書No. ${invoiceNo}</div>
-        <div>${invoiceLabel}</div>
+    <div class="invoice-header-row">
+      <div class="invoice-addressee">株式会社RIM 御中</div>
+      <div class="invoice-sender-block">
+        <div class="sender-line">${postalCode ? `〒${postalCode}` : ""} ${address || ""}</div>
+        <div class="sender-line sender-name">${memberName}</div>
+        <div class="sender-line">${phoneNumber ? `TEL: ${phoneNumber}` : ""}</div>
       </div>
     </div>
     <h1 class="invoice-title">請求書</h1>
-    <table class="invoice-table">
-      <tr><th>宛名</th><td>株式会社RIM 御中</td></tr>
-      <tr><th>件名</th><td>${monthLabel}分の業務委託の請求書</td></tr>
-      <tr><th>請求期間</th><td>${periodLabel}</td></tr>
+    <div class="invoice-total-bar">
+      <span class="invoice-total-label">合計</span>
+      <span class="invoice-total-amount">${totalWithTax.toLocaleString()} 円 (税込)</span>
+    </div>
+    <table class="invoice-info-table">
+      <tr><th>請求書No.</th><td>${invoiceNo}</td><th>件名</th><td>${monthLabel}分の業務委託の請求書</td></tr>
+      <tr><th>請求期間</th><td colspan="3">${periodLabel}</td></tr>
+      <tr><th>支払期限</th><td colspan="3">${paymentDueDate}</td></tr>
     </table>
-    <div class="invoice-section">
-      <div class="invoice-section-title">ご請求内容</div>
-      <table class="invoice-table">
-        <tr><th>合計業務遂行時間</th><td class="number">${formatDuration(totalMinutes)}</td></tr>
-        <tr><th>委託料単価（円/時間）</th><td class="number">¥${hourlyRate.toLocaleString()}</td></tr>
-        <tr><th>小計（税抜）</th><td class="text-right number">¥${subtotal.toLocaleString()}</td></tr>
-        <tr><th>消費税（10%）</th><td class="text-right number">¥${Math.round(taxRate).toLocaleString()}</td></tr>
-        <tr><th>合計（税込）</th><td class="text-right number"><strong>¥${Math.round(totalWithTax).toLocaleString()}</strong></td></tr>
-      </table>
+    <table class="invoice-detail-table">
+      <thead>
+        <tr>
+          <th>摘要</th><th>数量</th><th>単位</th><th>単価</th><th>消費税</th><th>金額(税抜)</th><th>金額(税込)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>${monthLabel}分 業務委託</td>
+          <td class="number">${hoursLabel}</td>
+          <td>時間</td>
+          <td class="number">¥${hourlyRateTaxInclusive.toLocaleString()}</td>
+          <td class="number">¥${taxRate.toLocaleString()}</td>
+          <td class="number">¥${subtotal.toLocaleString()}</td>
+          <td class="number">¥${totalWithTax.toLocaleString()}</td>
+        </tr>
+        <tr class="invoice-detail-subtotal">
+          <td>小計</td>
+          <td></td><td></td><td></td>
+          <td class="number">¥${taxRate.toLocaleString()}</td>
+          <td class="number">¥${subtotal.toLocaleString()}</td>
+          <td class="number">¥${totalWithTax.toLocaleString()}</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="invoice-summary-block">
+      <div class="invoice-summary-row"><span class="invoice-summary-label">小計（税抜）</span><span class="invoice-summary-value">¥${subtotal.toLocaleString()}</span></div>
+      <div class="invoice-summary-row"><span class="invoice-summary-label">消費税（10%）</span><span class="invoice-summary-value">¥${taxRate.toLocaleString()}</span></div>
+      <div class="invoice-summary-row invoice-summary-total"><span class="invoice-summary-label">合計（税込）</span><span class="invoice-summary-value">¥${totalWithTax.toLocaleString()}</span></div>
     </div>
     <div class="invoice-section">
       <div class="invoice-section-title">お振込先</div>
@@ -171,6 +217,7 @@ function buildInvoiceHtml(
   taxRate: number,
   totalWithTax: number,
   invoiceNo: string,
+  paymentDueDate: string,
   postalCode: string,
   address: string,
   bankName: string,
@@ -178,11 +225,20 @@ function buildInvoiceHtml(
   accountType: string,
   accountNumber: string,
   accountHolder: string,
-  invoiceNumber: string | null | undefined,
   phoneNumber?: string
 ): string {
-  const body = buildInvoiceBody(memberName, yearMonth, totalMinutes, hourlyRate, subtotal, taxRate, totalWithTax, invoiceNo, postalCode, address, phoneNumber ?? "", bankName, branchName, accountType, accountNumber, accountHolder, invoiceNumber);
-  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>請求書</title><style>@page{size:A4;margin:16mm}.invoice-sheet{padding:16px;font-family:Hiragino Sans,Meiryo,sans-serif;font-size:10pt;color:#1e293b}.invoice-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px}.invoice-sender{text-align:right;font-size:9pt;line-height:1.65}.sender-name{font-weight:bold;font-size:10pt;margin-bottom:4px}.sender-address,.sender-phone{color:#475569}.invoice-meta{text-align:right;font-size:9pt}.invoice-title{font-size:15pt;font-weight:bold;text-align:center;margin:14px 0 16px;border-bottom:2px solid #1e293b;padding-bottom:10px}.invoice-table{width:100%;border-collapse:collapse;margin-top:8px}.invoice-table th,.invoice-table td{border:1px solid #64748b;padding:8px 12px;font-size:9pt}.invoice-table th{background:#f1f5f9;width:130px;font-weight:600}.invoice-section{margin-top:16px}.invoice-section-title{font-size:10pt;font-weight:bold;margin-bottom:8px}.bank-block{background:#f8fafc;padding:12px;border:1px solid #e2e8f0;font-size:9pt;border-radius:2px}.text-right{text-align:right}.number{font-variant-numeric:tabular-nums}</style></head><body>${body}</body></html>`;
+  const body = buildInvoiceBody(memberName, yearMonth, totalMinutes, hourlyRate, subtotal, taxRate, totalWithTax, invoiceNo, paymentDueDate, postalCode, address, phoneNumber ?? "", bankName, branchName, accountType, accountNumber, accountHolder);
+  const style = `@page{size:A4;margin:16mm}body{margin:0;padding:0;font-family:Hiragino Sans,Meiryo,sans-serif;font-size:10pt;color:#1e293b}
+.invoice-sheet{padding:16px}.invoice-header-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
+.invoice-addressee{font-size:11pt;font-weight:bold}.invoice-sender-block{background:#fef9c3;padding:10px 12px;font-size:9pt;line-height:1.6;min-width:180px}
+.sender-line.sender-name{font-weight:bold;margin:4px 0}.invoice-title{font-size:16pt;font-weight:bold;text-align:center;margin:12px 0 16px;border-bottom:2px solid #1e293b;padding-bottom:8px}
+.invoice-total-bar{display:flex;align-items:center;margin-bottom:14px;border:1px solid #1e293b}.invoice-total-label{background:#1e293b;color:#fff;padding:10px 16px;font-weight:bold;font-size:11pt}
+.invoice-total-amount{margin-left:16px;font-size:14pt;font-weight:bold}.invoice-info-table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:9pt}.invoice-info-table th,.invoice-info-table td{border:1px solid #94a3b8;padding:6px 10px}.invoice-info-table th{background:#f1f5f9;width:90px}
+.invoice-detail-table{width:100%;border-collapse:collapse;font-size:9pt}.invoice-detail-table th,.invoice-detail-table td{border:1px solid #94a3b8;padding:6px 8px}.invoice-detail-table th{background:#f1f5f9}.invoice-detail-table .number{text-align:right;font-variant-numeric:tabular-nums}
+.invoice-detail-subtotal{background:#f8fafc;font-weight:600}.invoice-summary-block{margin-top:12px;margin-bottom:16px;border:1px solid #94a3b8;padding:10px 14px;max-width:320px;margin-left:auto}
+.invoice-summary-row{display:flex;justify-content:space-between;padding:4px 0}.invoice-summary-total{border-top:1px solid #64748b;margin-top:6px;padding-top:8px;font-weight:bold;font-size:11pt}
+.invoice-section{margin-top:14px}.invoice-section-title{font-size:10pt;font-weight:bold;margin-bottom:6px}.bank-block{background:#f8fafc;padding:12px;border:1px solid #e2e8f0;font-size:9pt;border-radius:2px}`;
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>請求書</title><style>${style}</style></head><body>${body}</body></html>`;
 }
 
 /** 業務委託実績報告書の本文HTML（結合PDF用） */
@@ -287,7 +343,7 @@ function buildReportHtml(
 
 /** 請求書（1枚目）＋実績報告書（2枚目以降）を1つのPDF用HTMLに結合 */
 function buildCombinedPdfHtml(invoiceBody: string, reportBody: string): string {
-  const invoiceStyle = `.invoice-sheet{padding:16px;font-family:Hiragino Sans,Meiryo,sans-serif;font-size:10pt;color:#1e293b;max-width:100%}.invoice-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;gap:16px}.invoice-sender{text-align:right;font-size:9pt;line-height:1.65}.sender-name{font-weight:bold;font-size:10pt;margin-bottom:4px}.sender-address,.sender-phone{color:#475569}.invoice-meta{text-align:right;font-size:9pt}.invoice-title{font-size:15pt;font-weight:bold;text-align:center;margin:14px 0 16px;border-bottom:2px solid #1e293b;padding-bottom:10px}.invoice-table{width:100%;border-collapse:collapse;margin-top:8px}.invoice-table th,.invoice-table td{border:1px solid #64748b;padding:8px 12px;font-size:9pt}.invoice-table th{background:#f1f5f9;width:130px;font-weight:600}.invoice-section{margin-top:16px}.invoice-section-title{font-size:10pt;font-weight:bold;margin-bottom:8px}.bank-block{background:#f8fafc;padding:12px;border:1px solid #e2e8f0;font-size:9pt;border-radius:2px}.text-right{text-align:right}.number{font-variant-numeric:tabular-nums}`;
+  const invoiceStyle = `.invoice-sheet{padding:16px;font-family:Hiragino Sans,Meiryo,sans-serif;font-size:10pt;color:#1e293b}.invoice-header-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}.invoice-addressee{font-size:11pt;font-weight:bold}.invoice-sender-block{background:#fef9c3;padding:10px 12px;font-size:9pt;line-height:1.6;min-width:180px}.sender-line.sender-name{font-weight:bold;margin:4px 0}.invoice-title{font-size:16pt;font-weight:bold;text-align:center;margin:12px 0 16px;border-bottom:2px solid #1e293b;padding-bottom:8px}.invoice-total-bar{display:flex;align-items:center;margin-bottom:14px;border:1px solid #1e293b}.invoice-total-label{background:#1e293b;color:#fff;padding:10px 16px;font-weight:bold;font-size:11pt}.invoice-total-amount{margin-left:16px;font-size:14pt;font-weight:bold}.invoice-info-table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:9pt}.invoice-info-table th,.invoice-info-table td{border:1px solid #94a3b8;padding:6px 10px}.invoice-info-table th{background:#f1f5f9;width:90px}.invoice-detail-table{width:100%;border-collapse:collapse;font-size:9pt}.invoice-detail-table th,.invoice-detail-table td{border:1px solid #94a3b8;padding:6px 8px}.invoice-detail-table th{background:#f1f5f9}.invoice-detail-table .number{text-align:right;font-variant-numeric:tabular-nums}.invoice-detail-subtotal{background:#f8fafc;font-weight:600}.invoice-summary-block{margin-top:12px;margin-bottom:16px;border:1px solid #94a3b8;padding:10px 14px;max-width:320px;margin-left:auto}.invoice-summary-row{display:flex;justify-content:space-between;padding:4px 0}.invoice-summary-total{border-top:1px solid #64748b;margin-top:6px;padding-top:8px;font-weight:bold;font-size:11pt}.invoice-section{margin-top:14px}.invoice-section-title{font-size:10pt;font-weight:bold;margin-bottom:6px}.bank-block{background:#f8fafc;padding:12px;border:1px solid #e2e8f0;font-size:9pt;border-radius:2px}`;
   const reportStyle = `.report-sheet{padding:16px;font-family:Hiragino Sans,Meiryo,sans-serif;font-size:10pt;color:#1e293b}.report-header{text-align:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #1e293b}.report-company{font-size:13pt;font-weight:bold}.report-title{font-size:14pt;font-weight:bold}.report-section{margin-top:14px}.report-section-title{font-size:11pt;font-weight:bold;margin-bottom:6px;border-bottom:1px solid #94a3b8}.report-table{width:100%;border-collapse:collapse;margin-top:4px}.report-table th,.report-table td{border:1px solid #cbd5e1;padding:4px 8px;font-size:9pt}.report-table td:first-child{width:160px;background:#f8fafc}.report-note{font-size:8pt;color:#64748b;margin-top:2px}.report-business-desc{font-size:9pt;padding:6px 8px;background:#f8fafc;border:1px solid #e2e8f0}`;
   return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>請求書・業務委託実績報告書</title><style>@page{size:A4;margin:16mm}body{margin:0;padding:0;font-size:10pt;color:#1e293b}${invoiceStyle}${reportStyle}.pdf-page-break{page-break-after:always}</style></head><body>${invoiceBody}<div class="pdf-page-break"></div><div class="report-sheet">${reportBody}</div></body></html>`;
 }
@@ -361,10 +417,9 @@ function printMemberInvoice(
   const userRecords = getRecordsForMonth(getRecordsForUser(allRecords, member.id), yearMonth);
   const totalMinutes = userRecords.reduce((s, r) => s + r.durationMinutes, 0);
   const rate = member.hourlyRate != null ? member.hourlyRate : DEFAULT_HOURLY_RATE;
-  const subtotal = calcMonthlyPay(totalMinutes, rate);
-  const taxRate = subtotal * 0.1;
-  const totalWithTax = subtotal + taxRate;
-  const invoiceNo = getInvoiceNumber();
+  const { subtotal, taxRate, totalWithTax } = calcInvoiceAmounts(totalMinutes, rate);
+  const invoiceNo = getInvoiceNumber(yearMonth, member.invoiceNumber);
+  const paymentDueDate = getPaymentDueDate(yearMonth);
   const html = buildInvoiceHtml(
     member.name,
     yearMonth,
@@ -374,6 +429,7 @@ function printMemberInvoice(
     taxRate,
     totalWithTax,
     invoiceNo,
+    paymentDueDate,
     member.postalCode ?? "",
     member.address ?? "",
     member.bankName ?? "",
@@ -381,7 +437,6 @@ function printMemberInvoice(
     member.accountType ?? "普通",
     member.accountNumber ?? "",
     member.accountHolder ?? "",
-    member.invoiceNumber,
     member.phoneNumber
   );
   const w = window.open("", "_blank");
@@ -406,11 +461,9 @@ function printMemberCombinedPdf(
   const totalMinutes = userRecords.reduce((s, r) => s + r.durationMinutes, 0);
   const workDays = new Set(userRecords.map((r) => r.date)).size;
   const rate = member.hourlyRate != null ? member.hourlyRate : DEFAULT_HOURLY_RATE;
-  const estimatedPay = calcMonthlyPay(totalMinutes, rate);
-  const subtotal = estimatedPay;
-  const taxRate = subtotal * 0.1;
-  const totalWithTax = subtotal + taxRate;
-  const invoiceNo = getInvoiceNumber();
+  const { subtotal, taxRate, totalWithTax } = calcInvoiceAmounts(totalMinutes, rate);
+  const invoiceNo = getInvoiceNumber(yearMonth, member.invoiceNumber);
+  const paymentDueDate = getPaymentDueDate(yearMonth);
   const invoiceBody = buildInvoiceBody(
     member.name,
     yearMonth,
@@ -420,6 +473,7 @@ function printMemberCombinedPdf(
     taxRate,
     totalWithTax,
     invoiceNo,
+    paymentDueDate,
     member.postalCode ?? "",
     member.address ?? "",
     member.phoneNumber ?? "",
@@ -427,8 +481,7 @@ function printMemberCombinedPdf(
     member.branchName ?? "",
     member.accountType ?? "普通",
     member.accountNumber ?? "",
-    member.accountHolder ?? "",
-    member.invoiceNumber
+    member.accountHolder ?? ""
   );
   const kpiTotals = getKpiTotalsFromRecords(userKpi);
   const validRate = safeRatePercent(kpiTotals.validCalls, kpiTotals.totalCalls);
@@ -457,7 +510,7 @@ function printMemberCombinedPdf(
     rate,
     totalMinutes,
     workDays,
-    estimatedPay,
+    totalWithTax,
     kpiTotals.totalCalls,
     kpiTotals.validCalls,
     kpiTotals.kcCount,
@@ -631,7 +684,7 @@ function AdminDashboard(props: {
       accountType: editAccountType,
       accountNumber: editAccountNumber.trim(),
       accountHolder: editAccountHolder.trim(),
-      invoiceNumber: editInvoiceNumber.trim() || undefined,
+      invoiceNumber: editInvoiceNumber.trim(),
       phoneNumber: editPhoneNumber.trim() || undefined,
     };
     if (editPass !== "") updates.password = editPass;
@@ -1119,9 +1172,9 @@ function AdminDashboard(props: {
                   <label className="mb-0.5 block text-xs text-slate-500">口座名義</label>
                   <input type="text" value={editAccountHolder} onChange={(e) => setEditAccountHolder(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
-                <div className="sm:col-span-2">
-                  <label className="mb-0.5 block text-xs text-slate-500">インボイス番号（空欄の場合は未登録）</label>
-                  <input type="text" value={editInvoiceNumber} onChange={(e) => setEditInvoiceNumber(e.target.value)} placeholder="T1234567890123" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">請求管理番号（3桁）</label>
+                  <input type="text" inputMode="numeric" maxLength={3} value={editInvoiceNumber} onChange={(e) => setEditInvoiceNumber(e.target.value.replace(/\D/g, "").slice(0, 3))} placeholder="001" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
                 <div>
                   <label className="mb-0.5 block text-xs text-slate-500">電話番号</label>
