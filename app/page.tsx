@@ -40,7 +40,6 @@ import {
   loadMembers,
   addMember,
   updateMember,
-  deleteMember,
   loadRecords,
   loadOpenRecords,
   loadShifts,
@@ -630,11 +629,13 @@ function AdminDashboard(props: {
   const m = new Date().getMonth() + 1;
   const currentYearMonth = `${y}-${String(m).padStart(2, "0")}`;
   const todayStr = toDateString(new Date());
+  const activeMembers = members.filter((mem) => mem.isActive !== false);
+  const archivedMembers = members.filter((mem) => mem.isActive === false);
   const teamTotals = getMonthlyKpiTotals(allKpiRecords, currentYearMonth);
   const teamValidRate = safeRatePercent(teamTotals.validCalls, teamTotals.totalCalls);
   const teamKcRate = safeRatePercent(teamTotals.kcCount, teamTotals.validCalls);
   const teamApoRate = safeRatePercent(teamTotals.decisionMakerApo, teamTotals.kcCount);
-  const monthTeamMinutes = members.reduce((s, mem) => s + getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth), 0);
+  const monthTeamMinutes = activeMembers.reduce((s, mem) => s + getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth), 0);
   const monthApoCostMinutes = teamTotals.decisionMakerApo > 0 ? monthTeamMinutes / teamTotals.decisionMakerApo : null;
 
   const thisWeekMonday = getThisWeekMondayDateString();
@@ -655,7 +656,7 @@ function AdminDashboard(props: {
   const dateTeamMinutes = allRecords.filter((r) => r.date === dashboardDate).reduce((s, r) => s + r.durationMinutes, 0);
   const dateApoCostMinutes = dateDecision > 0 ? dateTeamMinutes / dateDecision : null;
   // 決裁者アポまたは非決裁者アポが1件以上あるメンバーのみ、決裁者アポ多い順
-  const apoListForDate = members
+  const apoListForDate = activeMembers
     .map((mem) => {
       const k = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), dashboardDate);
       const dec = k ? k.decisionMakerApo : 0;
@@ -904,13 +905,13 @@ function AdminDashboard(props: {
                   </tr>
                 </thead>
                 <tbody>
-                  {members.map((mem) => {
-                    const open = getOpenRecordForUser(allOpenRecords, mem.id);
-                    const userRecords = getRecordsForUser(allRecords, mem.id);
-                    const todayMin = userRecords.filter((r) => r.date === todayStr).reduce((s, r) => s + r.durationMinutes, 0);
-                    return (
-                      <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                        <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
+{activeMembers.map((mem) => {
+                  const open = getOpenRecordForUser(allOpenRecords, mem.id);
+                  const userRecords = getRecordsForUser(allRecords, mem.id);
+                  const todayMin = userRecords.filter((r) => r.date === todayStr).reduce((s, r) => s + r.durationMinutes, 0);
+                  return (
+                    <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                      <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
                         <td className="px-3 py-2.5 text-center">
                           {open ? (
                             <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">活動中</span>
@@ -939,7 +940,7 @@ function AdminDashboard(props: {
                   className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
                 >
                   <option value="">選択してください</option>
-                  {members.map((mem) => (
+                  {activeMembers.map((mem) => (
                     <option key={mem.id} value={mem.id}>{mem.name}</option>
                   ))}
                 </select>
@@ -1080,7 +1081,7 @@ function AdminDashboard(props: {
                 </tr>
               </thead>
               <tbody>
-                {members.map((mem) => {
+                {activeMembers.map((mem) => {
                   const userShifts = getShiftsForUser(allShifts, mem.id);
                   const hasShiftThisWeek = targetWeekDates.some((d) => userShifts.some((s) => s.date === d));
                   const recentShifts = [...userShifts].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
@@ -1199,7 +1200,7 @@ function AdminDashboard(props: {
                 </tr>
               </thead>
               <tbody>
-                {members.map((mem) => {
+                {activeMembers.map((mem) => {
                   const dayKpi = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), kpiDate);
                   const rates = dayKpi ? getKpiRates(dayKpi) : null;
                   return (
@@ -1226,7 +1227,7 @@ function AdminDashboard(props: {
 
       {adminSection === "settings" && (
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-medium text-slate-700">管理設定（メンバー追加・編集・削除）</h2>
+          <h2 className="mb-4 text-sm font-medium text-slate-700">管理設定（メンバー追加・編集）</h2>
 
           <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-5 sm:p-6">
             <p className="mb-4 text-sm font-medium text-slate-700">新規メンバー追加</p>
@@ -1267,7 +1268,7 @@ function AdminDashboard(props: {
                 </tr>
               </thead>
               <tbody>
-                {members.map((mem) => {
+                {activeMembers.map((mem) => {
                   const monthMin = getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth);
                   const rate = mem.hourlyRate != null ? mem.hourlyRate : DEFAULT_HOURLY_RATE;
                   const pay = calcMonthlyPay(monthMin, rate);
@@ -1279,15 +1280,10 @@ function AdminDashboard(props: {
                       <td className="px-2 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(monthMin)}</td>
                       <td className="px-2 py-2.5 text-right tabular-nums font-medium text-slate-800">¥{pay.toLocaleString()}</td>
                       <td className="px-2 py-2.5 text-right whitespace-nowrap">
-                        <button type="button" onClick={() => openReport(mem)} className="mr-2 text-slate-600 underline hover:text-slate-800">PDF出力</button>
-                        <button type="button" onClick={() => openDetail(mem)} className="mr-2 text-slate-600 underline hover:text-slate-800">編集</button>
-                        <button
-                          type="button"
-                          onClick={async () => { if (window.confirm(`${mem.name} を削除しますか？`)) { await deleteMember(mem.id); const mems = await loadMembers(); setMembers(mems ?? []); onRefresh(); } }}
-                          className="text-red-600 underline hover:text-red-800"
-                        >
-                          削除
-                        </button>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <button type="button" onClick={() => openDetail(mem)} className="rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-600">編集</button>
+                          <button type="button" onClick={() => openReport(mem)} className="rounded bg-slate-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-500">PDF出力</button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1359,10 +1355,53 @@ function AdminDashboard(props: {
                   <input type="text" value={editPhoneNumber} onChange={(e) => setEditPhoneNumber(e.target.value)} placeholder="03-1234-5678" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
               </div>
-              <div className="mt-3 flex gap-2">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button type="button" onClick={saveDetail} className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600">保存</button>
                 <button type="button" onClick={() => setDetailId(null)} className="rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">キャンセル</button>
+                {detailId && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!window.confirm("このメンバーを無効にしますか？一覧から非表示になりログインできなくなります。データは残り、後から「有効に戻す」で復元できます。")) return;
+                      await updateMember(detailId, { isActive: false });
+                      setDetailId(null);
+                      const mems = await loadMembers();
+                      setMembers(mems ?? []);
+                      onRefresh();
+                    }}
+                    className="rounded border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 hover:bg-amber-100"
+                  >
+                    このメンバーを無効にする
+                  </button>
+                )}
               </div>
+            </div>
+          )}
+
+          {archivedMembers.length > 0 && (
+            <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+              <h3 className="mb-2 text-xs font-medium text-slate-600">無効にしたメンバー（アーカイブ）</h3>
+              <p className="mb-3 text-xs text-slate-500">一覧から非表示にしたメンバーです。有効に戻すとログイン・一覧表示が再度可能になります。</p>
+              <ul className="space-y-2">
+                {archivedMembers.map((mem) => (
+                  <li key={mem.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-100 bg-white px-3 py-2 text-sm">
+                    <span className="font-medium text-slate-700">{mem.name}</span>
+                    <span className="text-slate-500">{mem.loginAccount || "—"}</span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await updateMember(mem.id, { isActive: true });
+                        const mems = await loadMembers();
+                        setMembers(mems ?? []);
+                        onRefresh();
+                      }}
+                      className="rounded bg-slate-600 px-3 py-1 text-xs font-medium text-white hover:bg-slate-500"
+                    >
+                      有効に戻す
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

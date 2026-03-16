@@ -18,6 +18,7 @@ type DbUser = {
   account_holder?: string | null;
   invoice_number?: string | null;
   phone_number?: string | null;
+  is_active?: boolean | null;
 };
 
 type DbAttendance = {
@@ -77,6 +78,7 @@ function toMember(r: DbUser): Member {
     accountHolder: (r.account_holder ?? "") !== "" ? r.account_holder ?? undefined : undefined,
     invoiceNumber: r.invoice_number !== undefined && r.invoice_number !== null && r.invoice_number !== "" ? r.invoice_number : undefined,
     phoneNumber: (r.phone_number ?? "") !== "" ? r.phone_number ?? undefined : undefined,
+    isActive: r.is_active === undefined || r.is_active === null ? true : !!r.is_active,
   };
 }
 
@@ -180,6 +182,7 @@ export async function saveMembers(members: Member[]): Promise<void> {
       account_holder: m.accountHolder ?? "",
       invoice_number: m.invoiceNumber ?? null,
       phone_number: m.phoneNumber ?? "",
+      is_active: m.isActive !== false,
     }));
     await supabase.from("users").upsert(rows, { onConflict: "id" });
   } catch (e) {
@@ -218,6 +221,7 @@ export async function addMember(
       account_holder: newMember.accountHolder ?? "",
       invoice_number: newMember.invoiceNumber ?? null,
       phone_number: newMember.phoneNumber ?? "",
+      is_active: true,
     });
   } catch (e) {
     console.warn("addMember error:", e);
@@ -227,7 +231,7 @@ export async function addMember(
 
 export async function updateMember(
   memberId: string,
-  updates: Partial<Pick<Member, "name" | "loginAccount" | "password" | "hourlyRate" | "postalCode" | "address" | "bankName" | "branchName" | "accountType" | "accountNumber" | "accountHolder" | "invoiceNumber" | "phoneNumber">>
+  updates: Partial<Pick<Member, "name" | "loginAccount" | "password" | "hourlyRate" | "postalCode" | "address" | "bankName" | "branchName" | "accountType" | "accountNumber" | "accountHolder" | "invoiceNumber" | "phoneNumber" | "isActive">>
 ): Promise<void> {
   const supabase = getSupabase();
   if (!supabase) return;
@@ -246,6 +250,7 @@ export async function updateMember(
     if (updates.accountHolder !== undefined) body.account_holder = updates.accountHolder;
     if (updates.invoiceNumber !== undefined) body.invoice_number = updates.invoiceNumber;
     if (updates.phoneNumber !== undefined) body.phone_number = updates.phoneNumber;
+    if (updates.isActive !== undefined) body.is_active = updates.isActive;
     if (Object.keys(body).length === 0) return;
     await supabase.from("users").update(body).eq("id", memberId);
   } catch (e) {
@@ -429,7 +434,7 @@ export async function loginUser(loginAccount: string, password: string): Promise
   const members = await loadMembers();
   if (members === null) return null;
   const trimmed = loginAccount.trim();
-  const found = members.find((m) => (m.loginAccount ?? "").toLowerCase() === trimmed.toLowerCase() && m.password === password);
+  const found = members.find((m) => (m.loginAccount ?? "").toLowerCase() === trimmed.toLowerCase() && m.password === password && m.isActive !== false);
   return found ?? null;
 }
 

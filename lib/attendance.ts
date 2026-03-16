@@ -26,6 +26,8 @@ export interface Member {
   invoiceNumber?: string | null;
   /** 電話番号 */
   phoneNumber?: string;
+  /** 有効フラグ。false の場合は論理削除（一覧非表示・ログイン不可）。未設定は true 扱い */
+  isActive?: boolean;
 }
 
 export const DEFAULT_HOURLY_RATE = 1400;

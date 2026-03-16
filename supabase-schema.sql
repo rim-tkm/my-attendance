@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS public.users (
   account_number TEXT NOT NULL DEFAULT '',
   account_holder TEXT NOT NULL DEFAULT '',
   invoice_number TEXT,
-  phone_number TEXT NOT NULL DEFAULT ''
+  phone_number TEXT NOT NULL DEFAULT '',
+  is_active BOOLEAN NOT NULL DEFAULT true
 );
 
 -- 2. attendance（活動記録・完了した業務開始〜終了）
