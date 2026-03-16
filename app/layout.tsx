@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "業務進捗報告",
-  description: "業務委託向け稼働時間管理",
+  title: "業務進捗・活動報告",
+  description: "業務委託向けの業務進捗・活動報告",
 };
 
 export default function RootLayout({

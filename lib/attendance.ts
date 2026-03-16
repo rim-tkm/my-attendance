@@ -1,4 +1,4 @@
-/** メンバー（表示名・ログイン・時給付き） */
+/** メンバー（表示名・ログイン・委託料単価付き） */
 export interface Member {
   id: string;
   name: string;
@@ -6,7 +6,7 @@ export interface Member {
   loginAccount?: string;
   /** パスワード（localStorage に平文保存・テスト用） */
   password?: string;
-  /** 個別時給（円）。未設定時は DEFAULT_HOURLY_RATE */
+  /** 委託料単価（円/h）。未設定時は DEFAULT_HOURLY_RATE */
   hourlyRate?: number;
 }
 
@@ -26,7 +26,7 @@ export interface WorkRecord {
   date: string;
 }
 
-/** 未終了の稼働（終了打刻待ち） */
+/** 未終了の活動（業務終了記録待ち） */
 export interface OpenRecord {
   id: string;
   userId: string;
@@ -321,7 +321,7 @@ export function getTargetWeekStart(): string {
   return getWeekStart(now);
 }
 
-/** 提出期限（前週金曜 23:59）の日付 */
+/** 稼働可能日時登録の案内用（前週金曜 23:59）の日付 */
 export function getDeadlineForWeek(weekStart: string): Date {
   const [y, m, d] = weekStart.split("-").map(Number);
   const friday = new Date(y, m - 1, d - 3);
@@ -432,7 +432,7 @@ export function addMember(
   return newMember;
 }
 
-/** メンバー情報を更新（名前・ログイン・パスワード・時給） */
+/** メンバー情報を更新（名前・ログイン・パスワード・委託料単価） */
 export function updateMember(memberId: string, updates: Partial<Pick<Member, "name" | "loginAccount" | "password" | "hourlyRate">>): void {
   const members = loadMembers();
   const next = members.map((m) => (m.id === memberId ? ensureMemberDefaults({ ...m, ...updates }) : m));
@@ -450,7 +450,7 @@ export function getTotalMinutesForMonthByUser(records: WorkRecord[], userId: str
   return getTotalMinutesForMonth(getRecordsForUser(records, userId), yearMonth);
 }
 
-/** 月間概算給与（分・時給 → 円） */
+/** 月間概算委託料（分・委託料単価 → 円） */
 export function calcMonthlyPay(totalMinutes: number, hourlyRate: number): number {
   if (!Number.isFinite(totalMinutes) || !Number.isFinite(hourlyRate) || hourlyRate < 0) return 0;
   return Math.floor((totalMinutes / 60) * hourlyRate);

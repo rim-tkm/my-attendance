@@ -1,4 +1,4 @@
--- Supabase で業務進捗報告アプリ用テーブルを作成するSQL
+-- Supabase で業務進捗・活動報告アプリ用テーブルを作成するSQL
 -- Supabase ダッシュボードの SQL Editor で実行してください。
 
 -- 1. users（メンバー）
@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS public.users (
   hourly_rate INTEGER NOT NULL DEFAULT 1400
 );
 
--- 2. attendance（稼働履歴・完了した打刻）
+-- 2. attendance（活動記録・完了した業務開始〜終了）
 CREATE TABLE IF NOT EXISTS public.attendance (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS public.attendance (
   date DATE NOT NULL
 );
 
--- 3. open_records（未終了の稼働・終了打刻待ち）
+-- 3. open_records（未終了の活動・業務終了記録待ち）
 CREATE TABLE IF NOT EXISTS public.open_records (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,

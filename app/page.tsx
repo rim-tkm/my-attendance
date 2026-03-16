@@ -128,7 +128,7 @@ function AdminDashboard(props: {
   const dateKpis = allKpiRecords.filter((k) => k.date === dashboardDate);
   const dateDecision = dateKpis.reduce((s, k) => s + k.decisionMakerApo, 0);
   const dateNonDecision = dateKpis.reduce((s, k) => s + k.nonDecisionMakerApo, 0);
-  // 選択日の「勤務開始」打刻が1回でもあるメンバー数（完了した打刻 or 未終了の打刻のいずれか）
+  // 選択日の「業務開始」活動記録が1回でもあるメンバー数（完了した記録 or 未終了の記録のいずれか）
   const userIdsFromAttendance = allRecords.filter((r) => r.date === dashboardDate).map((r) => r.userId);
   const userIdsFromOpen = allOpenRecords.filter((r) => r.date === dashboardDate).map((r) => r.userId);
   const workingCountForDate = new Set([...userIdsFromAttendance, ...userIdsFromOpen]).size;
@@ -235,7 +235,7 @@ function AdminDashboard(props: {
                 <div className="text-2xl font-bold">{dateNonDecision} 件</div>
               </div>
               <div className="rounded-lg bg-amber-600 px-4 py-3 text-white">
-                <div className="text-xs text-amber-100">本日の稼働人数</div>
+                <div className="text-xs text-amber-100">本日の活動人数</div>
                 <div className="text-2xl font-bold">{workingCountForDate} 名</div>
               </div>
             </div>
@@ -284,7 +284,7 @@ function AdminDashboard(props: {
 
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="mb-3 text-sm font-medium text-slate-700">生産性指標（アポ取得単価・時間ベース）</h2>
-            <p className="mb-4 text-xs text-slate-500">決裁者アポ1件あたりの稼働時間。数値が小さいほど効率が良いです。</p>
+            <p className="mb-4 text-xs text-slate-500">決裁者アポ1件あたりの活動時間。数値が小さいほど効率が良いです。</p>
             <div className="flex flex-wrap gap-6">
               <div className="rounded-lg bg-slate-800 px-4 py-3 text-white">
                 <div className="text-xs text-slate-300">表示日のアポ取得単価（チーム全体）</div>
@@ -312,7 +312,7 @@ function AdminDashboard(props: {
                 <tr className="border-b border-slate-200 bg-slate-50">
                   <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
                   <th className="px-3 py-2.5 text-center font-medium text-slate-600">ステータス</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">本日の稼働時間</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">当日の活動時間</th>
                 </tr>
               </thead>
               <tbody>
@@ -325,9 +325,9 @@ function AdminDashboard(props: {
                       <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
                       <td className="px-3 py-2.5 text-center">
                         {open ? (
-                          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">稼働中</span>
+                          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">活動中</span>
                         ) : (
-                          <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">未稼働</span>
+                          <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">活動なし</span>
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(todayMin)}</td>
@@ -349,8 +349,8 @@ function AdminDashboard(props: {
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
                   <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
-                  <th className="px-3 py-2.5 text-center font-medium text-slate-600">提出状況</th>
-                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">提出済み稼働予定（直近）</th>
+                  <th className="px-3 py-2.5 text-center font-medium text-slate-600">登録状況</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">登録済み稼働予定（直近）</th>
                 </tr>
               </thead>
               <tbody>
@@ -363,9 +363,9 @@ function AdminDashboard(props: {
                       <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
                       <td className="px-3 py-2.5 text-center">
                         {hasShiftThisWeek ? (
-                          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">提出済</span>
+                          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">登録済</span>
                         ) : (
-                          <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">未提出</span>
+                          <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">未登録</span>
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-slate-600">
@@ -455,7 +455,7 @@ function AdminDashboard(props: {
                 <input type="password" value={newMemberPassword} onChange={(e) => setNewMemberPassword(e.target.value)} placeholder="パスワード" className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
               </div>
               <div className="flex min-w-0 flex-col gap-2">
-                <label className="text-xs font-medium text-slate-600">時給単価（円）</label>
+                <label className="text-xs font-medium text-slate-600">委託料単価（/h・円）</label>
                 <input type="number" min={0} value={newMemberHourlyRate} onChange={(e) => setNewMemberHourlyRate(parseInt(e.target.value, 10) || 0)} className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
               </div>
               <div className="flex min-w-0 flex-col gap-2 lg:justify-end">
@@ -472,8 +472,8 @@ function AdminDashboard(props: {
                   <th className="px-2 py-2.5 text-left font-medium text-slate-600">名前</th>
                   <th className="px-2 py-2.5 text-left font-medium text-slate-600">ログイン名</th>
                   <th className="px-2 py-2.5 text-left font-medium text-slate-600">パスワード</th>
-                  <th className="px-2 py-2.5 text-right font-medium text-slate-600">今月稼働</th>
-                  <th className="px-2 py-2.5 text-right font-medium text-slate-600">概算給与</th>
+                  <th className="px-2 py-2.5 text-right font-medium text-slate-600">今月の活動時間</th>
+                  <th className="px-2 py-2.5 text-right font-medium text-slate-600">概算委託料</th>
                   <th className="px-2 py-2.5 text-right font-medium text-slate-600 whitespace-nowrap">操作</th>
                 </tr>
               </thead>
@@ -523,7 +523,7 @@ function AdminDashboard(props: {
                   <input type="password" value={editPass} onChange={(e) => setEditPass(e.target.value)} placeholder="変更時のみ。空欄で変更しません" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
                 <div>
-                  <label className="mb-0.5 block text-xs text-slate-500">時給（円）</label>
+                  <label className="mb-0.5 block text-xs text-slate-500">委託料単価（/h・円）</label>
                   <input type="number" min={0} value={editRate} onChange={(e) => setEditRate(parseInt(e.target.value, 10) || 0)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
               </div>
@@ -640,7 +640,7 @@ function HistorySection(props: {
   return (
     <section className="rounded-xl bg-white shadow-sm ring-1 ring-slate-200/80">
       <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-medium text-slate-600 sm:px-5 sm:py-4">
-        稼働履歴一覧（予定 vs 実績・KPI）
+        活動記録一覧（予定 vs 実績・KPI）
         {!isCurrentMonth ? `（${currentYearMonth}）` : ""}
       </h2>
       <div className="divide-y divide-slate-100">
@@ -767,10 +767,9 @@ function ShiftTab(props: {
     <>
       <section className="mb-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:p-6">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-medium text-slate-700">週次稼働予定の提出</h2>
+          <h2 className="text-sm font-medium text-slate-700">稼働可能日時の登録</h2>
           <p className="text-xs text-slate-500">
-            提出期限: 前週金曜 23:59
-            {isPastDeadline && <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-amber-800">期限経過</span>}
+            予定の登録をお願いします
           </p>
         </div>
         {exceptionMode && (
@@ -866,7 +865,7 @@ function ShiftTab(props: {
           }}
           className="mt-4 text-sm text-slate-500 underline hover:text-slate-700"
         >
-          {exceptionMode ? "通常モードに戻る" : "稼働予定の提出を忘れた方はこちら"}
+          {exceptionMode ? "通常モードに戻る" : "稼働可能日時の登録を忘れた方はこちら"}
         </button>
       </section>
 
@@ -1361,7 +1360,7 @@ export default function DashboardPage() {
               <input type="password" value={setupPassword} onChange={(e) => setSetupPassword(e.target.value)} placeholder="パスワード" className="rounded border border-slate-300 px-3 py-2 text-sm" required />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-slate-600">時給（円）</label>
+              <label className="text-xs font-medium text-slate-600">委託料単価（/h・円）</label>
               <input type="number" min={0} value={setupHourlyRate} onChange={(e) => setSetupHourlyRate(parseInt(e.target.value, 10) || 0)} className="rounded border border-slate-300 px-3 py-2 text-sm" />
             </div>
             <button type="submit" className="w-full rounded bg-slate-700 py-2.5 text-sm font-medium text-white hover:bg-slate-600">登録してログイン</button>
@@ -1399,7 +1398,7 @@ export default function DashboardPage() {
       <header className="bg-slate-800 text-white shadow-md" style={{ backgroundColor: "#1e293b" }}>
         <div className="mx-auto max-w-2xl px-4 py-4 sm:px-6">
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
-            {isAdminMode ? "業務進捗報告（管理者）" : `業務進捗報告${currentMember ? ` - ${currentMember.name}` : ""}`}
+            {isAdminMode ? "業務進捗・活動報告（管理者）" : `業務進捗・活動報告${currentMember ? ` - ${currentMember.name}` : ""}`}
           </h1>
         </div>
       </header>
@@ -1412,7 +1411,7 @@ export default function DashboardPage() {
               onClick={() => setTab("home")}
               className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 ${tab === "home" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
             >
-              打刻
+              活動記録
             </button>
             <button
               type="button"
@@ -1446,13 +1445,13 @@ export default function DashboardPage() {
         ) : tab === "home" ? (
           <>
             <section className="mb-6 rounded-xl bg-slate-800 p-6 text-white shadow-md sm:mb-8">
-              <h2 className="mb-1 text-sm font-medium text-slate-300">本日の総稼働時間</h2>
+              <h2 className="mb-1 text-sm font-medium text-slate-300">当日の活動時間</h2>
               <p className="text-3xl font-bold sm:text-4xl">{formatDuration(todayMinutes)}</p>
             </section>
 
             <section className="mb-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:mb-8 sm:p-6">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-sm font-medium text-slate-600">{isCurrentMonth ? "今月の合計稼働時間" : "選択月の合計稼働時間"}</h2>
+                <h2 className="text-sm font-medium text-slate-600">{isCurrentMonth ? "今月の活動時間" : "選択月の活動時間"}</h2>
                 <select
                   value={currentYearMonth}
                   onChange={(e) => setSelectedMonth(e.target.value)}
@@ -1481,7 +1480,7 @@ export default function DashboardPage() {
                   disabled={!!openRecord}
                   className="flex-1 rounded-xl bg-slate-700 px-6 py-4 text-base font-semibold text-white shadow-md transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50 sm:py-5 sm:text-lg"
                 >
-                  稼働開始
+                  業務開始
                 </button>
                 <button
                   type="button"
@@ -1489,11 +1488,11 @@ export default function DashboardPage() {
                   disabled={!openRecord}
                   className="flex-1 rounded-xl bg-slate-600 px-6 py-4 text-base font-semibold text-white shadow-md transition hover:bg-slate-500 disabled:cursor-not-allowed disabled:opacity-50 sm:py-5 sm:text-lg"
                 >
-                  稼働終了
+                  業務終了
                 </button>
               </div>
               {openRecord && (
-                <p className="mt-3 text-center text-sm text-slate-600">稼働中（開始: {formatTime(openRecord.startRounded)}）</p>
+                <p className="mt-3 text-center text-sm text-slate-600">活動中（開始: {formatTime(openRecord.startRounded)}）</p>
               )}
             </section>
 
