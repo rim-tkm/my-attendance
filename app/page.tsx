@@ -1525,16 +1525,16 @@ function AdminDashboard(props: {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] border-collapse text-sm">
+          <div className="overflow-x-auto rounded border border-slate-200">
+            <table className="w-full min-w-0 table-fixed border-collapse text-xs">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="px-2 py-2.5 text-left font-medium text-slate-600">名前</th>
-                  <th className="px-2 py-2.5 text-left font-medium text-slate-600">ログイン名</th>
-                  <th className="px-2 py-2.5 text-left font-medium text-slate-600">パスワード</th>
-                  <th className="px-2 py-2.5 text-right font-medium text-slate-600">今月の活動時間</th>
-                  <th className="px-2 py-2.5 text-right font-medium text-slate-600">概算委託料</th>
-                  <th className="px-2 py-2.5 text-right font-medium text-slate-600 whitespace-nowrap">操作</th>
+                  <th className="w-[18%] px-1.5 py-1.5 text-left font-medium text-slate-600">名前</th>
+                  <th className="w-[14%] px-1.5 py-1.5 text-left font-medium text-slate-600">ログイン名</th>
+                  <th className="w-[10%] px-1.5 py-1.5 text-left font-medium text-slate-600">PW</th>
+                  <th className="w-[12%] px-1.5 py-1.5 text-right font-medium text-slate-600">活動時間</th>
+                  <th className="w-[14%] px-1.5 py-1.5 text-right font-medium text-slate-600">委託料</th>
+                  <th className="w-[22%] px-1.5 py-1.5 text-right font-medium text-slate-600">操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -1542,17 +1542,18 @@ function AdminDashboard(props: {
                   const monthMin = getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth);
                   const rate = mem.hourlyRate != null ? mem.hourlyRate : DEFAULT_HOURLY_RATE;
                   const pay = calcMonthlyPay(monthMin, rate);
+                  const pw = mem.password || "—";
                   return (
                     <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                      <td className="px-2 py-2.5 font-medium text-slate-800">{mem.name}</td>
-                      <td className="px-2 py-2.5 text-slate-600">{mem.loginAccount || "—"}</td>
-                      <td className="px-2 py-2.5 font-mono text-slate-700">{mem.password || "—"}</td>
-                      <td className="px-2 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(monthMin)}</td>
-                      <td className="px-2 py-2.5 text-right tabular-nums font-medium text-slate-800">¥{pay.toLocaleString()}</td>
-                      <td className="px-2 py-2.5 text-right whitespace-nowrap">
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          <button type="button" onClick={() => openDetail(mem)} className="rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-600">編集</button>
-                          <button type="button" onClick={() => openReport(mem)} className="rounded bg-slate-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-500">PDF出力</button>
+                      <td className="min-w-0 overflow-hidden px-1.5 py-1.5 font-medium text-slate-800 truncate" title={mem.name}>{mem.name}</td>
+                      <td className="min-w-0 overflow-hidden px-1.5 py-1.5 font-mono text-slate-600 truncate" title={mem.loginAccount || ""}>{mem.loginAccount || "—"}</td>
+                      <td className="min-w-0 overflow-hidden px-1.5 py-1.5 font-mono text-slate-600 truncate" title={pw}>{pw}</td>
+                      <td className="px-1.5 py-1.5 text-right tabular-nums text-slate-700 whitespace-nowrap">{formatDuration(monthMin)}</td>
+                      <td className="px-1.5 py-1.5 text-right tabular-nums font-medium text-slate-800 whitespace-nowrap">¥{pay.toLocaleString()}</td>
+                      <td className="px-1.5 py-1.5 text-right align-middle">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:justify-end">
+                          <button type="button" onClick={() => openDetail(mem)} className="rounded bg-slate-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-slate-600 shrink-0">編集</button>
+                          <button type="button" onClick={() => openReport(mem)} className="rounded bg-slate-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-slate-500 shrink-0">PDF</button>
                         </div>
                       </td>
                     </tr>
