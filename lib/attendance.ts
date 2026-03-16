@@ -6,7 +6,7 @@ export interface Member {
   loginAccount?: string;
   /** パスワード（localStorage に平文保存・テスト用） */
   password?: string;
-  /** 委託料単価（円/h）。未設定時は DEFAULT_HOURLY_RATE */
+  /** 委託料単価（円/時間）。未設定時は DEFAULT_HOURLY_RATE */
   hourlyRate?: number;
 }
 
@@ -51,8 +51,8 @@ export interface KpiRecord {
   id: string;
   userId: string;
   date: string; // YYYY-MM-DD
-  totalCalls: number; // 総コール数
-  validCalls: number; // 有効コール数
+  totalCalls: number; // 総架電数合計
+  validCalls: number; // 有効対話数合計
   kcCount: number; // KC（担当者接続）数
   followUpCreated: number; // 追いかけ作成数
   decisionMakerApo: number; // 決裁者アポ数

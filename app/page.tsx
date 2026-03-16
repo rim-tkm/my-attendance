@@ -103,22 +103,23 @@ function buildReportHtml(
   <meta charset="UTF-8">
   <title>業務委託実績報告書 - ${memberName} - ${monthLabel}</title>
   <style>
-    @page { size: A4; margin: 18mm; }
-    body { font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif; font-size: 11pt; color: #1e293b; margin: 0; padding: 18px; }
-    .header { text-align: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #1e293b; }
-    .company { font-size: 14pt; font-weight: bold; margin-bottom: 4px; }
-    .logo-space { min-height: 32px; margin-bottom: 8px; }
-    .title { font-size: 16pt; font-weight: bold; }
-    .section { margin-top: 20px; }
-    .section-title { font-size: 12pt; font-weight: bold; margin-bottom: 8px; padding: 4px 0; border-bottom: 1px solid #94a3b8; }
-    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    th, td { border: 1px solid #cbd5e1; padding: 6px 10px; text-align: left; }
-    th { background: #f1f5f9; font-weight: 600; font-size: 10pt; }
-    td { font-size: 10pt; }
+    @page { size: A4; margin: 16mm; }
+    body { font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif; font-size: 10pt; color: #1e293b; margin: 0; padding: 14px; }
+    .header { text-align: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid #1e293b; }
+    .company { font-size: 13pt; font-weight: bold; margin-bottom: 2px; }
+    .logo-space { min-height: 24px; margin-bottom: 4px; }
+    .title { font-size: 14pt; font-weight: bold; }
+    .section { margin-top: 14px; }
+    .section-title { font-size: 11pt; font-weight: bold; margin-bottom: 6px; padding: 2px 0; border-bottom: 1px solid #94a3b8; }
+    table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+    th, td { border: 1px solid #cbd5e1; padding: 4px 8px; text-align: left; font-size: 9pt; }
+    th { background: #f1f5f9; font-weight: 600; }
     .text-right { text-align: right; }
-    .info-table td:first-child { width: 140px; background: #f8fafc; }
+    .info-table td:first-child { width: 160px; background: #f8fafc; }
     .number { font-variant-numeric: tabular-nums; }
     .daily-time { white-space: nowrap; }
+    .note { font-size: 8pt; color: #64748b; margin-top: 2px; }
+    .business-desc { font-size: 9pt; padding: 6px 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 2px; }
     @media print { body { padding: 0; } }
   </style>
 </head>
@@ -134,24 +135,30 @@ function buildReportHtml(
     <table class="info-table">
       <tr><td>メンバー名</td><td>${memberName}</td></tr>
       <tr><td>対象月</td><td>${monthLabel}</td></tr>
-      <tr><td>委託料単価</td><td class="number">¥${hourlyRate.toLocaleString()} /h</td></tr>
+      <tr><td>委託料単価</td><td class="number">¥${hourlyRate.toLocaleString()} /時間</td></tr>
     </table>
   </div>
 
   <div class="section">
     <div class="section-title">2. 稼働統計</div>
     <table class="info-table">
-      <tr><td>総業務時間（合計）</td><td class="number">${formatDuration(totalMinutes)}</td></tr>
+      <tr><td>総稼働時間（合計）</td><td class="number">${formatDuration(totalMinutes)}</td></tr>
       <tr><td>業務日数</td><td class="number">${workDays} 日</td></tr>
       <tr><td>概算委託料</td><td class="number">¥${estimatedPay.toLocaleString()}</td></tr>
     </table>
+    <p class="note">※本金額は業務委託契約に基づく、稼働時間に応じた委託料の概算です。</p>
   </div>
 
   <div class="section">
-    <div class="section-title">3. 生産性スコア</div>
+    <div class="section-title">3. 業務遂行内容</div>
+    <div class="business-desc">指定リストへの架電、および進捗データの入力</div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">4. 生産性スコア</div>
     <table class="info-table">
-      <tr><td>総架電数</td><td class="number">${totalCalls}</td></tr>
-      <tr><td>有効対話数</td><td class="number">${validCalls}</td></tr>
+      <tr><td>総架電数合計</td><td class="number">${totalCalls}</td></tr>
+      <tr><td>有効対話数合計</td><td class="number">${validCalls}</td></tr>
       <tr><td>決裁者対話数（KC）</td><td class="number">${kcCount}</td></tr>
       <tr><td>決裁者アポ数</td><td class="number">${decisionMakerApo}</td></tr>
       <tr><td>有効率</td><td class="number">${validRate != null ? `${validRate}%` : "—"}</td></tr>
@@ -161,7 +168,7 @@ function buildReportHtml(
   </div>
 
   <div class="section">
-    <div class="section-title">4. 日別明細</div>
+    <div class="section-title">5. 日別明細</div>
     <table>
       <thead>
         <tr>
@@ -183,12 +190,72 @@ function buildReportHtml(
 </html>`;
 }
 
+/** 指定メンバー・指定月の実績レポートを印刷用ウィンドウで開く（管理者・メンバー共通） */
+function printMemberReport(
+  member: Member,
+  yearMonth: string,
+  allRecords: WorkRecord[],
+  allKpiRecords: KpiRecord[]
+): void {
+  const userId = member.id;
+  const userRecords = getRecordsForMonth(getRecordsForUser(allRecords, userId), yearMonth);
+  const userKpi = getKpiForMonth(getKpiForUser(allKpiRecords, userId), yearMonth);
+  const totalMinutes = userRecords.reduce((s, r) => s + r.durationMinutes, 0);
+  const workDays = new Set(userRecords.map((r) => r.date)).size;
+  const rate = member.hourlyRate != null ? member.hourlyRate : DEFAULT_HOURLY_RATE;
+  const estimatedPay = calcMonthlyPay(totalMinutes, rate);
+  const kpiTotals = getKpiTotalsFromRecords(userKpi);
+  const validRate = safeRatePercent(kpiTotals.validCalls, kpiTotals.totalCalls);
+  const kcRate = safeRatePercent(kpiTotals.kcCount, kpiTotals.validCalls);
+  const apoRate = safeRatePercent(kpiTotals.decisionMakerApo, kpiTotals.kcCount);
+  const dateToKpi = new Map(userKpi.map((k) => [k.date, k]));
+  const allDates = new Set<string>([...userRecords.map((r) => r.date), ...userKpi.map((k) => k.date)]);
+  const sortedDates = Array.from(allDates).sort();
+  const dailyRows = sortedDates.map((date) => {
+    const dayRecords = userRecords.filter((r) => r.date === date);
+    const timeRanges = dayRecords.map(
+      (r) => `${formatTimeForReport(r.startRounded)}～${formatTimeForReport(r.endRounded)}`
+    );
+    const k = dateToKpi.get(date);
+    const apoCount = k ? k.decisionMakerApo + k.nonDecisionMakerApo : 0;
+    return {
+      date,
+      displayDate: formatDisplayDate(date),
+      timeRanges,
+      apoCount,
+    };
+  });
+  const html = buildReportHtml(
+    member.name,
+    yearMonth,
+    rate,
+    totalMinutes,
+    workDays,
+    estimatedPay,
+    kpiTotals.totalCalls,
+    kpiTotals.validCalls,
+    kpiTotals.kcCount,
+    kpiTotals.decisionMakerApo,
+    validRate,
+    kcRate,
+    apoRate,
+    dailyRows
+  );
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 250);
+  }
+}
+
 type Tab = "home" | "shift" | "kpi";
 type AdminSection = "dashboard" | "attendance" | "shift" | "kpi" | "settings";
 
 const KPI_LABELS: { key: keyof Omit<KpiRecord, "id" | "date" | "userId">; label: string }[] = [
-  { key: "totalCalls", label: "総コール数" },
-  { key: "validCalls", label: "有効コール数" },
+  { key: "totalCalls", label: "総架電数合計" },
+  { key: "validCalls", label: "有効対話数合計" },
   { key: "kcCount", label: "KC数" },
   { key: "followUpCreated", label: "追いかけ作成数" },
   { key: "decisionMakerApo", label: "決裁者アポ数" },
@@ -304,59 +371,7 @@ function AdminDashboard(props: {
 
   const handlePrintReport = () => {
     if (!reportMember) return;
-    const userId = reportMember.id;
-    const userRecords = getRecordsForMonth(getRecordsForUser(allRecords, userId), reportMonth);
-    const userKpi = getKpiForMonth(getKpiForUser(allKpiRecords, userId), reportMonth);
-    const totalMinutes = userRecords.reduce((s, r) => s + r.durationMinutes, 0);
-    const workDays = new Set(userRecords.map((r) => r.date)).size;
-    const rate = reportMember.hourlyRate != null ? reportMember.hourlyRate : DEFAULT_HOURLY_RATE;
-    const estimatedPay = calcMonthlyPay(totalMinutes, rate);
-    const kpiTotals = getKpiTotalsFromRecords(userKpi);
-    const validRate = safeRatePercent(kpiTotals.validCalls, kpiTotals.totalCalls);
-    const kcRate = safeRatePercent(kpiTotals.kcCount, kpiTotals.validCalls);
-    const apoRate = safeRatePercent(kpiTotals.decisionMakerApo, kpiTotals.kcCount);
-    const dateToKpi = new Map(userKpi.map((k) => [k.date, k]));
-    const allDates = new Set<string>([...userRecords.map((r) => r.date), ...userKpi.map((k) => k.date)]);
-    const sortedDates = Array.from(allDates).sort();
-    const dailyRows = sortedDates.map((date) => {
-      const dayRecords = userRecords.filter((r) => r.date === date);
-      const timeRanges = dayRecords.map(
-        (r) => `${formatTimeForReport(r.startRounded)}～${formatTimeForReport(r.endRounded)}`
-      );
-      const k = dateToKpi.get(date);
-      const apoCount = k ? k.decisionMakerApo + k.nonDecisionMakerApo : 0;
-      return {
-        date,
-        displayDate: formatDisplayDate(date),
-        timeRanges,
-        apoCount,
-      };
-    });
-    const html = buildReportHtml(
-      reportMember.name,
-      reportMonth,
-      rate,
-      totalMinutes,
-      workDays,
-      estimatedPay,
-      kpiTotals.totalCalls,
-      kpiTotals.validCalls,
-      kpiTotals.kcCount,
-      kpiTotals.decisionMakerApo,
-      validRate,
-      kcRate,
-      apoRate,
-      dailyRows
-    );
-    const w = window.open("", "_blank");
-    if (w) {
-      w.document.write(html);
-      w.document.close();
-      w.focus();
-      setTimeout(() => {
-        w.print();
-      }, 250);
-    }
+    printMemberReport(reportMember, reportMonth, allRecords, allKpiRecords);
   };
 
   const saveDetail = async () => {
@@ -642,11 +657,11 @@ function AdminDashboard(props: {
               return (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <div className="rounded-lg bg-slate-800 p-4 text-white">
-                    <div className="text-xs text-slate-300">総架電数</div>
+                    <div className="text-xs text-slate-300">総架電数合計</div>
                     <div className="text-2xl font-bold">{rangeTotals.totalCalls}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
-                    <div className="text-xs text-slate-300">有効対話数</div>
+                    <div className="text-xs text-slate-300">有効対話数合計</div>
                     <div className="text-2xl font-bold">{rangeTotals.validCalls}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
@@ -688,8 +703,8 @@ function AdminDashboard(props: {
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
                   <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">総コール</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">有効</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">総架電数合計</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">有効対話数合計</th>
                   <th className="px-3 py-2.5 text-right font-medium text-slate-600">KC</th>
                   <th className="px-3 py-2.5 text-right font-medium text-slate-600">追いかけ</th>
                   <th className="px-3 py-2.5 text-right font-medium text-slate-600">決裁者アポ</th>
@@ -745,7 +760,7 @@ function AdminDashboard(props: {
                 <input type="password" value={newMemberPassword} onChange={(e) => setNewMemberPassword(e.target.value)} placeholder="パスワード" className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
               </div>
               <div className="flex min-w-0 flex-col gap-2">
-                <label className="text-xs font-medium text-slate-600">委託料単価（/h・円）</label>
+                <label className="text-xs font-medium text-slate-600">委託料単価（円/時間）</label>
                 <input type="number" min={0} value={newMemberHourlyRate} onChange={(e) => setNewMemberHourlyRate(parseInt(e.target.value, 10) || 0)} className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
               </div>
               <div className="flex min-w-0 flex-col gap-2 lg:justify-end">
@@ -814,7 +829,7 @@ function AdminDashboard(props: {
                   <input type="password" value={editPass} onChange={(e) => setEditPass(e.target.value)} placeholder="変更時のみ。空欄で変更しません" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
                 <div>
-                  <label className="mb-0.5 block text-xs text-slate-500">委託料単価（/h・円）</label>
+                  <label className="mb-0.5 block text-xs text-slate-500">委託料単価（円/時間）</label>
                   <input type="number" min={0} value={editRate} onChange={(e) => setEditRate(parseInt(e.target.value, 10) || 0)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
               </div>
@@ -989,7 +1004,7 @@ function HistorySection(props: {
                 {dayKpi && (
                   <div className="mb-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
                     <span className="font-medium text-slate-700">KPI: </span>
-                    総コール {dayKpi.totalCalls} / 有効 {dayKpi.validCalls} / KC {dayKpi.kcCount} / 追いかけ {dayKpi.followUpCreated} / 決裁者アポ {dayKpi.decisionMakerApo} / 非決裁者アポ {dayKpi.nonDecisionMakerApo}
+                    総架電数合計 {dayKpi.totalCalls} / 有効対話数合計 {dayKpi.validCalls} / KC {dayKpi.kcCount} / 追いかけ {dayKpi.followUpCreated} / 決裁者アポ {dayKpi.decisionMakerApo} / 非決裁者アポ {dayKpi.nonDecisionMakerApo}
                     {rates && (
                       <div className="mt-1 text-slate-500">
                         有効率 {rates.validRate != null ? `${rates.validRate}%` : "—"} / KC率 {rates.kcRate != null ? `${rates.kcRate}%` : "—"} / アポ率 {rates.apoRate != null ? `${rates.apoRate}%` : "—"}
@@ -1311,7 +1326,7 @@ function KpiTab(props: {
             <div className="rounded-lg bg-slate-50 p-3">
               <div className="text-xs text-slate-500">有効率</div>
               <div className="text-lg font-bold text-slate-800">{rates.validRate != null ? `${rates.validRate}%` : "—"}</div>
-              <div className="text-xs text-slate-500">有効÷総コール</div>
+              <div className="text-xs text-slate-500">有効対話数合計÷総架電数合計</div>
               {prevRates && prevRates.validRate != null && <div className="mt-1 text-xs text-slate-500">前日: {prevRates.validRate}%</div>}
             </div>
             <div className="rounded-lg bg-slate-50 p-3">
@@ -1338,8 +1353,8 @@ function KpiTab(props: {
       <section className="mb-6 rounded-xl bg-slate-800 p-5 text-white shadow-md sm:mb-8 sm:p-6">
         <h2 className="mb-3 text-sm font-medium text-slate-300">今月の累計（{currentYearMonth}）</h2>
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
-          <div>総コール数: <span className="font-semibold">{totals.totalCalls}</span></div>
-          <div>有効コール数: <span className="font-semibold">{totals.validCalls}</span></div>
+          <div>総架電数合計: <span className="font-semibold">{totals.totalCalls}</span></div>
+          <div>有効対話数合計: <span className="font-semibold">{totals.validCalls}</span></div>
           <div>KC数: <span className="font-semibold">{totals.kcCount}</span></div>
           <div>追いかけ作成: <span className="font-semibold">{totals.followUpCreated}</span></div>
           <div>決裁者アポ: <span className="font-semibold">{totals.decisionMakerApo}</span></div>
@@ -1415,7 +1430,7 @@ function KpiTab(props: {
               <div key={k.id} className="px-4 py-3 sm:px-5 sm:py-4">
                 <div className="mb-1 font-medium text-slate-800">{formatDisplayDate(k.date)}</div>
                 <div className="text-xs text-slate-600 sm:text-sm">
-                  総コール {k.totalCalls} / 有効 {k.validCalls} / KC {k.kcCount} / 追いかけ {k.followUpCreated} / 決裁者アポ {k.decisionMakerApo} / 非決裁者アポ {k.nonDecisionMakerApo}
+                  総架電数合計 {k.totalCalls} / 有効対話数合計 {k.validCalls} / KC {k.kcCount} / 追いかけ {k.followUpCreated} / 決裁者アポ {k.decisionMakerApo} / 非決裁者アポ {k.nonDecisionMakerApo}
                 </div>
               </div>
             ))
@@ -1446,6 +1461,8 @@ export default function DashboardPage() {
   const [setupLogin, setSetupLogin] = useState("");
   const [setupPassword, setSetupPassword] = useState("");
   const [setupHourlyRate, setSetupHourlyRate] = useState(DEFAULT_HOURLY_RATE);
+  const [showMemberReportModal, setShowMemberReportModal] = useState(false);
+  const [memberReportMonth, setMemberReportMonth] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -1685,7 +1702,7 @@ export default function DashboardPage() {
               <input type="password" value={setupPassword} onChange={(e) => setSetupPassword(e.target.value)} placeholder="パスワード" className="rounded border border-slate-300 px-3 py-2 text-sm" required />
             </div>
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-slate-600">委託料単価（/h・円）</label>
+              <label className="text-xs font-medium text-slate-600">委託料単価（円/時間）</label>
               <input type="number" min={0} value={setupHourlyRate} onChange={(e) => setSetupHourlyRate(parseInt(e.target.value, 10) || 0)} className="rounded border border-slate-300 px-3 py-2 text-sm" />
             </div>
             <button type="submit" className="w-full rounded bg-slate-700 py-2.5 text-sm font-medium text-white hover:bg-slate-600">登録してログイン</button>
@@ -1795,6 +1812,18 @@ export default function DashboardPage() {
                 </select>
               </div>
               <p className="text-2xl font-bold text-slate-800 sm:text-3xl">{formatDuration(totalMinutes)}</p>
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMemberReportMonth(currentYearMonth);
+                    setShowMemberReportModal(true);
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                >
+                  今月の稼働実績レポート(PDF)
+                </button>
+              </div>
             </section>
 
             <section className="mb-6 sm:mb-8">
@@ -1855,6 +1884,43 @@ export default function DashboardPage() {
           ログアウト
         </button>
       </div>
+
+      {showMemberReportModal && currentMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowMemberReportModal(false)}>
+          <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-4 text-sm font-semibold text-slate-800">稼働実績レポート（PDF）</h3>
+            <p className="mb-2 text-xs text-slate-600">ご自身の実績データのみを出力します。対象月を選んで印刷してください。</p>
+            <div className="mb-4">
+              <label className="mb-1 block text-xs font-medium text-slate-600">対象月</label>
+              <input
+                type="month"
+                value={memberReportMonth || currentYearMonth}
+                onChange={(e) => setMemberReportMonth(e.target.value)}
+                className="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const month = memberReportMonth || currentYearMonth;
+                  printMemberReport(currentMember, month, allRecords, allKpiRecords);
+                }}
+                className="flex-1 rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
+              >
+                印刷してPDFに保存
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowMemberReportModal(false)}
+                className="rounded border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
