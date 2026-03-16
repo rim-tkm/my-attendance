@@ -666,6 +666,29 @@ function AdminDashboard(props: {
     .filter(({ dec, non }) => dec >= 1 || non >= 1)
     .sort((a, b) => b.dec - a.dec);
 
+  // 振込先情報が未登録のメンバー（null または "" のいずれかがある場合に検出。常に state の members を参照し、保存後は onRefresh で再取得されるため即時反映）
+  const isBankFieldEmpty = (v: string | null | undefined) => v == null || String(v).trim() === "";
+  const membersWithMissingBankInfo = activeMembers.filter(
+    (m) =>
+      isBankFieldEmpty(m.postalCode) ||
+      isBankFieldEmpty(m.address) ||
+      isBankFieldEmpty(m.bankName) ||
+      isBankFieldEmpty(m.branchName) ||
+      isBankFieldEmpty(m.accountNumber) ||
+      isBankFieldEmpty(m.accountHolder) ||
+      isBankFieldEmpty(m.phoneNumber) ||
+      isBankFieldEmpty(m.invoiceNumber)
+  );
+
+  // 必須項目：表示日の活動記録・KPI 未対応メンバー
+  const hasRecordOnDate = (userId: string) =>
+    allRecords.some((r) => r.date === dashboardDate && r.userId === userId) ||
+    allOpenRecords.some((r) => r.date === dashboardDate && r.userId === userId);
+  const hasKpiOnDate = (userId: string) =>
+    allKpiRecords.some((k) => k.date === dashboardDate && k.userId === userId);
+  const membersWithoutRecord = activeMembers.filter((m) => !hasRecordOnDate(m.id));
+  const membersWithoutKpi = activeMembers.filter((m) => !hasKpiOnDate(m.id));
+
   const handleAdd = async () => {
     if (!newMemberName.trim()) return;
     await addMember(newMemberName.trim(), {
@@ -713,19 +736,41 @@ function AdminDashboard(props: {
 
   const saveDetail = async () => {
     if (!detailId) return;
+    // 振込先・請求管理番号・電話番号の必須バリデーション（null または空文字は保存不可）
+    const zip = editPostalCode.trim();
+    const addr = editAddress.trim();
+    const bank = editBankName.trim();
+    const branch = editBranchName.trim();
+    const accNum = editAccountNumber.trim();
+    const accHolder = editAccountHolder.trim();
+    const phone = editPhoneNumber.trim();
+    const invNum = editInvoiceNumber.trim();
+    const missing: string[] = [];
+    if (!zip) missing.push("郵便番号");
+    if (!addr) missing.push("住所");
+    if (!bank) missing.push("銀行名");
+    if (!branch) missing.push("支店名");
+    if (!accNum) missing.push("口座番号");
+    if (!accHolder) missing.push("口座名義");
+    if (!phone) missing.push("電話番号");
+    if (!invNum) missing.push("請求管理番号（3桁）");
+    if (missing.length > 0) {
+      alert(`振込先情報が未入力です。以下の項目を入力してください。\n\n${missing.join("、")}`);
+      return;
+    }
     const updates: Parameters<typeof updateMember>[1] = {
       name: editName.trim(),
       loginAccount: editLogin.trim(),
       hourlyRate: editRate >= 0 ? editRate : DEFAULT_HOURLY_RATE,
-      postalCode: editPostalCode.trim(),
-      address: editAddress.trim(),
-      bankName: editBankName.trim(),
-      branchName: editBranchName.trim(),
+      postalCode: zip,
+      address: addr,
+      bankName: bank,
+      branchName: branch,
       accountType: editAccountType,
-      accountNumber: editAccountNumber.trim(),
-      accountHolder: editAccountHolder.trim(),
-      invoiceNumber: editInvoiceNumber.trim(),
-      phoneNumber: editPhoneNumber.trim() || undefined,
+      accountNumber: accNum,
+      accountHolder: accHolder,
+      invoiceNumber: invNum,
+      phoneNumber: phone,
     };
     if (editPass !== "") updates.password = editPass;
     await updateMember(detailId, updates);
@@ -763,6 +808,57 @@ function AdminDashboard(props: {
 
       {adminSection === "dashboard" && (
         <div className="space-y-6">
+          {membersWithMissingBankInfo.length > 0 && (
+            <section className="rounded-xl border-2 border-red-300 bg-red-50 p-5 shadow-sm">
+              <h2 className="mb-2 text-sm font-semibold text-red-800">【重要】振込先情報が未登録のメンバーがいます</h2>
+              <p className="mb-3 text-xs text-red-700">以下のメンバーは、振込先・請求管理番号・電話番号のいずれかが未登録です。請求書発行前に「今すぐ編集」から入力してください。</p>
+              <p className="mb-4 text-sm text-slate-800">
+                {membersWithMissingBankInfo.map((m) => m.name).join("、")}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminSection("settings");
+                  if (membersWithMissingBankInfo.length > 0) openDetail(membersWithMissingBankInfo[0]);
+                }}
+                className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+              >
+                今すぐ編集
+              </button>
+            </section>
+          )}
+          <section className="rounded-xl border border-amber-200 bg-amber-50/80 p-5 shadow-sm">
+            <h2 className="mb-3 text-sm font-semibold text-slate-800">必須項目（表示日: {dashboardDate}）</h2>
+            <p className="mb-4 text-xs text-slate-600">本日中に記録・入力が必要な項目です。未対応のメンバーがいる場合は共有してください。</p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <h3 className="mb-2 text-xs font-medium text-slate-700">活動記録（業務開始・終了）</h3>
+                {membersWithoutRecord.length === 0 ? (
+                  <p className="text-sm text-emerald-700">全員記録済み</p>
+                ) : (
+                  <ul className="space-y-1 text-sm text-slate-700">
+                    {membersWithoutRecord.map((m) => (
+                      <li key={m.id}>・{m.name}</li>
+                    ))}
+                    <li className="pt-1 text-xs text-amber-700">上記 {membersWithoutRecord.length} 名は未記録です</li>
+                  </ul>
+                )}
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <h3 className="mb-2 text-xs font-medium text-slate-700">KPI入力（総コール数・アポ数など）</h3>
+                {membersWithoutKpi.length === 0 ? (
+                  <p className="text-sm text-emerald-700">全員入力済み</p>
+                ) : (
+                  <ul className="space-y-1 text-sm text-slate-700">
+                    {membersWithoutKpi.map((m) => (
+                      <li key={m.id}>・{m.name}</li>
+                    ))}
+                    <li className="pt-1 text-xs text-amber-700">上記 {membersWithoutKpi.length} 名は未入力です</li>
+                  </ul>
+                )}
+              </div>
+            </div>
+          </section>
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex flex-wrap items-center gap-4">
               <h2 className="text-sm font-medium text-slate-700">チーム成果</h2>
