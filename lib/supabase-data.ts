@@ -8,7 +8,7 @@ type DbUser = {
   login_account: string | null;
   password: string | null;
   hourly_rate: number | null;
-  zip_code?: string | null;
+  zip_code?: string | number | null;
   postal_code?: string | null;
   address?: string | null;
   bank_name?: string | null;
@@ -16,7 +16,7 @@ type DbUser = {
   account_type?: string | null;
   account_number?: string | null;
   account_holder?: string | null;
-  invoice_number?: string | null;
+  invoice_number?: string | number | null;
   phone_number?: string | null;
   is_active?: boolean | null;
 };
@@ -63,22 +63,36 @@ type DbKpi = {
   non_decision_maker_apo: number;
 };
 
+/** DBの値をトリムした文字列に正規化（数値型で返ってきても文字列で扱う） */
+function normStr(v: string | number | null | undefined): string {
+  if (v === undefined || v === null) return "";
+  return String(v).trim();
+}
+
 function toMember(r: DbUser): Member {
+  const zip = normStr(r.zip_code ?? r.postal_code ?? "");
+  const addr = normStr(r.address ?? "");
+  const bank = normStr(r.bank_name ?? "");
+  const branch = normStr(r.branch_name ?? "");
+  const accNum = normStr(r.account_number ?? "");
+  const accHolder = normStr(r.account_holder ?? "");
+  const invNum = normStr(r.invoice_number ?? "");
+  const phone = normStr(r.phone_number ?? "");
   return {
     id: r.id,
-    name: r.name ?? "",
-    loginAccount: r.login_account ?? "",
+    name: (r.name ?? "").trim(),
+    loginAccount: (r.login_account ?? "").trim(),
     password: r.password ?? "",
     hourlyRate: typeof r.hourly_rate === "number" && r.hourly_rate >= 0 ? r.hourly_rate : DEFAULT_HOURLY_RATE,
-    postalCode: (r.zip_code ?? r.postal_code ?? "") !== "" ? (r.zip_code ?? r.postal_code ?? undefined) : undefined,
-    address: (r.address ?? "") !== "" ? r.address ?? undefined : undefined,
-    bankName: (r.bank_name ?? "") !== "" ? r.bank_name ?? undefined : undefined,
-    branchName: (r.branch_name ?? "") !== "" ? r.branch_name ?? undefined : undefined,
-    accountType: (r.account_type ?? "") !== "" ? r.account_type ?? undefined : undefined,
-    accountNumber: (r.account_number ?? "") !== "" ? r.account_number ?? undefined : undefined,
-    accountHolder: (r.account_holder ?? "") !== "" ? r.account_holder ?? undefined : undefined,
-    invoiceNumber: r.invoice_number !== undefined && r.invoice_number !== null && r.invoice_number !== "" ? r.invoice_number : undefined,
-    phoneNumber: (r.phone_number ?? "") !== "" ? r.phone_number ?? undefined : undefined,
+    postalCode: zip !== "" ? zip : undefined,
+    address: addr !== "" ? addr : undefined,
+    bankName: bank !== "" ? bank : undefined,
+    branchName: branch !== "" ? branch : undefined,
+    accountType: normStr(r.account_type ?? "") !== "" ? normStr(r.account_type ?? "") : undefined,
+    accountNumber: accNum !== "" ? accNum : undefined,
+    accountHolder: accHolder !== "" ? accHolder : undefined,
+    invoiceNumber: invNum !== "" ? invNum : undefined,
+    phoneNumber: phone !== "" ? phone : undefined,
     isActive: r.is_active === undefined || r.is_active === null ? true : !!r.is_active,
   };
 }

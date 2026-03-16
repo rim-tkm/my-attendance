@@ -755,19 +755,14 @@ function AdminDashboard(props: {
   const memberIdsWithShiftOnDate = getMemberIdsWithShiftOnDate(allShifts, dashboardDate);
   const membersWithShiftOnDate = activeMembers.filter((m) => memberIdsWithShiftOnDate.has(m.id));
 
-  // 振込先情報が未登録のメンバー（追加直後など振込先が空のメンバーをすべて表示し、未入力通知バナーに出す）
-  const isBankFieldEmpty = (v: string | null | undefined) => v == null || String(v).trim() === "";
-  const membersWithMissingBankInfo = activeMembers.filter(
-    (m) =>
-      isBankFieldEmpty(m.postalCode) ||
-      isBankFieldEmpty(m.address) ||
-      isBankFieldEmpty(m.bankName) ||
-      isBankFieldEmpty(m.branchName) ||
-      isBankFieldEmpty(m.accountNumber) ||
-      isBankFieldEmpty(m.accountHolder) ||
-      isBankFieldEmpty(m.phoneNumber) ||
-      isBankFieldEmpty(m.invoiceNumber)
-  );
+  // 振込先情報が未登録のメンバー（銀行名・支店名・口座番号・口座名義の主要4項目を trim して判定し、4つ揃っていれば入力済みとする）
+  const trimVal = (v: string | number | null | undefined) => (v == null ? "" : String(v).trim());
+  const hasKeyBankInfo = (m: Member) =>
+    trimVal(m.bankName) !== "" &&
+    trimVal(m.branchName) !== "" &&
+    trimVal(m.accountNumber) !== "" &&
+    trimVal(m.accountHolder) !== "";
+  const membersWithMissingBankInfo = activeMembers.filter((m) => !hasKeyBankInfo(m));
 
   // 必須項目：表示日に稼働予定があるメンバーのうち、活動記録・KPI 未対応
   const hasRecordOnDate = (userId: string) =>
@@ -911,10 +906,8 @@ function AdminDashboard(props: {
     };
     if (editPass !== "") updates.password = editPass;
     await updateMember(detailId, updates);
-    const mems = await loadMembers();
-    setMembers(mems ?? []);
+    await onRefresh();
     setDetailId(null);
-    onRefresh();
   };
 
   const targetWeekStart = getTargetWeekStart();
