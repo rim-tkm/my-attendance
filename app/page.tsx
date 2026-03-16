@@ -21,6 +21,9 @@ import {
   getKpiForDate,
   getKpiForMonth,
   getMonthlyKpiTotals,
+  getThisWeekMondayDateString,
+  getKpiInDateRange,
+  getKpiTotalsFromRecords,
   get15MinOptions,
   getShiftPlannedMinutes,
   getWeekStart,
@@ -112,6 +115,8 @@ function AdminDashboard(props: {
   const [kpiDate, setKpiDate] = useState(() => toDateString(new Date()));
   const [dashboardDate, setDashboardDate] = useState(() => toDateString(new Date()));
   const [backupExpanded, setBackupExpanded] = useState(false);
+  const [rangeStart, setRangeStart] = useState(() => getThisWeekMondayDateString());
+  const [rangeEnd, setRangeEnd] = useState(() => toDateString(new Date()));
 
   const y = new Date().getFullYear();
   const m = new Date().getMonth() + 1;
@@ -123,6 +128,13 @@ function AdminDashboard(props: {
   const teamApoRate = safeRatePercent(teamTotals.decisionMakerApo, teamTotals.kcCount);
   const monthTeamMinutes = members.reduce((s, mem) => s + getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth), 0);
   const monthApoCostMinutes = teamTotals.decisionMakerApo > 0 ? monthTeamMinutes / teamTotals.decisionMakerApo : null;
+
+  const thisWeekMonday = getThisWeekMondayDateString();
+  const weekKpis = getKpiInDateRange(allKpiRecords, thisWeekMonday, todayStr);
+  const weekTotals = getKpiTotalsFromRecords(weekKpis);
+  const weekValidRate = safeRatePercent(weekTotals.validCalls, weekTotals.totalCalls);
+  const weekKcRate = safeRatePercent(weekTotals.kcCount, weekTotals.validCalls);
+  const weekApoRate = safeRatePercent(weekTotals.decisionMakerApo, weekTotals.kcCount);
 
   // ダッシュボード表示日付に基づく集計（Supabase kpis / attendance / open_records を日付でフィルタ）
   const dateKpis = allKpiRecords.filter((k) => k.date === dashboardDate);
@@ -256,29 +268,66 @@ function AdminDashboard(props: {
             </div>
           </section>
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-sm font-medium text-slate-700">今月のKPI統計（{currentYearMonth}）</h2>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="rounded-lg bg-slate-800 p-4 text-white">
-                <div className="text-xs text-slate-300">総コール数合計</div>
-                <div className="text-2xl font-bold">{teamTotals.totalCalls}</div>
+            <h2 className="mb-4 text-sm font-medium text-slate-700">KPI統計（今月・今週）</h2>
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div>
+                <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-500">今月のKPI統計（{currentYearMonth}）</h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg bg-slate-800 p-4 text-white">
+                    <div className="text-xs text-slate-300">総架電数合計</div>
+                    <div className="text-2xl font-bold">{teamTotals.totalCalls}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">有効対話数合計</div>
+                    <div className="text-2xl font-bold">{teamTotals.validCalls}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">決裁者アポ数合計</div>
+                    <div className="text-2xl font-bold">{teamTotals.decisionMakerApo}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">有効率</div>
+                    <div className="text-2xl font-bold">{teamValidRate != null ? `${teamValidRate}%` : "—"}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">KC率（決裁者接続率）</div>
+                    <div className="text-2xl font-bold">{teamKcRate != null ? `${teamKcRate}%` : "—"}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">アポ率</div>
+                    <div className="text-2xl font-bold">{teamApoRate != null ? `${teamApoRate}%` : "—"}</div>
+                  </div>
+                </div>
               </div>
-              <div className="rounded-lg bg-slate-700 p-4 text-white">
-                <div className="text-xs text-slate-300">チーム平均 有効率</div>
-                <div className="text-2xl font-bold">{teamValidRate != null ? `${teamValidRate}%` : "—"}</div>
+              <div>
+                <h3 className="mb-3 text-xs font-medium uppercase tracking-wide text-slate-500">今週のKPI統計（月曜〜今日）</h3>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg bg-slate-800 p-4 text-white">
+                    <div className="text-xs text-slate-300">総架電数合計</div>
+                    <div className="text-2xl font-bold">{weekTotals.totalCalls}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">有効対話数合計</div>
+                    <div className="text-2xl font-bold">{weekTotals.validCalls}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">決裁者アポ数合計</div>
+                    <div className="text-2xl font-bold">{weekTotals.decisionMakerApo}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">有効率</div>
+                    <div className="text-2xl font-bold">{weekValidRate != null ? `${weekValidRate}%` : "—"}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">KC率（決裁者接続率）</div>
+                    <div className="text-2xl font-bold">{weekKcRate != null ? `${weekKcRate}%` : "—"}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">アポ率</div>
+                    <div className="text-2xl font-bold">{weekApoRate != null ? `${weekApoRate}%` : "—"}</div>
+                  </div>
+                </div>
               </div>
-              <div className="rounded-lg bg-slate-700 p-4 text-white">
-                <div className="text-xs text-slate-300">チーム平均 KC率</div>
-                <div className="text-2xl font-bold">{teamKcRate != null ? `${teamKcRate}%` : "—"}</div>
-              </div>
-              <div className="rounded-lg bg-slate-700 p-4 text-white">
-                <div className="text-xs text-slate-300">チーム平均 アポ率</div>
-                <div className="text-2xl font-bold">{teamApoRate != null ? `${teamApoRate}%` : "—"}</div>
-              </div>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-4 text-sm text-slate-600">
-              <span>有効コール合計: {teamTotals.validCalls}</span>
-              <span>KC合計: {teamTotals.kcCount}</span>
-              <span>決裁者アポ合計: {teamTotals.decisionMakerApo}</span>
             </div>
           </section>
 
@@ -381,7 +430,69 @@ function AdminDashboard(props: {
       )}
 
       {adminSection === "kpi" && (
-        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="space-y-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div>
+            <h2 className="mb-4 text-sm font-medium text-slate-700">期間指定（カスタム集計）</h2>
+            <div className="mb-4 flex flex-wrap items-end gap-4">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-slate-600">開始日</span>
+                <input
+                  type="date"
+                  value={rangeStart}
+                  onChange={(e) => setRangeStart(e.target.value)}
+                  className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-slate-600">終了日</span>
+                <input
+                  type="date"
+                  value={rangeEnd}
+                  onChange={(e) => setRangeEnd(e.target.value)}
+                  className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                />
+              </label>
+            </div>
+            {(() => {
+              const start = rangeStart <= rangeEnd ? rangeStart : rangeEnd;
+              const end = rangeStart <= rangeEnd ? rangeEnd : rangeStart;
+              const rangeKpis = getKpiInDateRange(allKpiRecords, start, end);
+              const rangeTotals = getKpiTotalsFromRecords(rangeKpis);
+              const rangeValidRate = safeRatePercent(rangeTotals.validCalls, rangeTotals.totalCalls);
+              const rangeKcRate = safeRatePercent(rangeTotals.kcCount, rangeTotals.validCalls);
+              const rangeApoRate = safeRatePercent(rangeTotals.decisionMakerApo, rangeTotals.kcCount);
+              return (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="rounded-lg bg-slate-800 p-4 text-white">
+                    <div className="text-xs text-slate-300">総架電数</div>
+                    <div className="text-2xl font-bold">{rangeTotals.totalCalls}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">有効対話数</div>
+                    <div className="text-2xl font-bold">{rangeTotals.validCalls}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">決裁者アポ数</div>
+                    <div className="text-2xl font-bold">{rangeTotals.decisionMakerApo}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">有効率</div>
+                    <div className="text-2xl font-bold">{rangeValidRate != null ? `${rangeValidRate}%` : "—"}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">KC率（決裁者接続率）</div>
+                    <div className="text-2xl font-bold">{rangeKcRate != null ? `${rangeKcRate}%` : "—"}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">アポ率</div>
+                    <div className="text-2xl font-bold">{rangeApoRate != null ? `${rangeApoRate}%` : "—"}</div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          <div className="border-t border-slate-200 pt-6">
           <h2 className="mb-4 text-sm font-medium text-slate-700">業務委託KPI（日別）</h2>
           <div className="mb-4 flex flex-wrap items-center gap-4">
             <label className="flex flex-col gap-1">
@@ -431,6 +542,7 @@ function AdminDashboard(props: {
                 })}
               </tbody>
             </table>
+          </div>
           </div>
         </section>
       )}

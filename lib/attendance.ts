@@ -572,14 +572,49 @@ export function getMonthlyKpiTotals(
   totalApo: number;
 } {
   const monthRecords = getKpiForMonth(records, yearMonth);
+  return getKpiTotalsFromRecords(monthRecords);
+}
+
+/** 今週の月曜日（YYYY-MM-DD）。日本時間の「今」に対する週の月曜日 */
+export function getThisWeekMondayDateString(): string {
+  const d = new Date();
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(d);
+  monday.setDate(d.getDate() + diff);
+  const y = monday.getFullYear();
+  const m = String(monday.getMonth() + 1).padStart(2, "0");
+  const dayNum = String(monday.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dayNum}`;
+}
+
+/** 指定期間内のKPIレコード（開始日・終了日を含む） */
+export function getKpiInDateRange(
+  records: KpiRecord[],
+  startDate: string,
+  endDate: string
+): KpiRecord[] {
+  return records.filter((r) => r.date >= startDate && r.date <= endDate);
+}
+
+/** KPIレコード配列から合計を集計（有効率・KC率・アポ率は別計算） */
+export function getKpiTotalsFromRecords(records: KpiRecord[]): {
+  totalCalls: number;
+  validCalls: number;
+  kcCount: number;
+  followUpCreated: number;
+  decisionMakerApo: number;
+  nonDecisionMakerApo: number;
+  totalApo: number;
+} {
   return {
-    totalCalls: monthRecords.reduce((s, r) => s + r.totalCalls, 0),
-    validCalls: monthRecords.reduce((s, r) => s + r.validCalls, 0),
-    kcCount: monthRecords.reduce((s, r) => s + r.kcCount, 0),
-    followUpCreated: monthRecords.reduce((s, r) => s + r.followUpCreated, 0),
-    decisionMakerApo: monthRecords.reduce((s, r) => s + r.decisionMakerApo, 0),
-    nonDecisionMakerApo: monthRecords.reduce((s, r) => s + r.nonDecisionMakerApo, 0),
-    totalApo: monthRecords.reduce(
+    totalCalls: records.reduce((s, r) => s + r.totalCalls, 0),
+    validCalls: records.reduce((s, r) => s + r.validCalls, 0),
+    kcCount: records.reduce((s, r) => s + r.kcCount, 0),
+    followUpCreated: records.reduce((s, r) => s + r.followUpCreated, 0),
+    decisionMakerApo: records.reduce((s, r) => s + r.decisionMakerApo, 0),
+    nonDecisionMakerApo: records.reduce((s, r) => s + r.nonDecisionMakerApo, 0),
+    totalApo: records.reduce(
       (s, r) => s + r.decisionMakerApo + r.nonDecisionMakerApo,
       0
     ),
