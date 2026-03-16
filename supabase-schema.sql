@@ -1,4 +1,4 @@
--- Supabase で稼働管理アプリ用テーブルを作成するSQL
+-- Supabase で業務進捗報告アプリ用テーブルを作成するSQL
 -- Supabase ダッシュボードの SQL Editor で実行してください。
 
 -- 1. users（メンバー）
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS public.open_records (
   date DATE NOT NULL
 );
 
--- 4. shifts（シフト提出）
+-- 4. shifts（稼働予定）
 CREATE TABLE IF NOT EXISTS public.shifts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,

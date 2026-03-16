@@ -189,8 +189,8 @@ function AdminDashboard(props: {
 
   const navItems: { id: AdminSection; label: string }[] = [
     { id: "dashboard", label: "ダッシュボード" },
-    { id: "attendance", label: "出退勤状況" },
-    { id: "shift", label: "シフト管理" },
+    { id: "attendance", label: "稼働状況" },
+    { id: "shift", label: "稼働予定管理" },
     { id: "kpi", label: "業務委託KPI" },
     { id: "settings", label: "管理設定" },
   ];
@@ -305,7 +305,7 @@ function AdminDashboard(props: {
 
       {adminSection === "attendance" && (
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-medium text-slate-700">出退勤状況（本日）</h2>
+          <h2 className="mb-4 text-sm font-medium text-slate-700">稼働状況（本日）</h2>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[500px] border-collapse text-sm">
               <thead>
@@ -342,7 +342,7 @@ function AdminDashboard(props: {
 
       {adminSection === "shift" && (
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-2 text-sm font-medium text-slate-700">シフト管理</h2>
+          <h2 className="mb-2 text-sm font-medium text-slate-700">稼働予定管理</h2>
           <p className="mb-4 text-xs text-slate-500">対象週: {formatDisplayDate(targetWeekDates[0])} ～ {formatDisplayDate(targetWeekDates[6])}</p>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[600px] border-collapse text-sm">
@@ -350,7 +350,7 @@ function AdminDashboard(props: {
                 <tr className="border-b border-slate-200 bg-slate-50">
                   <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
                   <th className="px-3 py-2.5 text-center font-medium text-slate-600">提出状況</th>
-                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">提出済みシフト（直近）</th>
+                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">提出済み稼働予定（直近）</th>
                 </tr>
               </thead>
               <tbody>
@@ -767,7 +767,7 @@ function ShiftTab(props: {
     <>
       <section className="mb-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:p-6">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-medium text-slate-700">週次シフト提出</h2>
+          <h2 className="text-sm font-medium text-slate-700">週次稼働予定の提出</h2>
           <p className="text-xs text-slate-500">
             提出期限: 前週金曜 23:59
             {isPastDeadline && <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-amber-800">期限経過</span>}
@@ -797,7 +797,7 @@ function ShiftTab(props: {
           </div>
         )}
         <p className="mb-4 text-sm text-slate-600">
-          {exceptionMode ? "選択した週のシフトを入力・修正できます。" : `${formatDisplayDate(weekDates[0])} ～ ${formatDisplayDate(weekDates[6])}`}
+          {exceptionMode ? "選択した週の稼働予定を入力・修正できます。" : `${formatDisplayDate(weekDates[0])} ～ ${formatDisplayDate(weekDates[6])}`}
         </p>
         <form onSubmit={handleSubmitWeek} className="space-y-4">
           {weekDates.map((dateStr) => (
@@ -805,7 +805,7 @@ function ShiftTab(props: {
               <div className="mb-2 font-medium text-slate-800">{formatDisplayDate(dateStr)}</div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="w-14 text-xs text-slate-500">シフト1</span>
+                  <span className="w-14 text-xs text-slate-500">予定1</span>
                   <select
                     value={weekForm[dateStr] ? weekForm[dateStr].s1 : "09:00"}
                     onChange={(e) => updateDay(dateStr, "s1", e.target.value)}
@@ -827,7 +827,7 @@ function ShiftTab(props: {
                   </select>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="w-14 text-xs text-slate-500">シフト2</span>
+                  <span className="w-14 text-xs text-slate-500">予定2</span>
                   <select
                     value={weekForm[dateStr] ? weekForm[dateStr].s2 : ""}
                     onChange={(e) => updateDay(dateStr, "s2", e.target.value)}
@@ -866,15 +866,15 @@ function ShiftTab(props: {
           }}
           className="mt-4 text-sm text-slate-500 underline hover:text-slate-700"
         >
-          {exceptionMode ? "通常モードに戻る" : "シフト提出を忘れた方はこちら"}
+          {exceptionMode ? "通常モードに戻る" : "稼働予定の提出を忘れた方はこちら"}
         </button>
       </section>
 
       <section className="rounded-xl bg-white shadow-sm ring-1 ring-slate-200/80">
-        <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-medium text-slate-600 sm:px-5 sm:py-4">登録したシフト一覧</h2>
+        <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-medium text-slate-600 sm:px-5 sm:py-4">登録した稼働予定一覧</h2>
         <div className="divide-y divide-slate-100">
           {shifts.length === 0 ? (
-            <div className="px-4 py-8 text-center text-slate-500 sm:px-5">まだシフトがありません</div>
+            <div className="px-4 py-8 text-center text-slate-500 sm:px-5">まだ稼働予定がありません</div>
           ) : (
             [...shifts]
               .sort((a, b) => b.date.localeCompare(a.date))
@@ -1399,7 +1399,7 @@ export default function DashboardPage() {
       <header className="bg-slate-800 text-white shadow-md" style={{ backgroundColor: "#1e293b" }}>
         <div className="mx-auto max-w-2xl px-4 py-4 sm:px-6">
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
-            {isAdminMode ? "稼働管理アプリ（管理者）" : `稼働管理アプリ${currentMember ? ` - ${currentMember.name}` : ""}`}
+            {isAdminMode ? "業務進捗報告（管理者）" : `業務進捗報告${currentMember ? ` - ${currentMember.name}` : ""}`}
           </h1>
         </div>
       </header>
@@ -1419,7 +1419,7 @@ export default function DashboardPage() {
               onClick={() => setTab("shift")}
               className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 ${tab === "shift" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
             >
-              シフト
+              稼働予定
             </button>
             <button
               type="button"

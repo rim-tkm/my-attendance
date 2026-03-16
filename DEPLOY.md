@@ -1,6 +1,6 @@
 # Vercel への本公開手順
 
-このドキュメントでは、稼働管理アプリを Vercel にデプロイして本公開する手順を説明します。
+このドキュメントでは、業務進捗報告アプリを Vercel にデプロイして本公開する手順を説明します。
 
 ## 前提
 
@@ -36,7 +36,7 @@ node_modules
 
 ```bash
 git add .
-git commit -m "Initial commit: 稼働管理アプリ"
+git commit -m "Initial commit: 業務進捗報告"
 git branch -M main
 git remote add origin https://github.com/<あなたのユーザー名>/my-attendance.git
 git push -u origin main

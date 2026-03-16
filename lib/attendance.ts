@@ -35,14 +35,14 @@ export interface OpenRecord {
   date: string;
 }
 
-/** シフト（予定・1日2セット対応） */
+/** 稼働予定（1日2セット対応） */
 export interface Shift {
   id: string;
   userId: string;
   date: string; // YYYY-MM-DD
-  startPlanned: string; // HH:mm 15分刻み シフト1
+  startPlanned: string; // HH:mm 15分刻み 予定1
   endPlanned: string;
-  startPlanned2?: string; // シフト2
+  startPlanned2?: string; // 予定2
   endPlanned2?: string;
 }
 
@@ -202,7 +202,7 @@ export function saveShifts(shifts: Shift[]): void {
   localStorage.setItem(KEY_SHIFTS, JSON.stringify(shifts));
 }
 
-/** 指定ユーザーのシフトのみ取得 */
+/** 指定ユーザーの稼働予定のみ取得 */
 export function getShiftsForUser(shifts: Shift[], userId: string): Shift[] {
   return shifts.filter((s) => s.userId === userId);
 }
@@ -235,7 +235,7 @@ export function getTotalMinutesForMonth(records: WorkRecord[], yearMonth: string
   return getRecordsForMonth(records, yearMonth).reduce((sum, r) => sum + r.durationMinutes, 0);
 }
 
-/** 記録・シフト・KPIから選択可能な年月リスト */
+/** 記録・稼働予定・KPIから選択可能な年月リスト */
 export function getSelectableMonths(
   records: WorkRecord[],
   shifts: Shift[],
@@ -276,7 +276,7 @@ export function timeToMinutes(hhmm: string): number {
   return (h ?? 0) * 60 + (m ?? 0);
 }
 
-/** シフトの予定時間（分）を計算（シフト1+2） */
+/** 稼働予定の時間（分）を計算（予定1+2） */
 export function getShiftPlannedMinutes(shift: Shift): number {
   const start = timeToMinutes(shift.startPlanned);
   const end = timeToMinutes(shift.endPlanned);
@@ -329,7 +329,7 @@ export function getDeadlineForWeek(weekStart: string): Date {
   return friday;
 }
 
-/** 指定週のシフトを日付でマップ */
+/** 指定週の稼働予定を日付でマップ */
 export function getShiftsByDateForWeek(shifts: Shift[], weekStart: string): Map<string, Shift> {
   const dates = getWeekDates(weekStart);
   const map = new Map<string, Shift>();
@@ -439,7 +439,7 @@ export function updateMember(memberId: string, updates: Partial<Pick<Member, "na
   saveMembers(next);
 }
 
-/** メンバーを削除（一覧から除外。稼働・シフト・KPIデータは残る） */
+/** メンバーを削除（一覧から除外。稼働・稼働予定・KPIデータは残る） */
 export function deleteMember(memberId: string): void {
   const members = loadMembers().filter((m) => m.id !== memberId);
   saveMembers(members.length > 0 ? members : [{ id: DEFAULT_USER_ID, name: "ユーザー1", loginAccount: "", password: "", hourlyRate: DEFAULT_HOURLY_RATE }]);
