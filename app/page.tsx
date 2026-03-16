@@ -87,6 +87,98 @@ function getLastMonthString(): string {
   return `${y}-${String(m).padStart(2, "0")}`;
 }
 
+/** 請求書No.を日付ベースで生成（例: 2026031001） */
+function getInvoiceNumber(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}${m}${day}01`;
+}
+
+/** 請求書（PDF）のHTMLを生成（印刷用・A4） */
+function buildInvoiceHtml(
+  memberName: string,
+  yearMonth: string,
+  totalMinutes: number,
+  hourlyRate: number,
+  subtotal: number,
+  taxRate: number,
+  totalWithTax: number,
+  invoiceNo: string,
+  postalCode: string,
+  address: string,
+  bankName: string,
+  branchName: string,
+  accountType: string,
+  accountNumber: string,
+  accountHolder: string,
+  invoiceNumber: string | null | undefined
+): string {
+  const [y, m] = yearMonth.split("-");
+  const monthLabel = `${y}年${m}月`;
+  const lastDay = new Date(Number(y), Number(m), 0).getDate();
+  const periodLabel = `${y}年${m}月1日 ～ ${y}年${m}月${lastDay}日`;
+  const invoiceLabel = invoiceNumber ? `インボイス番号: ${invoiceNumber}` : "インボイス番号: なし";
+  return `<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>請求書 - ${memberName} - ${monthLabel}</title>
+  <style>
+    @page { size: A4; margin: 16mm; }
+    body { font-family: "Hiragino Sans", "Meiryo", sans-serif; font-size: 10pt; color: #1e293b; margin: 0; padding: 14px; }
+    .header { text-align: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 2px solid #1e293b; }
+    .company { font-size: 13pt; font-weight: bold; }
+    .title { font-size: 16pt; font-weight: bold; margin-top: 8px; }
+    .meta { text-align: right; margin-bottom: 16px; font-size: 9pt; }
+    .section { margin-top: 16px; }
+    .section-title { font-size: 11pt; font-weight: bold; margin-bottom: 6px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #cbd5e1; padding: 6px 10px; text-align: left; font-size: 9pt; }
+    th { background: #f1f5f9; width: 120px; }
+    .text-right { text-align: right; }
+    .number { font-variant-numeric: tabular-nums; }
+    .bank-block { background: #f8fafc; padding: 10px; border: 1px solid #e2e8f0; margin-top: 6px; font-size: 9pt; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="company">株式会社RIM</div>
+    <h1 class="title">請求書</h1>
+  </div>
+  <div class="meta">
+    <div>請求書No. ${invoiceNo}</div>
+    <div>${invoiceLabel}</div>
+  </div>
+  <table style="margin-bottom: 8px;">
+    <tr><th>宛名</th><td>${memberName} 様</td></tr>
+    <tr><th>件名</th><td>${monthLabel}分の業務委託の請求書</td></tr>
+    <tr><th>請求期間</th><td>${periodLabel}</td></tr>
+  </table>
+  <div class="section">
+    <div class="section-title">ご請求内容</div>
+    <table>
+      <tr><th>合計業務遂行時間</th><td class="number">${formatDuration(totalMinutes)}</td></tr>
+      <tr><th>委託料単価（円/時間）</th><td class="number">¥${hourlyRate.toLocaleString()}</td></tr>
+      <tr><th>小計（税抜）</th><td class="text-right number">¥${subtotal.toLocaleString()}</td></tr>
+      <tr><th>消費税（10%）</th><td class="text-right number">¥${Math.round(taxRate).toLocaleString()}</td></tr>
+      <tr><th>合計（税込）</th><td class="text-right number"><strong>¥${Math.round(totalWithTax).toLocaleString()}</strong></td></tr>
+    </table>
+  </div>
+  <div class="section">
+    <div class="section-title">お振込先</div>
+    <div class="bank-block">
+      <div>${postalCode ? `〒${postalCode}` : ""} ${address || "（未登録）"}</div>
+      <div style="margin-top: 6px;">${bankName || "（未登録）"} ${branchName ? ` ${branchName}` : ""} ${accountType || ""} ${accountNumber || ""}</div>
+      <div>口座名義: ${accountHolder || "（未登録）"}</div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 /** 業務委託実績報告書のHTMLを生成（印刷用・A4） */
 function buildReportHtml(
   memberName: string,
@@ -259,6 +351,46 @@ function printMemberReport(
   }
 }
 
+/** 指定メンバー・指定月の請求書を印刷用ウィンドウで開く（管理者・メンバー共通） */
+function printMemberInvoice(
+  member: Member,
+  yearMonth: string,
+  allRecords: WorkRecord[]
+): void {
+  const userRecords = getRecordsForMonth(getRecordsForUser(allRecords, member.id), yearMonth);
+  const totalMinutes = userRecords.reduce((s, r) => s + r.durationMinutes, 0);
+  const rate = member.hourlyRate != null ? member.hourlyRate : DEFAULT_HOURLY_RATE;
+  const subtotal = calcMonthlyPay(totalMinutes, rate);
+  const taxRate = subtotal * 0.1;
+  const totalWithTax = subtotal + taxRate;
+  const invoiceNo = getInvoiceNumber();
+  const html = buildInvoiceHtml(
+    member.name,
+    yearMonth,
+    totalMinutes,
+    rate,
+    subtotal,
+    taxRate,
+    totalWithTax,
+    invoiceNo,
+    member.postalCode ?? "",
+    member.address ?? "",
+    member.bankName ?? "",
+    member.branchName ?? "",
+    member.accountType ?? "普通",
+    member.accountNumber ?? "",
+    member.accountHolder ?? "",
+    member.invoiceNumber
+  );
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 250);
+  }
+}
+
 type Tab = "home" | "shift" | "kpi";
 type AdminSection = "dashboard" | "attendance" | "shift" | "kpi" | "settings";
 
@@ -299,6 +431,14 @@ function AdminDashboard(props: {
   const [editLogin, setEditLogin] = useState("");
   const [editPass, setEditPass] = useState("");
   const [editRate, setEditRate] = useState(DEFAULT_HOURLY_RATE);
+  const [editPostalCode, setEditPostalCode] = useState("");
+  const [editAddress, setEditAddress] = useState("");
+  const [editBankName, setEditBankName] = useState("");
+  const [editBranchName, setEditBranchName] = useState("");
+  const [editAccountType, setEditAccountType] = useState("普通");
+  const [editAccountNumber, setEditAccountNumber] = useState("");
+  const [editAccountHolder, setEditAccountHolder] = useState("");
+  const [editInvoiceNumber, setEditInvoiceNumber] = useState("");
   const [kpiDate, setKpiDate] = useState(() => toDateString(new Date()));
   const [dashboardDate, setDashboardDate] = useState(() => toDateString(new Date()));
   const [backupExpanded, setBackupExpanded] = useState(false);
@@ -368,6 +508,14 @@ function AdminDashboard(props: {
     setEditLogin(member.loginAccount ?? "");
     setEditPass("");
     setEditRate(member.hourlyRate ?? DEFAULT_HOURLY_RATE);
+    setEditPostalCode(member.postalCode ?? "");
+    setEditAddress(member.address ?? "");
+    setEditBankName(member.bankName ?? "");
+    setEditBranchName(member.branchName ?? "");
+    setEditAccountType(member.accountType ?? "普通");
+    setEditAccountNumber(member.accountNumber ?? "");
+    setEditAccountHolder(member.accountHolder ?? "");
+    setEditInvoiceNumber(member.invoiceNumber ?? "");
   };
 
   const openReport = (member: Member) => {
@@ -384,10 +532,18 @@ function AdminDashboard(props: {
 
   const saveDetail = async () => {
     if (!detailId) return;
-    const updates: { name: string; loginAccount: string; hourlyRate: number; password?: string } = {
+    const updates: Parameters<typeof updateMember>[1] = {
       name: editName.trim(),
       loginAccount: editLogin.trim(),
       hourlyRate: editRate >= 0 ? editRate : DEFAULT_HOURLY_RATE,
+      postalCode: editPostalCode.trim(),
+      address: editAddress.trim(),
+      bankName: editBankName.trim(),
+      branchName: editBranchName.trim(),
+      accountType: editAccountType,
+      accountNumber: editAccountNumber.trim(),
+      accountHolder: editAccountHolder.trim(),
+      invoiceNumber: editInvoiceNumber.trim() || undefined,
     };
     if (editPass !== "") updates.password = editPass;
     await updateMember(detailId, updates);
@@ -841,6 +997,44 @@ function AdminDashboard(props: {
                   <input type="number" min={0} value={editRate} onChange={(e) => setEditRate(parseInt(e.target.value, 10) || 0)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
               </div>
+              <h4 className="mt-4 mb-2 text-xs font-medium text-slate-600">振込先・インボイス</h4>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">郵便番号</label>
+                  <input type="text" value={editPostalCode} onChange={(e) => setEditPostalCode(e.target.value)} placeholder="例: 100-0001" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-0.5 block text-xs text-slate-500">住所</label>
+                  <input type="text" value={editAddress} onChange={(e) => setEditAddress(e.target.value)} placeholder="住所" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">銀行名</label>
+                  <input type="text" value={editBankName} onChange={(e) => setEditBankName(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">支店名</label>
+                  <input type="text" value={editBranchName} onChange={(e) => setEditBranchName(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">口座種別</label>
+                  <select value={editAccountType} onChange={(e) => setEditAccountType(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm">
+                    <option value="普通">普通</option>
+                    <option value="当座">当座</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">口座番号</label>
+                  <input type="text" value={editAccountNumber} onChange={(e) => setEditAccountNumber(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-0.5 block text-xs text-slate-500">口座名義</label>
+                  <input type="text" value={editAccountHolder} onChange={(e) => setEditAccountHolder(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-0.5 block text-xs text-slate-500">インボイス番号（空欄の場合は未登録）</label>
+                  <input type="text" value={editInvoiceNumber} onChange={(e) => setEditInvoiceNumber(e.target.value)} placeholder="T1234567890123" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+              </div>
               <div className="mt-3 flex gap-2">
                 <button type="button" onClick={saveDetail} className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600">保存</button>
                 <button type="button" onClick={() => setDetailId(null)} className="rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">キャンセル</button>
@@ -923,8 +1117,8 @@ function AdminDashboard(props: {
       {reportMember && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setReportMember(null)}>
           <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-4 text-sm font-semibold text-slate-800">実績レポート（PDF）</h3>
-            <p className="mb-2 text-xs text-slate-600">{reportMember.name} の月次実績を印刷できます。</p>
+            <h3 className="mb-4 text-sm font-semibold text-slate-800">PDF出力（実績レポート・請求書）</h3>
+            <p className="mb-2 text-xs text-slate-600">{reportMember.name} の対象月の実績レポートまたは請求書を印刷できます。</p>
             <div className="mb-4">
               <label className="mb-1 block text-xs font-medium text-slate-600">対象月</label>
               <input
@@ -936,18 +1130,32 @@ function AdminDashboard(props: {
               />
               <p className="mt-1.5 text-xs text-slate-500">前月分の実績は翌月1日から出力可能になります。</p>
             </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={handlePrintReport}
-                className="flex-1 rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
-              >
-                印刷してPDFに保存
-              </button>
+            <div className="flex flex-col gap-2">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handlePrintReport}
+                  className="flex-1 rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
+                >
+                  実績レポート(PDF)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!reportMember) return;
+                    const maxMonth = getLastMonthString();
+                    const effectiveMonth = reportMonth > maxMonth ? maxMonth : reportMonth;
+                    printMemberInvoice(reportMember, effectiveMonth, allRecords);
+                  }}
+                  className="flex-1 rounded bg-slate-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-500"
+                >
+                  請求書(PDF)
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => setReportMember(null)}
-                className="rounded border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
+                className="rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
               >
                 閉じる
               </button>
@@ -1822,7 +2030,7 @@ export default function DashboardPage() {
                 </select>
               </div>
               <p className="text-2xl font-bold text-slate-800 sm:text-3xl">{formatDuration(totalMinutes)}</p>
-              <div className="mt-3">
+              <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -1831,7 +2039,17 @@ export default function DashboardPage() {
                   }}
                   className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
                 >
-                  今月の稼働実績レポート(PDF)
+                  実績レポート(PDF)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMemberReportMonth(getLastMonthString());
+                    setShowMemberReportModal(true);
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                >
+                  請求書(PDF)
                 </button>
               </div>
             </section>
@@ -1901,8 +2119,8 @@ export default function DashboardPage() {
         return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowMemberReportModal(false)}>
           <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-4 text-sm font-semibold text-slate-800">稼働実績レポート（PDF）</h3>
-            <p className="mb-2 text-xs text-slate-600">ご自身の実績データのみを出力します。対象月を選んで印刷してください。</p>
+            <h3 className="mb-4 text-sm font-semibold text-slate-800">PDF出力（実績レポート・請求書）</h3>
+            <p className="mb-2 text-xs text-slate-600">ご自身のデータのみ出力できます。対象月を選び、実績レポートまたは請求書を印刷してください。</p>
             <div className="mb-4">
               <label className="mb-1 block text-xs font-medium text-slate-600">対象月</label>
               <input
@@ -1914,20 +2132,31 @@ export default function DashboardPage() {
               />
               <p className="mt-1.5 text-xs text-slate-500">前月分の実績は翌月1日から出力可能になります。</p>
             </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  printMemberReport(currentMember, effectiveMemberMonth, allRecords, allKpiRecords);
-                }}
-                className="flex-1 rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
-              >
-                印刷してPDFに保存
-              </button>
+            <div className="flex flex-col gap-2">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    printMemberReport(currentMember, effectiveMemberMonth, allRecords, allKpiRecords);
+                  }}
+                  className="flex-1 rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
+                >
+                  実績レポート(PDF)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    printMemberInvoice(currentMember, effectiveMemberMonth, allRecords);
+                  }}
+                  className="flex-1 rounded bg-slate-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-500"
+                >
+                  請求書(PDF)
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => setShowMemberReportModal(false)}
-                className="rounded border border-slate-300 bg-white px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
+                className="rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
               >
                 閉じる
               </button>

@@ -1,4 +1,4 @@
-/** メンバー（表示名・ログイン・委託料単価付き） */
+/** メンバー（表示名・ログイン・委託料単価・振込先付き） */
 export interface Member {
   id: string;
   name: string;
@@ -8,6 +8,22 @@ export interface Member {
   password?: string;
   /** 委託料単価（円/時間）。未設定時は DEFAULT_HOURLY_RATE */
   hourlyRate?: number;
+  /** 郵便番号 */
+  postalCode?: string;
+  /** 住所 */
+  address?: string;
+  /** 銀行名 */
+  bankName?: string;
+  /** 支店名 */
+  branchName?: string;
+  /** 口座種別（普通 / 当座） */
+  accountType?: string;
+  /** 口座番号 */
+  accountNumber?: string;
+  /** 口座名義 */
+  accountHolder?: string;
+  /** インボイス番号（空の場合は未登録） */
+  invoiceNumber?: string | null;
 }
 
 export const DEFAULT_HOURLY_RATE = 1400;

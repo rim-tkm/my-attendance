@@ -8,6 +8,14 @@ type DbUser = {
   login_account: string | null;
   password: string | null;
   hourly_rate: number | null;
+  postal_code?: string | null;
+  address?: string | null;
+  bank_name?: string | null;
+  branch_name?: string | null;
+  account_type?: string | null;
+  account_number?: string | null;
+  account_holder?: string | null;
+  invoice_number?: string | null;
 };
 
 type DbAttendance = {
@@ -58,6 +66,14 @@ function toMember(r: DbUser): Member {
     loginAccount: r.login_account ?? "",
     password: r.password ?? "",
     hourlyRate: typeof r.hourly_rate === "number" && r.hourly_rate >= 0 ? r.hourly_rate : DEFAULT_HOURLY_RATE,
+    postalCode: r.postal_code ?? undefined,
+    address: r.address ?? undefined,
+    bankName: r.bank_name ?? undefined,
+    branchName: r.branch_name ?? undefined,
+    accountType: r.account_type ?? undefined,
+    accountNumber: r.account_number ?? undefined,
+    accountHolder: r.account_holder ?? undefined,
+    invoiceNumber: r.invoice_number !== undefined && r.invoice_number !== null && r.invoice_number !== "" ? r.invoice_number : undefined,
   };
 }
 
@@ -152,6 +168,14 @@ export async function saveMembers(members: Member[]): Promise<void> {
       login_account: m.loginAccount ?? "",
       password: m.password ?? "",
       hourly_rate: m.hourlyRate ?? DEFAULT_HOURLY_RATE,
+      postal_code: m.postalCode ?? "",
+      address: m.address ?? "",
+      bank_name: m.bankName ?? "",
+      branch_name: m.branchName ?? "",
+      account_type: m.accountType ?? "普通",
+      account_number: m.accountNumber ?? "",
+      account_holder: m.accountHolder ?? "",
+      invoice_number: m.invoiceNumber ?? null,
     }));
     await supabase.from("users").upsert(rows, { onConflict: "id" });
   } catch (e) {
@@ -181,6 +205,14 @@ export async function addMember(
       login_account: newMember.loginAccount,
       password: newMember.password,
       hourly_rate: newMember.hourlyRate,
+      postal_code: newMember.postalCode ?? "",
+      address: newMember.address ?? "",
+      bank_name: newMember.bankName ?? "",
+      branch_name: newMember.branchName ?? "",
+      account_type: newMember.accountType ?? "普通",
+      account_number: newMember.accountNumber ?? "",
+      account_holder: newMember.accountHolder ?? "",
+      invoice_number: newMember.invoiceNumber ?? null,
     });
   } catch (e) {
     console.warn("addMember error:", e);
@@ -190,7 +222,7 @@ export async function addMember(
 
 export async function updateMember(
   memberId: string,
-  updates: Partial<Pick<Member, "name" | "loginAccount" | "password" | "hourlyRate">>
+  updates: Partial<Pick<Member, "name" | "loginAccount" | "password" | "hourlyRate" | "postalCode" | "address" | "bankName" | "branchName" | "accountType" | "accountNumber" | "accountHolder" | "invoiceNumber">>
 ): Promise<void> {
   const supabase = getSupabase();
   if (!supabase) return;
@@ -200,6 +232,14 @@ export async function updateMember(
     if (updates.loginAccount !== undefined) body.login_account = updates.loginAccount;
     if (updates.password !== undefined) body.password = updates.password;
     if (updates.hourlyRate !== undefined) body.hourly_rate = updates.hourlyRate;
+    if (updates.postalCode !== undefined) body.postal_code = updates.postalCode;
+    if (updates.address !== undefined) body.address = updates.address;
+    if (updates.bankName !== undefined) body.bank_name = updates.bankName;
+    if (updates.branchName !== undefined) body.branch_name = updates.branchName;
+    if (updates.accountType !== undefined) body.account_type = updates.accountType;
+    if (updates.accountNumber !== undefined) body.account_number = updates.accountNumber;
+    if (updates.accountHolder !== undefined) body.account_holder = updates.accountHolder;
+    if (updates.invoiceNumber !== undefined) body.invoice_number = updates.invoiceNumber;
     if (Object.keys(body).length === 0) return;
     await supabase.from("users").update(body).eq("id", memberId);
   } catch (e) {
