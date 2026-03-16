@@ -44,6 +44,8 @@ export interface WorkRecord {
   endRounded: string;
   durationMinutes: number;
   date: string;
+  /** 業務終了が未打刻のまま日付を跨いだ場合、予定終了時刻で自動補完した場合は true */
+  isAutoCompleted?: boolean;
 }
 
 /** 未終了の活動（業務終了記録待ち） */

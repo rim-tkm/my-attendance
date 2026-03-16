@@ -30,6 +30,7 @@ type DbAttendance = {
   end_rounded: string;
   duration_minutes: number;
   date: string;
+  is_auto_completed?: boolean;
 };
 
 type DbOpenRecord = {
@@ -92,6 +93,7 @@ function toWorkRecord(r: DbAttendance): WorkRecord {
     endRounded: r.end_rounded,
     durationMinutes: r.duration_minutes,
     date: r.date,
+    isAutoCompleted: r.is_auto_completed === true,
   };
 }
 
@@ -293,6 +295,7 @@ export async function saveRecords(records: WorkRecord[]): Promise<void> {
       end_rounded: r.endRounded,
       duration_minutes: r.durationMinutes,
       date: r.date,
+      is_auto_completed: r.isAutoCompleted === true,
     }));
     await supabase.from("attendance").upsert(rows, { onConflict: "id" });
   } catch (e) {
@@ -396,6 +399,32 @@ export async function saveKpi(records: KpiRecord[]): Promise<void> {
     await supabase.from("kpis").upsert(rows, { onConflict: "id" });
   } catch (e) {
     console.warn("saveKpi error:", e);
+  }
+}
+
+/** 乖離承認済みの work_record_id 一覧を取得 */
+export async function loadDeviationApprovals(): Promise<string[]> {
+  const supabase = getSupabase();
+  if (!supabase) return [];
+  try {
+    const rows = await safeQuery<{ work_record_id: string }>(supabase.from("deviation_approvals").select("work_record_id"));
+    return rows.map((r) => r.work_record_id);
+  } catch {
+    return [];
+  }
+}
+
+/** 指定の活動記録を乖離として承認する */
+export async function saveDeviationApproval(workRecordId: string): Promise<void> {
+  const supabase = getSupabase();
+  if (!supabase) return;
+  try {
+    await supabase.from("deviation_approvals").upsert(
+      { work_record_id: workRecordId, approved_at: new Date().toISOString() },
+      { onConflict: "work_record_id" }
+    );
+  } catch (e) {
+    console.warn("saveDeviationApproval error:", e);
   }
 }
 

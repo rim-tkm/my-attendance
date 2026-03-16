@@ -29,7 +29,16 @@ CREATE TABLE IF NOT EXISTS public.attendance (
   end_raw TIMESTAMPTZ NOT NULL,
   end_rounded TIMESTAMPTZ NOT NULL,
   duration_minutes INTEGER NOT NULL,
-  date DATE NOT NULL
+  date DATE NOT NULL,
+  is_auto_completed BOOLEAN NOT NULL DEFAULT false
+);
+
+-- 2b. deviation_approvals（稼働乖離の管理者承認）
+CREATE TABLE IF NOT EXISTS public.deviation_approvals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  work_record_id UUID NOT NULL REFERENCES public.attendance(id) ON DELETE CASCADE,
+  approved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(work_record_id)
 );
 
 -- 3. open_records（未終了の活動・業務終了記録待ち）
@@ -71,9 +80,11 @@ ALTER TABLE public.attendance ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.open_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.shifts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.kpis ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.deviation_approvals ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow all for users" ON public.users FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for attendance" ON public.attendance FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for open_records" ON public.open_records FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for shifts" ON public.shifts FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for kpis" ON public.kpis FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all for deviation_approvals" ON public.deviation_approvals FOR ALL USING (true) WITH CHECK (true);

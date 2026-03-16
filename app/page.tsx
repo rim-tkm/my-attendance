@@ -26,6 +26,7 @@ import {
   getKpiTotalsFromRecords,
   get15MinOptions,
   getShiftPlannedMinutes,
+  timeToMinutes,
   getWeekStart,
   getWeekDates,
   getTargetWeekStart,
@@ -44,11 +45,15 @@ import {
   loadOpenRecords,
   loadShifts,
   loadKpi,
+  saveRecords,
+  saveOpenRecords,
   saveRecordsForUser,
   setOpenRecordForUser,
   saveShiftsForUser,
   saveKpiForUser,
   loginUser,
+  loadDeviationApprovals,
+  saveDeviationApproval,
   exportAllDataFromSupabase,
   importAllDataToSupabase,
 } from "@/lib/supabase-data";
@@ -115,7 +120,14 @@ function calcInvoiceAmounts(totalMinutes: number, hourlyRateTaxInclusive: number
 }
 
 /** 管理者用：日付・開始・終了時刻から WorkRecord を生成（15分刻みで丸める）。終了≦開始の場合は null */
-function buildWorkRecordFromTimes(dateStr: string, startTime: string, endTime: string, userId: string, id?: string): WorkRecord | null {
+function buildWorkRecordFromTimes(
+  dateStr: string,
+  startTime: string,
+  endTime: string,
+  userId: string,
+  id?: string,
+  isAutoCompleted?: boolean
+): WorkRecord | null {
   const [y, m, d] = dateStr.split("-").map(Number);
   const [sh, sm] = startTime.split(":").map(Number);
   const [eh, em] = endTime.split(":").map(Number);
@@ -135,6 +147,7 @@ function buildWorkRecordFromTimes(dateStr: string, startTime: string, endTime: s
     endRounded: endRounded.toISOString(),
     date: dateStr,
     durationMinutes,
+    ...(isAutoCompleted === true && { isAutoCompleted: true }),
   };
 }
 
@@ -143,6 +156,74 @@ function getTimeFromIso(iso: string): string {
   if (!iso) return "09:00";
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/** 指定日に稼働予定が入っているメンバーIDの集合 */
+function getMemberIdsWithShiftOnDate(shifts: Shift[], dateStr: string): Set<string> {
+  const ids = new Set<string>();
+  shifts.filter((s) => s.date === dateStr).forEach((s) => ids.add(s.userId));
+  return ids;
+}
+
+/** 前日以前の「業務開始のみ」記録を稼働予定終了時刻で自動補完（日付変更時・起動時に実行） */
+async function runAutoComplete(): Promise<void> {
+  const [records, openRecs, shifts] = await Promise.all([loadRecords(), loadOpenRecords(), loadShifts()]);
+  const todayStr = toDateString(new Date());
+  const openPast = openRecs.filter((o) => o.date < todayStr);
+  if (openPast.length === 0) return;
+  const newRecords: WorkRecord[] = [];
+  for (const o of openPast) {
+    const shift = shifts.find((s) => s.userId === o.userId && s.date === o.date);
+    const startHhmm = getTimeFromIso(o.startRounded);
+    let endTime: string;
+    if (shift) {
+      const startMins = timeToMinutes(startHhmm);
+      const plan1 = timeToMinutes(shift.startPlanned);
+      const plan2 = shift.startPlanned2 != null ? timeToMinutes(shift.startPlanned2) : null;
+      if (plan2 != null && Math.abs(startMins - plan2) < Math.abs(startMins - plan1)) endTime = shift.endPlanned2 ?? shift.endPlanned;
+      else endTime = shift.endPlanned;
+    } else {
+      endTime = "23:59";
+    }
+    const built = buildWorkRecordFromTimes(o.date, startHhmm, endTime, o.userId, o.id, true);
+    if (built) newRecords.push(built);
+  }
+  if (newRecords.length === 0) return;
+  const updatedRecords = [...records, ...newRecords];
+  const completedIds = new Set(openPast.map((x) => x.id));
+  const updatedOpen = openRecs.filter((r) => !completedIds.has(r.id));
+  await saveRecords(updatedRecords);
+  await saveOpenRecords(updatedOpen);
+}
+
+/** 1件の活動記録と稼働予定スロットから乖離情報を算出（15分以上で乖離）。スロットは { start, end } の配列 */
+function getDeviationLabel(
+  record: WorkRecord,
+  slots: { start: string; end: string }[],
+  memberName: string
+): { label: string; startDiff: number; endDiff: number } | null {
+  if (slots.length === 0) return null;
+  const actualStart = timeToMinutes(getTimeFromIso(record.startRounded));
+  const actualEnd = timeToMinutes(getTimeFromIso(record.endRounded));
+  let bestSlot = slots[0];
+  let bestDist = Math.abs(actualStart - timeToMinutes(slots[0].start));
+  for (let i = 1; i < slots.length; i++) {
+    const d = Math.abs(actualStart - timeToMinutes(slots[i].start));
+    if (d < bestDist) {
+      bestDist = d;
+      bestSlot = slots[i];
+    }
+  }
+  const startDiff = actualStart - timeToMinutes(bestSlot.start);
+  const endDiff = actualEnd - timeToMinutes(bestSlot.end);
+  if (Math.abs(startDiff) < 15 && Math.abs(endDiff) < 15) return null;
+  const planned = `${bestSlot.start}-${bestSlot.end}`;
+  const actual = `${getTimeFromIso(record.startRounded)}-${getTimeFromIso(record.endRounded)}`;
+  let suffix = "";
+  if (Math.abs(endDiff) >= 15) suffix = endDiff > 0 ? `${endDiff}分超過` : `${-endDiff}分早く終了`;
+  else if (Math.abs(startDiff) >= 15) suffix = startDiff > 0 ? `開始${startDiff}分遅れ` : `開始${-startDiff}分早い`;
+  const label = `[${memberName}] 予定：${planned} / 実績：${actual} (${suffix})`;
+  return { label, startDiff, endDiff };
 }
 
 /** 稼働分数から時間表示（数量用・整数なら整数、それ以外は小数1桁） */
@@ -581,6 +662,8 @@ function AdminDashboard(props: {
   setMembers: (v: Member[] | ((prev: Member[]) => Member[])) => void;
   onRefresh: () => void;
   onSaveMemberRecords: (memberId: string, records: WorkRecord[]) => Promise<void>;
+  deviationApprovedIds: Set<string>;
+  onApproveDeviation: (workRecordId: string) => Promise<void>;
 }) {
   const {
     allRecords,
@@ -591,6 +674,8 @@ function AdminDashboard(props: {
     setMembers,
     onRefresh,
     onSaveMemberRecords,
+    deviationApprovedIds,
+    onApproveDeviation,
   } = props;
   const [adminSection, setAdminSection] = useState<AdminSection>("dashboard");
   const [newMemberName, setNewMemberName] = useState("");
@@ -666,28 +751,75 @@ function AdminDashboard(props: {
     .filter(({ dec, non }) => dec >= 1 || non >= 1)
     .sort((a, b) => b.dec - a.dec);
 
-  // 振込先情報が未登録のメンバー（null または "" のいずれかがある場合に検出。常に state の members を参照し、保存後は onRefresh で再取得されるため即時反映）
+  // 表示日に稼働予定が入っているメンバーID（未入力通知・必須項目はこのメンバーのみ表示）
+  const memberIdsWithShiftOnDate = getMemberIdsWithShiftOnDate(allShifts, dashboardDate);
+  const membersWithShiftOnDate = activeMembers.filter((m) => memberIdsWithShiftOnDate.has(m.id));
+
+  // 振込先情報が未登録のメンバー（表示日に稼働予定がある人のみ表示）
   const isBankFieldEmpty = (v: string | null | undefined) => v == null || String(v).trim() === "";
   const membersWithMissingBankInfo = activeMembers.filter(
     (m) =>
-      isBankFieldEmpty(m.postalCode) ||
-      isBankFieldEmpty(m.address) ||
-      isBankFieldEmpty(m.bankName) ||
-      isBankFieldEmpty(m.branchName) ||
-      isBankFieldEmpty(m.accountNumber) ||
-      isBankFieldEmpty(m.accountHolder) ||
-      isBankFieldEmpty(m.phoneNumber) ||
-      isBankFieldEmpty(m.invoiceNumber)
+      memberIdsWithShiftOnDate.has(m.id) &&
+      (isBankFieldEmpty(m.postalCode) ||
+        isBankFieldEmpty(m.address) ||
+        isBankFieldEmpty(m.bankName) ||
+        isBankFieldEmpty(m.branchName) ||
+        isBankFieldEmpty(m.accountNumber) ||
+        isBankFieldEmpty(m.accountHolder) ||
+        isBankFieldEmpty(m.phoneNumber) ||
+        isBankFieldEmpty(m.invoiceNumber))
   );
 
-  // 必須項目：表示日の活動記録・KPI 未対応メンバー
+  // 必須項目：表示日に稼働予定があるメンバーのうち、活動記録・KPI 未対応
   const hasRecordOnDate = (userId: string) =>
     allRecords.some((r) => r.date === dashboardDate && r.userId === userId) ||
     allOpenRecords.some((r) => r.date === dashboardDate && r.userId === userId);
   const hasKpiOnDate = (userId: string) =>
     allKpiRecords.some((k) => k.date === dashboardDate && k.userId === userId);
-  const membersWithoutRecord = activeMembers.filter((m) => !hasRecordOnDate(m.id));
-  const membersWithoutKpi = activeMembers.filter((m) => !hasKpiOnDate(m.id));
+  const membersWithoutRecord = membersWithShiftOnDate.filter((m) => !hasRecordOnDate(m.id));
+  const membersWithoutKpi = membersWithShiftOnDate.filter((m) => !hasKpiOnDate(m.id));
+
+  // 稼働乖離アラート（表示日・15分以上ずれかつ未承認の記録）
+  const getShiftSlots = (shift: Shift) => {
+    const slots: { start: string; end: string }[] = [{ start: shift.startPlanned, end: shift.endPlanned }];
+    if (shift.startPlanned2 && shift.endPlanned2) slots.push({ start: shift.startPlanned2, end: shift.endPlanned2 });
+    return slots;
+  };
+  const deviationsForDate = allRecords
+    .filter((r) => r.date === dashboardDate && !deviationApprovedIds.has(r.id))
+    .map((r) => {
+      const shift = allShifts.find((s) => s.userId === r.userId && s.date === r.date);
+      if (!shift) return null;
+      const member = activeMembers.find((m) => m.id === r.userId);
+      const info = getDeviationLabel(r, getShiftSlots(shift), member?.name ?? "");
+      return info ? { record: r, label: info.label } : null;
+    })
+    .filter((x): x is { record: WorkRecord; label: string } => x != null);
+
+  // 過去7日間の不備・乖離（今日含む7日分）
+  const last7Days = (() => {
+    const d = new Date();
+    const arr: string[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const x = new Date(d);
+      x.setDate(d.getDate() - i);
+      arr.push(toDateString(x));
+    }
+    return arr;
+  })();
+  const past7DaysSummary = last7Days.map((dateStr) => {
+    const autoCount = allRecords.filter((r) => r.date === dateStr && r.isAutoCompleted).length;
+    const dayRecords = allRecords.filter((r) => r.date === dateStr && !deviationApprovedIds.has(r.id));
+    let deviationCount = 0;
+    for (const r of dayRecords) {
+      const shift = allShifts.find((s) => s.userId === r.userId && s.date === r.date);
+      if (!shift) continue;
+      const member = activeMembers.find((m) => m.id === r.userId);
+      const info = getDeviationLabel(r, getShiftSlots(shift), member?.name ?? "");
+      if (info) deviationCount++;
+    }
+    return { dateStr, autoCount, deviationCount };
+  });
 
   const handleAdd = async () => {
     if (!newMemberName.trim()) return;
@@ -828,8 +960,8 @@ function AdminDashboard(props: {
             </section>
           )}
           <section className="rounded-xl border border-amber-200 bg-amber-50/80 p-5 shadow-sm">
-            <h2 className="mb-3 text-sm font-semibold text-slate-800">必須項目（表示日: {dashboardDate}）</h2>
-            <p className="mb-4 text-xs text-slate-600">本日中に記録・入力が必要な項目です。未対応のメンバーがいる場合は共有してください。</p>
+            <h2 className="mb-3 text-sm font-semibold text-slate-800">本日の活動状況（表示日: {dashboardDate}・稼働予定があるメンバーのみ）</h2>
+            <p className="mb-4 text-xs text-slate-600">その日に稼働予定が入っているメンバーについて、活動記録・KPI入力が必要です。未対応のメンバーがいる場合は共有してください。</p>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="rounded-lg border border-slate-200 bg-white p-4">
                 <h3 className="mb-2 text-xs font-medium text-slate-700">活動記録（業務開始・終了）</h3>
@@ -859,6 +991,26 @@ function AdminDashboard(props: {
               </div>
             </div>
           </section>
+          {deviationsForDate.length > 0 && (
+            <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
+              <h2 className="mb-3 text-sm font-semibold text-amber-900">稼働乖離アラート（予定と実績が15分以上ずれています）</h2>
+              <p className="mb-4 text-xs text-amber-800">正当な理由がある場合は「承認」を押すとアラートが消え、実績レポート・請求書に反映されます。</p>
+              <ul className="space-y-3">
+                {deviationsForDate.map(({ record, label }) => (
+                  <li key={record.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-white px-4 py-2">
+                    <span className="text-sm text-slate-800">{label}</span>
+                    <button
+                      type="button"
+                      onClick={() => onApproveDeviation(record.id)}
+                      className="rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800"
+                    >
+                      承認
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex flex-wrap items-center gap-4">
               <h2 className="text-sm font-medium text-slate-700">チーム成果</h2>
@@ -901,6 +1053,30 @@ function AdminDashboard(props: {
                 </div>
               )}
             </div>
+          </section>
+          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-3 text-sm font-semibold text-slate-800">過去7日間の不備・乖離状況</h2>
+            <p className="mb-4 text-xs text-slate-600">日付ごとの自動補完件数と、15分以上ずれた未承認の乖離件数です。対応が必要な日がひと目で分かります。</p>
+            <ul className="space-y-2">
+              {past7DaysSummary.map(({ dateStr, autoCount, deviationCount }) => {
+                const disp = formatDisplayDate(dateStr);
+                const needAttention = autoCount > 0 || deviationCount > 0;
+                return (
+                  <li
+                    key={dateStr}
+                    className={`rounded-lg border px-3 py-2 text-sm ${needAttention ? "border-amber-200 bg-amber-50/50" : "border-slate-100 bg-slate-50/50"}`}
+                  >
+                    <span className="font-medium text-slate-800">{disp}</span>
+                    <span className="ml-2 text-slate-600">
+                      ：{autoCount + deviationCount}件
+                      {autoCount > 0 && <span className="text-amber-700">（自動補完{autoCount}）</span>}
+                      {deviationCount > 0 && <span className="text-amber-700">（乖離{deviationCount}）</span>}
+                      {autoCount === 0 && deviationCount === 0 && "（不備なし）"}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
           </section>
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="mb-4 text-sm font-medium text-slate-700">KPI統計（今月・今週）</h2>
@@ -2126,21 +2302,24 @@ export default function DashboardPage() {
   const [setupHourlyRate, setSetupHourlyRate] = useState(DEFAULT_HOURLY_RATE);
   const [showMemberReportModal, setShowMemberReportModal] = useState(false);
   const [memberReportMonth, setMemberReportMonth] = useState("");
+  const [deviationApprovedIds, setDeviationApprovedIds] = useState<Set<string>>(new Set());
 
   const refresh = useCallback(async () => {
     try {
-      const [records, openRecs, shifts, kpis, mems] = await Promise.all([
+      const [records, openRecs, shifts, kpis, mems, approvedIds] = await Promise.all([
         loadRecords(),
         loadOpenRecords(),
         loadShifts(),
         loadKpi(),
         loadMembers(),
+        loadDeviationApprovals(),
       ]);
       setAllRecords(records);
       setAllOpenRecords(openRecs);
       setAllShifts(shifts);
       setAllKpiRecords(kpis);
       setMembers(mems ?? []);
+      setDeviationApprovedIds(new Set(approvedIds));
     } catch (e) {
       console.error("refresh", e);
       setLoadError("データの取得に失敗しました。Supabase の設定とテーブルを確認してください。");
@@ -2158,16 +2337,23 @@ export default function DashboardPage() {
         return;
       }
       setMembers(mems);
-      const [records, openRecs, shifts, kpis] = await Promise.all([
+      const [records, openRecs, shifts, kpis, approvedIds0] = await Promise.all([
         loadRecords(),
         loadOpenRecords(),
         loadShifts(),
         loadKpi(),
+        loadDeviationApprovals(),
       ]);
       setAllRecords(records);
       setAllOpenRecords(openRecs);
       setAllShifts(shifts);
       setAllKpiRecords(kpis);
+      setDeviationApprovedIds(new Set(approvedIds0));
+      await runAutoComplete();
+      const [records2, open2, approvedIds] = await Promise.all([loadRecords(), loadOpenRecords(), loadDeviationApprovals()]);
+      setAllRecords(records2);
+      setAllOpenRecords(open2);
+      setDeviationApprovedIds(new Set(approvedIds));
       const now = new Date();
       setSelectedMonth((prev) => prev || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
       if (mems.length === 0) {
@@ -2448,6 +2634,11 @@ export default function DashboardPage() {
             onRefresh={refresh}
             onSaveMemberRecords={async (memberId, records) => {
               await saveRecordsForUser(memberId, records);
+              await refresh();
+            }}
+            deviationApprovedIds={deviationApprovedIds}
+            onApproveDeviation={async (workRecordId) => {
+              await saveDeviationApproval(workRecordId);
               await refresh();
             }}
           />
