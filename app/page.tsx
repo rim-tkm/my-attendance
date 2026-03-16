@@ -751,23 +751,22 @@ function AdminDashboard(props: {
     .filter(({ dec, non }) => dec >= 1 || non >= 1)
     .sort((a, b) => b.dec - a.dec);
 
-  // 表示日に稼働予定が入っているメンバーID（未入力通知・必須項目はこのメンバーのみ表示）
+  // 表示日に稼働予定が入っているメンバーID（必須項目はこのメンバーのみ表示）
   const memberIdsWithShiftOnDate = getMemberIdsWithShiftOnDate(allShifts, dashboardDate);
   const membersWithShiftOnDate = activeMembers.filter((m) => memberIdsWithShiftOnDate.has(m.id));
 
-  // 振込先情報が未登録のメンバー（表示日に稼働予定がある人のみ表示）
+  // 振込先情報が未登録のメンバー（追加直後など振込先が空のメンバーをすべて表示し、未入力通知バナーに出す）
   const isBankFieldEmpty = (v: string | null | undefined) => v == null || String(v).trim() === "";
   const membersWithMissingBankInfo = activeMembers.filter(
     (m) =>
-      memberIdsWithShiftOnDate.has(m.id) &&
-      (isBankFieldEmpty(m.postalCode) ||
-        isBankFieldEmpty(m.address) ||
-        isBankFieldEmpty(m.bankName) ||
-        isBankFieldEmpty(m.branchName) ||
-        isBankFieldEmpty(m.accountNumber) ||
-        isBankFieldEmpty(m.accountHolder) ||
-        isBankFieldEmpty(m.phoneNumber) ||
-        isBankFieldEmpty(m.invoiceNumber))
+      isBankFieldEmpty(m.postalCode) ||
+      isBankFieldEmpty(m.address) ||
+      isBankFieldEmpty(m.bankName) ||
+      isBankFieldEmpty(m.branchName) ||
+      isBankFieldEmpty(m.accountNumber) ||
+      isBankFieldEmpty(m.accountHolder) ||
+      isBankFieldEmpty(m.phoneNumber) ||
+      isBankFieldEmpty(m.invoiceNumber)
   );
 
   // 必須項目：表示日に稼働予定があるメンバーのうち、活動記録・KPI 未対応
@@ -823,18 +822,24 @@ function AdminDashboard(props: {
 
   const handleAdd = async () => {
     if (!newMemberName.trim()) return;
-    await addMember(newMemberName.trim(), {
-      loginAccount: newMemberLogin.trim(),
-      password: newMemberPassword,
-      hourlyRate: newMemberHourlyRate >= 0 ? newMemberHourlyRate : DEFAULT_HOURLY_RATE,
-    });
-    const mems = await loadMembers();
-    setMembers(mems ?? []);
-    setNewMemberName("");
-    setNewMemberLogin("");
-    setNewMemberPassword("");
-    setNewMemberHourlyRate(DEFAULT_HOURLY_RATE);
-    onRefresh();
+    try {
+      await addMember(newMemberName.trim(), {
+        loginAccount: newMemberLogin.trim(),
+        password: newMemberPassword,
+        hourlyRate: newMemberHourlyRate >= 0 ? newMemberHourlyRate : DEFAULT_HOURLY_RATE,
+      });
+      const mems = await loadMembers();
+      setMembers(mems ?? []);
+      setNewMemberName("");
+      setNewMemberLogin("");
+      setNewMemberPassword("");
+      setNewMemberHourlyRate(DEFAULT_HOURLY_RATE);
+      onRefresh();
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      console.error("メンバー追加エラー:", e);
+      alert(`追加に失敗しました：${reason}`);
+    }
   };
 
   const openDetail = (member: Member) => {
@@ -2468,20 +2473,26 @@ export default function DashboardPage() {
       alert("名前・ユーザー名・パスワードを入力してください。");
       return;
     }
-    const newMember = await addMember(setupName.trim(), {
-      loginAccount: setupLogin.trim(),
-      password: setupPassword,
-      hourlyRate: setupHourlyRate >= 0 ? setupHourlyRate : DEFAULT_HOURLY_RATE,
-    });
-    const mems = await loadMembers();
-    setMembers(mems ?? []);
-    setCurrentUserId(newMember.id);
-    setShowSetup(false);
-    setSetupName("");
-    setSetupLogin("");
-    setSetupPassword("");
-    setSetupHourlyRate(DEFAULT_HOURLY_RATE);
-    await refresh();
+    try {
+      const newMember = await addMember(setupName.trim(), {
+        loginAccount: setupLogin.trim(),
+        password: setupPassword,
+        hourlyRate: setupHourlyRate >= 0 ? setupHourlyRate : DEFAULT_HOURLY_RATE,
+      });
+      const mems = await loadMembers();
+      setMembers(mems ?? []);
+      setCurrentUserId(newMember.id);
+      setShowSetup(false);
+      setSetupName("");
+      setSetupLogin("");
+      setSetupPassword("");
+      setSetupHourlyRate(DEFAULT_HOURLY_RATE);
+      await refresh();
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      console.error("セットアップ（メンバー追加）エラー:", e);
+      alert(`追加に失敗しました：${reason}`);
+    }
   };
 
   const handleLogout = () => {

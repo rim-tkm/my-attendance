@@ -204,29 +204,42 @@ export async function addMember(
     password: options?.password ?? "",
     hourlyRate:
       typeof options?.hourlyRate === "number" && options.hourlyRate >= 0 ? options.hourlyRate : DEFAULT_HOURLY_RATE,
+    postalCode: "",
+    address: "",
+    bankName: "",
+    branchName: "",
+    accountType: "普通",
+    accountNumber: "",
+    accountHolder: "",
+    invoiceNumber: "",
+    phoneNumber: "",
+    isActive: true,
   };
   const supabase = getSupabase();
-  if (!supabase) return newMember;
-  try {
-    await supabase.from("users").insert({
-      id: newMember.id,
-      name: newMember.name,
-      login_account: newMember.loginAccount,
-      password: newMember.password,
-      hourly_rate: newMember.hourlyRate,
-      zip_code: newMember.postalCode ?? "",
-      address: newMember.address ?? "",
-      bank_name: newMember.bankName ?? "",
-      branch_name: newMember.branchName ?? "",
-      account_type: newMember.accountType ?? "普通",
-      account_number: newMember.accountNumber ?? "",
-      account_holder: newMember.accountHolder ?? "",
-      invoice_number: newMember.invoiceNumber ?? null,
-      phone_number: newMember.phoneNumber ?? "",
-      is_active: true,
-    });
-  } catch (e) {
-    console.warn("addMember error:", e);
+  if (!supabase) {
+    throw new Error("Supabase が設定されていません。");
+  }
+  const { error } = await supabase.from("users").insert({
+    id: newMember.id,
+    name: newMember.name,
+    login_account: newMember.loginAccount,
+    password: newMember.password,
+    hourly_rate: newMember.hourlyRate,
+    zip_code: "",
+    address: "",
+    bank_name: "",
+    branch_name: "",
+    account_type: "普通",
+    account_number: "",
+    account_holder: "",
+    invoice_number: null,
+    phone_number: "",
+    is_active: true,
+  });
+  if (error) {
+    const message = error.message ?? String(error);
+    console.error("addMember error:", error);
+    throw new Error(message);
   }
   return newMember;
 }
