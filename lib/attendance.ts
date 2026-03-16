@@ -24,6 +24,8 @@ export interface Member {
   accountHolder?: string;
   /** インボイス番号（空の場合は未登録） */
   invoiceNumber?: string | null;
+  /** 電話番号 */
+  phoneNumber?: string;
 }
 
 export const DEFAULT_HOURLY_RATE = 1400;

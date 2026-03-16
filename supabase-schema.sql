@@ -8,14 +8,15 @@ CREATE TABLE IF NOT EXISTS public.users (
   login_account TEXT NOT NULL DEFAULT '',
   password TEXT NOT NULL DEFAULT '',
   hourly_rate INTEGER NOT NULL DEFAULT 1400,
-  postal_code TEXT NOT NULL DEFAULT '',
+  zip_code TEXT NOT NULL DEFAULT '',
   address TEXT NOT NULL DEFAULT '',
   bank_name TEXT NOT NULL DEFAULT '',
   branch_name TEXT NOT NULL DEFAULT '',
   account_type TEXT NOT NULL DEFAULT '普通',
   account_number TEXT NOT NULL DEFAULT '',
   account_holder TEXT NOT NULL DEFAULT '',
-  invoice_number TEXT
+  invoice_number TEXT,
+  phone_number TEXT NOT NULL DEFAULT ''
 );
 
 -- 2. attendance（活動記録・完了した業務開始〜終了）

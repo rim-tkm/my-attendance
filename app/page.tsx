@@ -96,7 +96,72 @@ function getInvoiceNumber(): string {
   return `${y}${m}${day}01`;
 }
 
-/** 請求書（PDF）のHTMLを生成（印刷用・A4） */
+/** 請求書の本文HTML（差出人・宛名 株式会社RIM 御中・電話番号対応） */
+function buildInvoiceBody(
+  memberName: string,
+  yearMonth: string,
+  totalMinutes: number,
+  hourlyRate: number,
+  subtotal: number,
+  taxRate: number,
+  totalWithTax: number,
+  invoiceNo: string,
+  postalCode: string,
+  address: string,
+  phoneNumber: string,
+  bankName: string,
+  branchName: string,
+  accountType: string,
+  accountNumber: string,
+  accountHolder: string,
+  invoiceNumber: string | null | undefined
+): string {
+  const [y, m] = yearMonth.split("-");
+  const monthLabel = `${y}年${m}月`;
+  const lastDay = new Date(Number(y), Number(m), 0).getDate();
+  const periodLabel = `${y}年${m}月1日 ～ ${y}年${m}月${lastDay}日`;
+  const invoiceLabel = invoiceNumber ? `インボイス番号: ${invoiceNumber}` : "インボイス番号: なし";
+  return `
+  <div class="invoice-sheet">
+    <div class="invoice-top">
+      <div class="invoice-sender">
+        <div class="sender-name">${memberName}</div>
+        <div class="sender-address">${postalCode ? `〒${postalCode}` : ""} ${address || ""}</div>
+        <div class="sender-phone">${phoneNumber ? `TEL: ${phoneNumber}` : ""}</div>
+      </div>
+      <div class="invoice-meta">
+        <div>請求書No. ${invoiceNo}</div>
+        <div>${invoiceLabel}</div>
+      </div>
+    </div>
+    <h1 class="invoice-title">請求書</h1>
+    <table class="invoice-table">
+      <tr><th>宛名</th><td>株式会社RIM 御中</td></tr>
+      <tr><th>件名</th><td>${monthLabel}分の業務委託の請求書</td></tr>
+      <tr><th>請求期間</th><td>${periodLabel}</td></tr>
+    </table>
+    <div class="invoice-section">
+      <div class="invoice-section-title">ご請求内容</div>
+      <table class="invoice-table">
+        <tr><th>合計業務遂行時間</th><td class="number">${formatDuration(totalMinutes)}</td></tr>
+        <tr><th>委託料単価（円/時間）</th><td class="number">¥${hourlyRate.toLocaleString()}</td></tr>
+        <tr><th>小計（税抜）</th><td class="text-right number">¥${subtotal.toLocaleString()}</td></tr>
+        <tr><th>消費税（10%）</th><td class="text-right number">¥${Math.round(taxRate).toLocaleString()}</td></tr>
+        <tr><th>合計（税込）</th><td class="text-right number"><strong>¥${Math.round(totalWithTax).toLocaleString()}</strong></td></tr>
+      </table>
+    </div>
+    <div class="invoice-section">
+      <div class="invoice-section-title">お振込先</div>
+      <div class="bank-block">
+        <div>${postalCode ? `〒${postalCode}` : ""} ${address || "（未登録）"}</div>
+        <div>${bankName || "（未登録）"} ${branchName ? ` ${branchName}` : ""} ${accountType || ""} ${accountNumber || ""}</div>
+        <div>口座名義: ${accountHolder || "（未登録）"}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/** 請求書単体のHTML（従来互換・1枚用） */
 function buildInvoiceHtml(
   memberName: string,
   yearMonth: string,
@@ -113,74 +178,15 @@ function buildInvoiceHtml(
   accountType: string,
   accountNumber: string,
   accountHolder: string,
-  invoiceNumber: string | null | undefined
+  invoiceNumber: string | null | undefined,
+  phoneNumber?: string
 ): string {
-  const [y, m] = yearMonth.split("-");
-  const monthLabel = `${y}年${m}月`;
-  const lastDay = new Date(Number(y), Number(m), 0).getDate();
-  const periodLabel = `${y}年${m}月1日 ～ ${y}年${m}月${lastDay}日`;
-  const invoiceLabel = invoiceNumber ? `インボイス番号: ${invoiceNumber}` : "インボイス番号: なし";
-  return `<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <title>請求書 - ${memberName} - ${monthLabel}</title>
-  <style>
-    @page { size: A4; margin: 16mm; }
-    body { font-family: "Hiragino Sans", "Meiryo", sans-serif; font-size: 10pt; color: #1e293b; margin: 0; padding: 14px; }
-    .header { text-align: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 2px solid #1e293b; }
-    .company { font-size: 13pt; font-weight: bold; }
-    .title { font-size: 16pt; font-weight: bold; margin-top: 8px; }
-    .meta { text-align: right; margin-bottom: 16px; font-size: 9pt; }
-    .section { margin-top: 16px; }
-    .section-title { font-size: 11pt; font-weight: bold; margin-bottom: 6px; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { border: 1px solid #cbd5e1; padding: 6px 10px; text-align: left; font-size: 9pt; }
-    th { background: #f1f5f9; width: 120px; }
-    .text-right { text-align: right; }
-    .number { font-variant-numeric: tabular-nums; }
-    .bank-block { background: #f8fafc; padding: 10px; border: 1px solid #e2e8f0; margin-top: 6px; font-size: 9pt; }
-    @media print { body { padding: 0; } }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <div class="company">株式会社RIM</div>
-    <h1 class="title">請求書</h1>
-  </div>
-  <div class="meta">
-    <div>請求書No. ${invoiceNo}</div>
-    <div>${invoiceLabel}</div>
-  </div>
-  <table style="margin-bottom: 8px;">
-    <tr><th>宛名</th><td>${memberName} 様</td></tr>
-    <tr><th>件名</th><td>${monthLabel}分の業務委託の請求書</td></tr>
-    <tr><th>請求期間</th><td>${periodLabel}</td></tr>
-  </table>
-  <div class="section">
-    <div class="section-title">ご請求内容</div>
-    <table>
-      <tr><th>合計業務遂行時間</th><td class="number">${formatDuration(totalMinutes)}</td></tr>
-      <tr><th>委託料単価（円/時間）</th><td class="number">¥${hourlyRate.toLocaleString()}</td></tr>
-      <tr><th>小計（税抜）</th><td class="text-right number">¥${subtotal.toLocaleString()}</td></tr>
-      <tr><th>消費税（10%）</th><td class="text-right number">¥${Math.round(taxRate).toLocaleString()}</td></tr>
-      <tr><th>合計（税込）</th><td class="text-right number"><strong>¥${Math.round(totalWithTax).toLocaleString()}</strong></td></tr>
-    </table>
-  </div>
-  <div class="section">
-    <div class="section-title">お振込先</div>
-    <div class="bank-block">
-      <div>${postalCode ? `〒${postalCode}` : ""} ${address || "（未登録）"}</div>
-      <div style="margin-top: 6px;">${bankName || "（未登録）"} ${branchName ? ` ${branchName}` : ""} ${accountType || ""} ${accountNumber || ""}</div>
-      <div>口座名義: ${accountHolder || "（未登録）"}</div>
-    </div>
-  </div>
-</body>
-</html>`;
+  const body = buildInvoiceBody(memberName, yearMonth, totalMinutes, hourlyRate, subtotal, taxRate, totalWithTax, invoiceNo, postalCode, address, phoneNumber ?? "", bankName, branchName, accountType, accountNumber, accountHolder, invoiceNumber);
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>請求書</title><style>@page{size:A4;margin:16mm}.invoice-sheet{padding:16px;font-family:Hiragino Sans,Meiryo,sans-serif;font-size:10pt;color:#1e293b}.invoice-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px}.invoice-sender{text-align:right;font-size:9pt;line-height:1.65}.sender-name{font-weight:bold;font-size:10pt;margin-bottom:4px}.sender-address,.sender-phone{color:#475569}.invoice-meta{text-align:right;font-size:9pt}.invoice-title{font-size:15pt;font-weight:bold;text-align:center;margin:14px 0 16px;border-bottom:2px solid #1e293b;padding-bottom:10px}.invoice-table{width:100%;border-collapse:collapse;margin-top:8px}.invoice-table th,.invoice-table td{border:1px solid #64748b;padding:8px 12px;font-size:9pt}.invoice-table th{background:#f1f5f9;width:130px;font-weight:600}.invoice-section{margin-top:16px}.invoice-section-title{font-size:10pt;font-weight:bold;margin-bottom:8px}.bank-block{background:#f8fafc;padding:12px;border:1px solid #e2e8f0;font-size:9pt;border-radius:2px}.text-right{text-align:right}.number{font-variant-numeric:tabular-nums}</style></head><body>${body}</body></html>`;
 }
 
-/** 業務委託実績報告書のHTMLを生成（印刷用・A4） */
-function buildReportHtml(
+/** 業務委託実績報告書の本文HTML（結合PDF用） */
+function buildReportBody(
   memberName: string,
   yearMonth: string,
   hourlyRate: number,
@@ -198,66 +204,35 @@ function buildReportHtml(
 ): string {
   const [y, m] = yearMonth.split("-");
   const monthLabel = `${y}年${m}月`;
-  return `<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <title>業務委託実績報告書 - ${memberName} - ${monthLabel}</title>
-  <style>
-    @page { size: A4; margin: 16mm; }
-    body { font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif; font-size: 10pt; color: #1e293b; margin: 0; padding: 14px; }
-    .header { text-align: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid #1e293b; }
-    .company { font-size: 13pt; font-weight: bold; margin-bottom: 2px; }
-    .logo-space { min-height: 24px; margin-bottom: 4px; }
-    .title { font-size: 14pt; font-weight: bold; }
-    .section { margin-top: 14px; }
-    .section-title { font-size: 11pt; font-weight: bold; margin-bottom: 6px; padding: 2px 0; border-bottom: 1px solid #94a3b8; }
-    table { width: 100%; border-collapse: collapse; margin-top: 4px; }
-    th, td { border: 1px solid #cbd5e1; padding: 4px 8px; text-align: left; font-size: 9pt; }
-    th { background: #f1f5f9; font-weight: 600; }
-    .text-right { text-align: right; }
-    .info-table td:first-child { width: 160px; background: #f8fafc; }
-    .number { font-variant-numeric: tabular-nums; }
-    .daily-time { white-space: nowrap; }
-    .note { font-size: 8pt; color: #64748b; margin-top: 2px; }
-    .business-desc { font-size: 9pt; padding: 6px 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 2px; }
-    @media print { body { padding: 0; } }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <div class="logo-space"><!-- 株式会社RIM ロゴ配置スペース --></div>
-    <div class="company">株式会社RIM</div>
-    <h1 class="title">業務委託実績報告書</h1>
+  return `
+  <div class="report-header">
+    <div class="report-company">株式会社RIM</div>
+    <h1 class="report-title">業務委託実績報告書</h1>
   </div>
-
-  <div class="section">
-    <div class="section-title">1. 基本情報</div>
-    <table class="info-table">
+  <div class="report-section">
+    <div class="report-section-title">1. 基本情報</div>
+    <table class="report-table">
       <tr><td>メンバー名</td><td>${memberName}</td></tr>
       <tr><td>対象月</td><td>${monthLabel}</td></tr>
       <tr><td>委託料単価</td><td class="number">¥${hourlyRate.toLocaleString()} /時間</td></tr>
     </table>
   </div>
-
-  <div class="section">
-    <div class="section-title">2. 稼働統計</div>
-    <table class="info-table">
+  <div class="report-section">
+    <div class="report-section-title">2. 稼働統計</div>
+    <table class="report-table">
       <tr><td>総稼働時間（合計）</td><td class="number">${formatDuration(totalMinutes)}</td></tr>
       <tr><td>業務日数</td><td class="number">${workDays} 日</td></tr>
       <tr><td>概算委託料</td><td class="number">¥${estimatedPay.toLocaleString()}</td></tr>
     </table>
-    <p class="note">※本金額は業務委託契約に基づく、稼働時間に応じた委託料の概算です。</p>
+    <p class="report-note">※本金額は業務委託契約に基づく、稼働時間に応じた委託料の概算です。</p>
   </div>
-
-  <div class="section">
-    <div class="section-title">3. 業務遂行内容</div>
-    <div class="business-desc">指定リストへの架電、および進捗データの入力</div>
+  <div class="report-section">
+    <div class="report-section-title">3. 業務遂行内容</div>
+    <div class="report-business-desc">指定リストへの架電、および進捗データの入力</div>
   </div>
-
-  <div class="section">
-    <div class="section-title">4. 生産性スコア</div>
-    <table class="info-table">
+  <div class="report-section">
+    <div class="report-section-title">4. 生産性スコア</div>
+    <table class="report-table">
       <tr><td>総コール数</td><td class="number">${totalCalls}</td></tr>
       <tr><td>総有効コール数</td><td class="number">${validCalls}</td></tr>
       <tr><td>決裁者対話数（KC）</td><td class="number">${kcCount}</td></tr>
@@ -267,10 +242,9 @@ function buildReportHtml(
       <tr><td>アポ率</td><td class="number">${apoRate != null ? `${apoRate}%` : "—"}</td></tr>
     </table>
   </div>
-
-  <div class="section">
-    <div class="section-title">5. 日別明細</div>
-    <table>
+  <div class="report-section">
+    <div class="report-section-title">5. 日別明細</div>
+    <table class="report-table">
       <thead>
         <tr>
           <th>日付</th>
@@ -286,9 +260,36 @@ function buildReportHtml(
         </tr>`).join("")}
       </tbody>
     </table>
-  </div>
-</body>
-</html>`;
+  </div>`;
+}
+
+/** 業務委託実績報告書のHTMLを生成（印刷用・A4・単体用） */
+function buildReportHtml(
+  memberName: string,
+  yearMonth: string,
+  hourlyRate: number,
+  totalMinutes: number,
+  workDays: number,
+  estimatedPay: number,
+  totalCalls: number,
+  validCalls: number,
+  kcCount: number,
+  decisionMakerApo: number,
+  validRate: number | null,
+  kcRate: number | null,
+  apoRate: number | null,
+  dailyRows: { date: string; displayDate: string; timeRanges: string[]; apoCount: number }[]
+): string {
+  const body = buildReportBody(memberName, yearMonth, hourlyRate, totalMinutes, workDays, estimatedPay, totalCalls, validCalls, kcCount, decisionMakerApo, validRate, kcRate, apoRate, dailyRows);
+  const style = `@page{size:A4;margin:16mm} body{font-family:Hiragino Sans,Meiryo,sans-serif;font-size:10pt;color:#1e293b;margin:0;padding:14px} .report-header{text-align:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #1e293b} .report-company{font-size:13pt;font-weight:bold} .report-title{font-size:14pt;font-weight:bold} .report-section{margin-top:14px} .report-section-title{font-size:11pt;font-weight:bold;margin-bottom:6px;border-bottom:1px solid #94a3b8} .report-table{width:100%;border-collapse:collapse;margin-top:4px} .report-table th,.report-table td{border:1px solid #cbd5e1;padding:4px 8px;font-size:9pt} .report-table td:first-child{width:160px;background:#f8fafc} .text-right{text-align:right} .number{font-variant-numeric:tabular-nums} .daily-time{white-space:nowrap} .report-note{font-size:8pt;color:#64748b;margin-top:2px} .report-business-desc{font-size:9pt;padding:6px 8px;background:#f8fafc;border:1px solid #e2e8f0}`;
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>業務委託実績報告書</title><style>${style}</style></head><body>${body}</body></html>`;
+}
+
+/** 請求書（1枚目）＋実績報告書（2枚目以降）を1つのPDF用HTMLに結合 */
+function buildCombinedPdfHtml(invoiceBody: string, reportBody: string): string {
+  const invoiceStyle = `.invoice-sheet{padding:16px;font-family:Hiragino Sans,Meiryo,sans-serif;font-size:10pt;color:#1e293b;max-width:100%}.invoice-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;gap:16px}.invoice-sender{text-align:right;font-size:9pt;line-height:1.65}.sender-name{font-weight:bold;font-size:10pt;margin-bottom:4px}.sender-address,.sender-phone{color:#475569}.invoice-meta{text-align:right;font-size:9pt}.invoice-title{font-size:15pt;font-weight:bold;text-align:center;margin:14px 0 16px;border-bottom:2px solid #1e293b;padding-bottom:10px}.invoice-table{width:100%;border-collapse:collapse;margin-top:8px}.invoice-table th,.invoice-table td{border:1px solid #64748b;padding:8px 12px;font-size:9pt}.invoice-table th{background:#f1f5f9;width:130px;font-weight:600}.invoice-section{margin-top:16px}.invoice-section-title{font-size:10pt;font-weight:bold;margin-bottom:8px}.bank-block{background:#f8fafc;padding:12px;border:1px solid #e2e8f0;font-size:9pt;border-radius:2px}.text-right{text-align:right}.number{font-variant-numeric:tabular-nums}`;
+  const reportStyle = `.report-sheet{padding:16px;font-family:Hiragino Sans,Meiryo,sans-serif;font-size:10pt;color:#1e293b}.report-header{text-align:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #1e293b}.report-company{font-size:13pt;font-weight:bold}.report-title{font-size:14pt;font-weight:bold}.report-section{margin-top:14px}.report-section-title{font-size:11pt;font-weight:bold;margin-bottom:6px;border-bottom:1px solid #94a3b8}.report-table{width:100%;border-collapse:collapse;margin-top:4px}.report-table th,.report-table td{border:1px solid #cbd5e1;padding:4px 8px;font-size:9pt}.report-table td:first-child{width:160px;background:#f8fafc}.report-note{font-size:8pt;color:#64748b;margin-top:2px}.report-business-desc{font-size:9pt;padding:6px 8px;background:#f8fafc;border:1px solid #e2e8f0}`;
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="UTF-8"><title>請求書・業務委託実績報告書</title><style>@page{size:A4;margin:16mm}body{margin:0;padding:0;font-size:10pt;color:#1e293b}${invoiceStyle}${reportStyle}.pdf-page-break{page-break-after:always}</style></head><body>${invoiceBody}<div class="pdf-page-break"></div><div class="report-sheet">${reportBody}</div></body></html>`;
 }
 
 /** 指定メンバー・指定月の実績レポートを印刷用ウィンドウで開く（管理者・メンバー共通） */
@@ -351,7 +352,7 @@ function printMemberReport(
   }
 }
 
-/** 指定メンバー・指定月の請求書を印刷用ウィンドウで開く（管理者・メンバー共通） */
+/** 指定メンバー・指定月の請求書を印刷用ウィンドウで開く（単体・管理者・メンバー共通） */
 function printMemberInvoice(
   member: Member,
   yearMonth: string,
@@ -380,8 +381,93 @@ function printMemberInvoice(
     member.accountType ?? "普通",
     member.accountNumber ?? "",
     member.accountHolder ?? "",
+    member.invoiceNumber,
+    member.phoneNumber
+  );
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 250);
+  }
+}
+
+/** 請求書（1枚目）＋実績報告書（2枚目以降）を1つのPDFで出力（管理者・メンバー共通） */
+function printMemberCombinedPdf(
+  member: Member,
+  yearMonth: string,
+  allRecords: WorkRecord[],
+  allKpiRecords: KpiRecord[]
+): void {
+  const userId = member.id;
+  const userRecords = getRecordsForMonth(getRecordsForUser(allRecords, userId), yearMonth);
+  const userKpi = getKpiForMonth(getKpiForUser(allKpiRecords, userId), yearMonth);
+  const totalMinutes = userRecords.reduce((s, r) => s + r.durationMinutes, 0);
+  const workDays = new Set(userRecords.map((r) => r.date)).size;
+  const rate = member.hourlyRate != null ? member.hourlyRate : DEFAULT_HOURLY_RATE;
+  const estimatedPay = calcMonthlyPay(totalMinutes, rate);
+  const subtotal = estimatedPay;
+  const taxRate = subtotal * 0.1;
+  const totalWithTax = subtotal + taxRate;
+  const invoiceNo = getInvoiceNumber();
+  const invoiceBody = buildInvoiceBody(
+    member.name,
+    yearMonth,
+    totalMinutes,
+    rate,
+    subtotal,
+    taxRate,
+    totalWithTax,
+    invoiceNo,
+    member.postalCode ?? "",
+    member.address ?? "",
+    member.phoneNumber ?? "",
+    member.bankName ?? "",
+    member.branchName ?? "",
+    member.accountType ?? "普通",
+    member.accountNumber ?? "",
+    member.accountHolder ?? "",
     member.invoiceNumber
   );
+  const kpiTotals = getKpiTotalsFromRecords(userKpi);
+  const validRate = safeRatePercent(kpiTotals.validCalls, kpiTotals.totalCalls);
+  const kcRate = safeRatePercent(kpiTotals.kcCount, kpiTotals.validCalls);
+  const apoRate = safeRatePercent(kpiTotals.decisionMakerApo, kpiTotals.kcCount);
+  const dateToKpi = new Map(userKpi.map((k) => [k.date, k]));
+  const allDates = new Set<string>([...userRecords.map((r) => r.date), ...userKpi.map((k) => k.date)]);
+  const sortedDates = Array.from(allDates).sort();
+  const dailyRows = sortedDates.map((date) => {
+    const dayRecords = userRecords.filter((r) => r.date === date);
+    const timeRanges = dayRecords.map(
+      (r) => `${formatTimeForReport(r.startRounded)}～${formatTimeForReport(r.endRounded)}`
+    );
+    const k = dateToKpi.get(date);
+    const apoCount = k ? k.decisionMakerApo + k.nonDecisionMakerApo : 0;
+    return {
+      date,
+      displayDate: formatDisplayDate(date),
+      timeRanges,
+      apoCount,
+    };
+  });
+  const reportBody = buildReportBody(
+    member.name,
+    yearMonth,
+    rate,
+    totalMinutes,
+    workDays,
+    estimatedPay,
+    kpiTotals.totalCalls,
+    kpiTotals.validCalls,
+    kpiTotals.kcCount,
+    kpiTotals.decisionMakerApo,
+    validRate,
+    kcRate,
+    apoRate,
+    dailyRows
+  );
+  const html = buildCombinedPdfHtml(invoiceBody, reportBody);
   const w = window.open("", "_blank");
   if (w) {
     w.document.write(html);
@@ -439,6 +525,7 @@ function AdminDashboard(props: {
   const [editAccountNumber, setEditAccountNumber] = useState("");
   const [editAccountHolder, setEditAccountHolder] = useState("");
   const [editInvoiceNumber, setEditInvoiceNumber] = useState("");
+  const [editPhoneNumber, setEditPhoneNumber] = useState("");
   const [kpiDate, setKpiDate] = useState(() => toDateString(new Date()));
   const [dashboardDate, setDashboardDate] = useState(() => toDateString(new Date()));
   const [backupExpanded, setBackupExpanded] = useState(false);
@@ -516,6 +603,7 @@ function AdminDashboard(props: {
     setEditAccountNumber(member.accountNumber ?? "");
     setEditAccountHolder(member.accountHolder ?? "");
     setEditInvoiceNumber(member.invoiceNumber ?? "");
+    setEditPhoneNumber(member.phoneNumber ?? "");
   };
 
   const openReport = (member: Member) => {
@@ -527,7 +615,7 @@ function AdminDashboard(props: {
     if (!reportMember) return;
     const maxMonth = getLastMonthString();
     const effectiveMonth = reportMonth > maxMonth ? maxMonth : reportMonth;
-    printMemberReport(reportMember, effectiveMonth, allRecords, allKpiRecords);
+    printMemberCombinedPdf(reportMember, effectiveMonth, allRecords, allKpiRecords);
   };
 
   const saveDetail = async () => {
@@ -544,6 +632,7 @@ function AdminDashboard(props: {
       accountNumber: editAccountNumber.trim(),
       accountHolder: editAccountHolder.trim(),
       invoiceNumber: editInvoiceNumber.trim() || undefined,
+      phoneNumber: editPhoneNumber.trim() || undefined,
     };
     if (editPass !== "") updates.password = editPass;
     await updateMember(detailId, updates);
@@ -959,7 +1048,7 @@ function AdminDashboard(props: {
                       <td className="px-2 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(monthMin)}</td>
                       <td className="px-2 py-2.5 text-right tabular-nums font-medium text-slate-800">¥{pay.toLocaleString()}</td>
                       <td className="px-2 py-2.5 text-right whitespace-nowrap">
-                        <button type="button" onClick={() => openReport(mem)} className="mr-2 text-slate-600 underline hover:text-slate-800">実績レポート(PDF)</button>
+                        <button type="button" onClick={() => openReport(mem)} className="mr-2 text-slate-600 underline hover:text-slate-800">PDF出力</button>
                         <button type="button" onClick={() => openDetail(mem)} className="mr-2 text-slate-600 underline hover:text-slate-800">編集</button>
                         <button
                           type="button"
@@ -1033,6 +1122,10 @@ function AdminDashboard(props: {
                 <div className="sm:col-span-2">
                   <label className="mb-0.5 block text-xs text-slate-500">インボイス番号（空欄の場合は未登録）</label>
                   <input type="text" value={editInvoiceNumber} onChange={(e) => setEditInvoiceNumber(e.target.value)} placeholder="T1234567890123" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label className="mb-0.5 block text-xs text-slate-500">電話番号</label>
+                  <input type="text" value={editPhoneNumber} onChange={(e) => setEditPhoneNumber(e.target.value)} placeholder="03-1234-5678" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
               </div>
               <div className="mt-3 flex gap-2">
@@ -1117,8 +1210,8 @@ function AdminDashboard(props: {
       {reportMember && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setReportMember(null)}>
           <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-4 text-sm font-semibold text-slate-800">PDF出力（実績レポート・請求書）</h3>
-            <p className="mb-2 text-xs text-slate-600">{reportMember.name} の対象月の実績レポートまたは請求書を印刷できます。</p>
+            <h3 className="mb-4 text-sm font-semibold text-slate-800">PDF出力（請求書・実績レポート）</h3>
+            <p className="mb-2 text-xs text-slate-600">{reportMember.name} の対象月の請求書（1枚目）と業務遂行実績報告書（2枚目以降）を1つのPDFで出力します。</p>
             <div className="mb-4">
               <label className="mb-1 block text-xs font-medium text-slate-600">対象月</label>
               <input
@@ -1131,27 +1224,13 @@ function AdminDashboard(props: {
               <p className="mt-1.5 text-xs text-slate-500">前月分の実績は翌月1日から出力可能になります。</p>
             </div>
             <div className="flex flex-col gap-2">
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={handlePrintReport}
-                  className="flex-1 rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
-                >
-                  実績レポート(PDF)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!reportMember) return;
-                    const maxMonth = getLastMonthString();
-                    const effectiveMonth = reportMonth > maxMonth ? maxMonth : reportMonth;
-                    printMemberInvoice(reportMember, effectiveMonth, allRecords);
-                  }}
-                  className="flex-1 rounded bg-slate-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-500"
-                >
-                  請求書(PDF)
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handlePrintReport}
+                className="rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
+              >
+                PDFを出力（請求書・実績レポート）
+              </button>
               <button
                 type="button"
                 onClick={() => setReportMember(null)}
@@ -2039,17 +2118,7 @@ export default function DashboardPage() {
                   }}
                   className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
                 >
-                  実績レポート(PDF)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMemberReportMonth(getLastMonthString());
-                    setShowMemberReportModal(true);
-                  }}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-                >
-                  請求書(PDF)
+                  PDF出力（請求書・実績レポート）
                 </button>
               </div>
             </section>
@@ -2119,8 +2188,8 @@ export default function DashboardPage() {
         return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowMemberReportModal(false)}>
           <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-4 text-sm font-semibold text-slate-800">PDF出力（実績レポート・請求書）</h3>
-            <p className="mb-2 text-xs text-slate-600">ご自身のデータのみ出力できます。対象月を選び、実績レポートまたは請求書を印刷してください。</p>
+            <h3 className="mb-4 text-sm font-semibold text-slate-800">PDF出力（請求書・実績レポート）</h3>
+            <p className="mb-2 text-xs text-slate-600">ご自身のデータのみ出力できます。請求書（1枚目）と業務遂行実績報告書（2枚目以降）を1つのPDFで出力します。</p>
             <div className="mb-4">
               <label className="mb-1 block text-xs font-medium text-slate-600">対象月</label>
               <input
@@ -2133,26 +2202,15 @@ export default function DashboardPage() {
               <p className="mt-1.5 text-xs text-slate-500">前月分の実績は翌月1日から出力可能になります。</p>
             </div>
             <div className="flex flex-col gap-2">
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    printMemberReport(currentMember, effectiveMemberMonth, allRecords, allKpiRecords);
-                  }}
-                  className="flex-1 rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
-                >
-                  実績レポート(PDF)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    printMemberInvoice(currentMember, effectiveMemberMonth, allRecords);
-                  }}
-                  className="flex-1 rounded bg-slate-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-500"
-                >
-                  請求書(PDF)
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  printMemberCombinedPdf(currentMember, effectiveMemberMonth, allRecords, allKpiRecords);
+                }}
+                className="rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
+              >
+                PDFを出力（請求書・実績レポート）
+              </button>
               <button
                 type="button"
                 onClick={() => setShowMemberReportModal(false)}
