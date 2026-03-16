@@ -115,6 +115,37 @@ function calcInvoiceAmounts(totalMinutes: number, hourlyRateTaxInclusive: number
   return { totalWithTax, subtotal, taxRate };
 }
 
+/** 管理者用：日付・開始・終了時刻から WorkRecord を生成（15分刻みで丸める）。終了≦開始の場合は null */
+function buildWorkRecordFromTimes(dateStr: string, startTime: string, endTime: string, userId: string, id?: string): WorkRecord | null {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const [sh, sm] = startTime.split(":").map(Number);
+  const [eh, em] = endTime.split(":").map(Number);
+  const startDate = new Date(y, m - 1, d, sh, sm);
+  const endDate = new Date(y, m - 1, d, eh, em);
+  if (endDate.getTime() <= startDate.getTime()) return null;
+  const startRounded = roundUpTo15Minutes(startDate);
+  const endRounded = roundDownTo15Minutes(endDate);
+  const durationMinutes = calcDurationMinutes(startRounded, endRounded);
+  if (durationMinutes <= 0) return null;
+  return {
+    id: id ?? crypto.randomUUID(),
+    userId,
+    startRaw: startRounded.toISOString(),
+    startRounded: startRounded.toISOString(),
+    endRaw: endRounded.toISOString(),
+    endRounded: endRounded.toISOString(),
+    date: dateStr,
+    durationMinutes,
+  };
+}
+
+/** ISO 時刻文字列から "HH:mm" を取得（編集フォーム用） */
+function getTimeFromIso(iso: string): string {
+  if (!iso) return "09:00";
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 /** 稼働分数から時間表示（数量用・整数なら整数、それ以外は小数1桁） */
 function formatHoursForInvoice(totalMinutes: number): string {
   const h = totalMinutes / 60;
@@ -550,6 +581,7 @@ function AdminDashboard(props: {
   members: Member[];
   setMembers: (v: Member[] | ((prev: Member[]) => Member[])) => void;
   onRefresh: () => void;
+  onSaveMemberRecords: (memberId: string, records: WorkRecord[]) => Promise<void>;
 }) {
   const {
     allRecords,
@@ -559,6 +591,7 @@ function AdminDashboard(props: {
     members,
     setMembers,
     onRefresh,
+    onSaveMemberRecords,
   } = props;
   const [adminSection, setAdminSection] = useState<AdminSection>("dashboard");
   const [newMemberName, setNewMemberName] = useState("");
@@ -586,6 +619,12 @@ function AdminDashboard(props: {
   const [rangeEnd, setRangeEnd] = useState(() => toDateString(new Date()));
   const [reportMember, setReportMember] = useState<Member | null>(null);
   const [reportMonth, setReportMonth] = useState(() => getLastMonthString());
+  const [recordFormMember, setRecordFormMember] = useState<Member | null>(null);
+  const [recordFormRecord, setRecordFormRecord] = useState<WorkRecord | null>(null);
+  const [recordFormDate, setRecordFormDate] = useState(() => toDateString(new Date()));
+  const [recordFormStart, setRecordFormStart] = useState("09:00");
+  const [recordFormEnd, setRecordFormEnd] = useState("18:00");
+  const [recordListMemberId, setRecordListMemberId] = useState<string | null>(null);
 
   const y = new Date().getFullYear();
   const m = new Date().getMonth() + 1;
@@ -852,40 +891,179 @@ function AdminDashboard(props: {
       )}
 
       {adminSection === "attendance" && (
-        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-medium text-slate-700">稼働状況（本日）</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[500px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
-                  <th className="px-3 py-2.5 text-center font-medium text-slate-600">ステータス</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">当日の活動時間</th>
-                </tr>
-              </thead>
-              <tbody>
-                {members.map((mem) => {
-                  const open = getOpenRecordForUser(allOpenRecords, mem.id);
-                  const userRecords = getRecordsForUser(allRecords, mem.id);
-                  const todayMin = userRecords.filter((r) => r.date === todayStr).reduce((s, r) => s + r.durationMinutes, 0);
-                  return (
-                    <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                      <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
-                      <td className="px-3 py-2.5 text-center">
-                        {open ? (
-                          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">活動中</span>
-                        ) : (
-                          <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">活動なし</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(todayMin)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        <section className="space-y-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div>
+            <h2 className="mb-4 text-sm font-medium text-slate-700">稼働状況（本日）</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[500px] border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
+                    <th className="px-3 py-2.5 text-center font-medium text-slate-600">ステータス</th>
+                    <th className="px-3 py-2.5 text-right font-medium text-slate-600">当日の活動時間</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members.map((mem) => {
+                    const open = getOpenRecordForUser(allOpenRecords, mem.id);
+                    const userRecords = getRecordsForUser(allRecords, mem.id);
+                    const todayMin = userRecords.filter((r) => r.date === todayStr).reduce((s, r) => s + r.durationMinutes, 0);
+                    return (
+                      <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                        <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
+                        <td className="px-3 py-2.5 text-center">
+                          {open ? (
+                            <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">活動中</span>
+                          ) : (
+                            <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">活動なし</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(todayMin)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="border-t border-slate-200 pt-6">
+            <h2 className="mb-3 text-sm font-medium text-slate-700">活動記録の追加・編集</h2>
+            <p className="mb-4 text-xs text-slate-500">メンバーを選択し、記録の追加または既存記録の編集ができます。保存後は合計業務遂行時間・請求金額に即反映されます。</p>
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-slate-600">メンバー</span>
+                <select
+                  value={recordListMemberId ?? ""}
+                  onChange={(e) => setRecordListMemberId(e.target.value || null)}
+                  className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                >
+                  <option value="">選択してください</option>
+                  {members.map((mem) => (
+                    <option key={mem.id} value={mem.id}>{mem.name}</option>
+                  ))}
+                </select>
+              </label>
+              {recordListMemberId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const mem = members.find((m) => m.id === recordListMemberId);
+                    if (mem) {
+                      setRecordFormMember(mem);
+                      setRecordFormRecord(null);
+                      setRecordFormDate(toDateString(new Date()));
+                      setRecordFormStart("09:00");
+                      setRecordFormEnd("18:00");
+                    }
+                  }}
+                  className="mt-5 rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600"
+                >
+                  記録を追加
+                </button>
+              )}
+            </div>
+            {recordListMemberId && (() => {
+              const userRecords = getRecordsForUser(allRecords, recordListMemberId);
+              const sorted = [...userRecords].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 60);
+              const mem = members.find((m) => m.id === recordListMemberId);
+              return (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[480px] border-collapse text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-50">
+                        <th className="px-3 py-2.5 text-left font-medium text-slate-600">日付</th>
+                        <th className="px-3 py-2.5 text-left font-medium text-slate-600">業務開始</th>
+                        <th className="px-3 py-2.5 text-left font-medium text-slate-600">業務終了</th>
+                        <th className="px-3 py-2.5 text-right font-medium text-slate-600">時間</th>
+                        <th className="px-3 py-2.5 text-right font-medium text-slate-600">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sorted.length === 0 ? (
+                        <tr><td colSpan={5} className="px-3 py-4 text-center text-slate-500">{mem?.name ?? ""} の記録はまだありません</td></tr>
+                      ) : (
+                        sorted.map((r) => (
+                          <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                            <td className="px-3 py-2.5 text-slate-800">{formatDisplayDate(r.date)}</td>
+                            <td className="px-3 py-2.5 tabular-nums text-slate-700">{getTimeFromIso(r.startRounded)}</td>
+                            <td className="px-3 py-2.5 tabular-nums text-slate-700">{getTimeFromIso(r.endRounded)}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(r.durationMinutes)}</td>
+                            <td className="px-3 py-2.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRecordFormRecord(r);
+                                  setRecordFormMember(members.find((m) => m.id === r.userId) ?? null);
+                                  setRecordFormDate(r.date);
+                                  setRecordFormStart(getTimeFromIso(r.startRounded));
+                                  setRecordFormEnd(getTimeFromIso(r.endRounded));
+                                }}
+                                className="text-slate-600 underline hover:text-slate-800"
+                              >
+                                編集
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </div>
         </section>
+      )}
+
+      {recordFormMember && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { setRecordFormMember(null); setRecordFormRecord(null); }}>
+          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-4 text-sm font-semibold text-slate-800">{recordFormRecord ? "活動記録を編集" : "活動記録を追加"}</h3>
+            <p className="mb-3 text-xs text-slate-600">{recordFormMember.name}</p>
+            <div className="mb-4 space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-600">日付</span>
+                <input type="date" value={recordFormDate} onChange={(e) => setRecordFormDate(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-600">業務開始時間</span>
+                <select value={recordFormStart} onChange={(e) => setRecordFormStart(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm">
+                  {get15MinOptions().map((t) => (<option key={t} value={t}>{t}</option>))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-slate-600">業務終了時間</span>
+                <select value={recordFormEnd} onChange={(e) => setRecordFormEnd(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm">
+                  {get15MinOptions().map((t) => (<option key={t} value={t}>{t}</option>))}
+                </select>
+              </label>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  const built = buildWorkRecordFromTimes(recordFormDate, recordFormStart, recordFormEnd, recordFormMember.id, recordFormRecord?.id);
+                  if (!built) {
+                    alert("終了時間は開始時間より後にしてください。");
+                    return;
+                  }
+                  const userRecords = getRecordsForUser(allRecords, recordFormMember.id);
+                  const next = recordFormRecord
+                    ? userRecords.map((r) => (r.id === recordFormRecord.id ? built : r))
+                    : [built, ...userRecords];
+                  await onSaveMemberRecords(recordFormMember.id, next);
+                  setRecordFormMember(null);
+                  setRecordFormRecord(null);
+                }}
+                className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600"
+              >
+                保存
+              </button>
+              <button type="button" onClick={() => { setRecordFormMember(null); setRecordFormRecord(null); }} className="rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">キャンセル</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {adminSection === "shift" && (
@@ -2133,6 +2311,10 @@ export default function DashboardPage() {
             members={members}
             setMembers={setMembers}
             onRefresh={refresh}
+            onSaveMemberRecords={async (memberId, records) => {
+              await saveRecordsForUser(memberId, records);
+              await refresh();
+            }}
           />
         ) : tab === "home" ? (
           <>
