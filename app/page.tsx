@@ -78,6 +78,15 @@ function formatTimeForReport(iso: string): string {
   return d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
 }
 
+/** 実績レポート用：選択可能な最大月（前月）を YYYY-MM で返す。今月・未来は選択不可 */
+function getLastMonthString(): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 1);
+  const y = d.getFullYear();
+  const m = d.getMonth() + 1;
+  return `${y}-${String(m).padStart(2, "0")}`;
+}
+
 /** 業務委託実績報告書のHTMLを生成（印刷用・A4） */
 function buildReportHtml(
   memberName: string,
@@ -296,10 +305,7 @@ function AdminDashboard(props: {
   const [rangeStart, setRangeStart] = useState(() => getThisWeekMondayDateString());
   const [rangeEnd, setRangeEnd] = useState(() => toDateString(new Date()));
   const [reportMember, setReportMember] = useState<Member | null>(null);
-  const [reportMonth, setReportMonth] = useState(() => {
-    const n = new Date();
-    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
-  });
+  const [reportMonth, setReportMonth] = useState(() => getLastMonthString());
 
   const y = new Date().getFullYear();
   const m = new Date().getMonth() + 1;
@@ -366,12 +372,14 @@ function AdminDashboard(props: {
 
   const openReport = (member: Member) => {
     setReportMember(member);
-    setReportMonth(currentYearMonth);
+    setReportMonth(getLastMonthString());
   };
 
   const handlePrintReport = () => {
     if (!reportMember) return;
-    printMemberReport(reportMember, reportMonth, allRecords, allKpiRecords);
+    const maxMonth = getLastMonthString();
+    const effectiveMonth = reportMonth > maxMonth ? maxMonth : reportMonth;
+    printMemberReport(reportMember, effectiveMonth, allRecords, allKpiRecords);
   };
 
   const saveDetail = async () => {
@@ -921,10 +929,12 @@ function AdminDashboard(props: {
               <label className="mb-1 block text-xs font-medium text-slate-600">対象月</label>
               <input
                 type="month"
-                value={reportMonth}
+                max={getLastMonthString()}
+                value={reportMonth > getLastMonthString() ? getLastMonthString() : reportMonth}
                 onChange={(e) => setReportMonth(e.target.value)}
                 className="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
               />
+              <p className="mt-1.5 text-xs text-slate-500">前月分の実績は翌月1日から出力可能になります。</p>
             </div>
             <div className="flex gap-2">
               <button
@@ -1816,7 +1826,7 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    setMemberReportMonth(currentYearMonth);
+                    setMemberReportMonth(getLastMonthString());
                     setShowMemberReportModal(true);
                   }}
                   className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
@@ -1885,7 +1895,10 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {showMemberReportModal && currentMember && (
+      {showMemberReportModal && currentMember && (() => {
+        const maxMemberMonth = getLastMonthString();
+        const effectiveMemberMonth = (memberReportMonth || maxMemberMonth) > maxMemberMonth ? maxMemberMonth : (memberReportMonth || maxMemberMonth);
+        return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowMemberReportModal(false)}>
           <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-4 text-sm font-semibold text-slate-800">稼働実績レポート（PDF）</h3>
@@ -1894,17 +1907,18 @@ export default function DashboardPage() {
               <label className="mb-1 block text-xs font-medium text-slate-600">対象月</label>
               <input
                 type="month"
-                value={memberReportMonth || currentYearMonth}
+                max={maxMemberMonth}
+                value={effectiveMemberMonth}
                 onChange={(e) => setMemberReportMonth(e.target.value)}
                 className="w-full rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
               />
+              <p className="mt-1.5 text-xs text-slate-500">前月分の実績は翌月1日から出力可能になります。</p>
             </div>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => {
-                  const month = memberReportMonth || currentYearMonth;
-                  printMemberReport(currentMember, month, allRecords, allKpiRecords);
+                  printMemberReport(currentMember, effectiveMemberMonth, allRecords, allKpiRecords);
                 }}
                 className="flex-1 rounded bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600"
               >
@@ -1920,7 +1934,8 @@ export default function DashboardPage() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
