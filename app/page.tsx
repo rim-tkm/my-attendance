@@ -79,6 +79,21 @@ function formatDisplayDate(dateStr: string): string {
   });
 }
 
+/** 指定月の末日を YYYY-MM-DD で返す */
+function getLastDayOfMonth(yearMonth: string): string {
+  const [y, m] = yearMonth.split("-").map(Number);
+  const last = new Date(y, m, 0);
+  const dd = String(last.getDate()).padStart(2, "0");
+  return `${y}-${String(m).padStart(2, "0")}-${dd}`;
+}
+
+/** 期間ラベル用：日付範囲を "M/D〜M/D" 形式で */
+function formatPeriodLabel(start: string, end: string): string {
+  const [sy, sm, sd] = start.split("-").map(Number);
+  const [ey, em, ed] = end.split("-").map(Number);
+  return `${sm}/${sd}〜${em}/${ed}`;
+}
+
 /** レポート用：日付文字列から時刻のみ HH:mm を返す */
 function formatTimeForReport(iso: string): string {
   const d = new Date(iso);
@@ -716,6 +731,7 @@ function AdminDashboard(props: {
   const [recordListMemberId, setRecordListMemberId] = useState<string | null>(null);
   const [shiftEditMember, setShiftEditMember] = useState<Member | null>(null);
   const [shiftWeekForm, setShiftWeekForm] = useState<Record<string, { s1: string; e1: string; s2: string; e2: string }>>({});
+  const [productivityPeriodKey, setProductivityPeriodKey] = useState("this_week");
 
   const y = new Date().getFullYear();
   const m = new Date().getMonth() + 1;
@@ -736,6 +752,39 @@ function AdminDashboard(props: {
   const weekValidRate = safeRatePercent(weekTotals.validCalls, weekTotals.totalCalls);
   const weekKcRate = safeRatePercent(weekTotals.kcCount, weekTotals.validCalls);
   const weekApoRate = safeRatePercent(weekTotals.decisionMakerApo, weekTotals.kcCount);
+
+  const lastMonthYearMonth = (() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  })();
+
+  const productivityPeriodOptions: { key: string; label: string; start: string; end: string; isMonth: boolean; monthLabel?: string }[] = [
+    { key: "this_week", label: "今週（月〜現在）", start: thisWeekMonday, end: todayStr, isMonth: false },
+    {
+      key: "last_week",
+      label: "先週（月〜日）",
+      start: addWeeksToWeekStart(thisWeekMonday, -1),
+      end: getWeekDates(addWeeksToWeekStart(thisWeekMonday, -1))[6],
+      isMonth: false,
+    },
+    ...([2, 3, 4, 5].map((i) => {
+      const mon = addWeeksToWeekStart(thisWeekMonday, -i);
+      const dates = getWeekDates(mon);
+      return { key: `week_${i}`, label: formatPeriodLabel(mon, dates[6]), start: mon, end: dates[6], isMonth: false };
+    })),
+    { key: "this_month", label: "今月（1日〜現在）", start: `${currentYearMonth}-01`, end: todayStr, isMonth: true, monthLabel: currentYearMonth },
+    { key: "last_month", label: "先月（1日〜末日）", start: `${lastMonthYearMonth}-01`, end: getLastDayOfMonth(lastMonthYearMonth), isMonth: true, monthLabel: lastMonthYearMonth },
+  ];
+
+  const selectedProductivityPeriod = productivityPeriodOptions.find((p) => p.key === productivityPeriodKey) ?? productivityPeriodOptions[0];
+  const rangeKpisForProductivity = getKpiInDateRange(allKpiRecords, selectedProductivityPeriod.start, selectedProductivityPeriod.end);
+  const rangeTotalsForProductivity = getKpiTotalsFromRecords(rangeKpisForProductivity);
+  const rangeMinutesForProductivity = allRecords
+    .filter((r) => r.date >= selectedProductivityPeriod.start && r.date <= selectedProductivityPeriod.end)
+    .reduce((s, r) => s + r.durationMinutes, 0);
+  const rangeApoCostMinutes =
+    rangeTotalsForProductivity.decisionMakerApo > 0 ? rangeMinutesForProductivity / rangeTotalsForProductivity.decisionMakerApo : null;
 
   // ダッシュボード表示日付に基づく集計（Supabase kpis / attendance / open_records を日付でフィルタ）
   const dateKpis = allKpiRecords.filter((k) => k.date === dashboardDate);
@@ -1229,21 +1278,55 @@ function AdminDashboard(props: {
           </section>
 
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-3 text-sm font-medium text-slate-700">生産性指標（アポ取得単価・時間ベース）</h2>
-            <p className="mb-4 text-xs text-slate-500">決裁者アポ1件あたりの活動時間。数値が小さいほど効率が良いです。</p>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-medium text-slate-700">生産性指標（アポ取得単価・時間ベース）</h2>
+                <p className="mt-1 text-xs text-slate-500">決裁者アポ1件あたりの活動時間。数値が小さいほど効率が良いです。週は月曜〜日曜で集計します。</p>
+              </div>
+              <label className="flex shrink-0 flex-col gap-1">
+                <span className="text-xs font-medium text-slate-500">表示期間を選択</span>
+                <select
+                  value={productivityPeriodKey}
+                  onChange={(e) => setProductivityPeriodKey(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+                >
+                  {productivityPeriodOptions.map((opt) => (
+                    <option key={opt.key} value={opt.key}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div className="flex flex-wrap gap-6">
               <div className="rounded-lg bg-slate-800 px-4 py-3 text-white">
-                <div className="text-xs text-slate-300">表示日のアポ取得単価（チーム全体）</div>
-                <div className="text-xl font-bold">
-                  {dateApoCostMinutes != null ? `${formatDuration(Math.round(dateApoCostMinutes))}/件` : "—"}
+                <div className="text-xs text-slate-300">
+                  {selectedProductivityPeriod.label} のアポ取得単価（チーム全体）
+                </div>
+                <div className="mt-1 text-xl font-bold">
+                  {rangeApoCostMinutes != null ? `${formatDuration(Math.round(rangeApoCostMinutes))}/件` : "—"}
+                </div>
+                <div className="mt-1 text-xs text-slate-400">
+                  活動時間 {formatDuration(rangeMinutesForProductivity)} / 決裁者アポ {rangeTotalsForProductivity.decisionMakerApo} 件
                 </div>
               </div>
-              <div className="rounded-lg bg-slate-700 px-4 py-3 text-white">
-                <div className="text-xs text-slate-300">今月の平均アポ取得単価（チーム全体）</div>
-                <div className="text-xl font-bold">
-                  {monthApoCostMinutes != null ? `${formatDuration(Math.round(monthApoCostMinutes))}/件` : "—"}
+              {selectedProductivityPeriod.isMonth && selectedProductivityPeriod.monthLabel && (
+                <div className="rounded-lg border-2 border-slate-600 bg-slate-700 px-4 py-3 text-white">
+                  <div className="text-xs text-slate-300">
+                    {(() => {
+                      const [y, m] = selectedProductivityPeriod.monthLabel.split("-").map(Number);
+                      const monthName = new Date(y, m - 1, 1).toLocaleDateString("ja-JP", { month: "long", year: "numeric" });
+                      return `${monthName} の月間生産性スコア`;
+                    })()}
+                  </div>
+                  <div className="mt-1 text-xl font-bold">
+                    {rangeApoCostMinutes != null ? `${formatDuration(Math.round(rangeApoCostMinutes))}/件` : "—"}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    総活動時間 {formatDuration(rangeMinutesForProductivity)} / 決裁者アポ合計 {rangeTotalsForProductivity.decisionMakerApo} 件
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </section>
         </div>
@@ -1318,7 +1401,7 @@ function AdminDashboard(props: {
                   }}
                   className="mt-5 rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600"
                 >
-                  記録を追加
+                  活動記録を追加
                 </button>
               )}
             </div>
@@ -1378,7 +1461,7 @@ function AdminDashboard(props: {
       {recordFormMember && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { setRecordFormMember(null); setRecordFormRecord(null); }}>
           <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h3 className="mb-4 text-sm font-semibold text-slate-800">{recordFormRecord ? "活動記録を編集" : "活動記録を追加"}</h3>
+            <h3 className="mb-4 text-sm font-semibold text-slate-800">{recordFormRecord ? "活動記録を編集" : "活動活動記録を追加"}</h3>
             <p className="mb-3 text-xs text-slate-600">{recordFormMember.name}</p>
             <div className="mb-4 space-y-3">
               <label className="block">
