@@ -31,6 +31,9 @@ import {
   getWeekDates,
   getTargetWeekStart,
   getDeadlineForWeek,
+  getFirstOpenWeekStart,
+  isWeekOpenForEntry,
+  addWeeksToWeekStart,
   getShiftsByDateForWeek,
   getKpiRates,
   safeRatePercent,
@@ -176,11 +179,11 @@ async function runAutoComplete(): Promise<void> {
     const shift = shifts.find((s) => s.userId === o.userId && s.date === o.date);
     const startHhmm = getTimeFromIso(o.startRounded);
     let endTime: string;
-    if (shift) {
+    if (shift && shift.startPlanned !== ENTRY_NONE && shift.endPlanned !== ENTRY_NONE) {
       const startMins = timeToMinutes(startHhmm);
       const plan1 = timeToMinutes(shift.startPlanned);
-      const plan2 = shift.startPlanned2 != null ? timeToMinutes(shift.startPlanned2) : null;
-      if (plan2 != null && Math.abs(startMins - plan2) < Math.abs(startMins - plan1)) endTime = shift.endPlanned2 ?? shift.endPlanned;
+      const plan2 = shift.startPlanned2 != null && shift.startPlanned2 !== ENTRY_NONE ? timeToMinutes(shift.startPlanned2) : null;
+      if (plan2 != null && !Number.isNaN(plan2) && Math.abs(startMins - plan2) < Math.abs(startMins - plan1)) endTime = shift.endPlanned2 ?? shift.endPlanned;
       else endTime = shift.endPlanned;
     } else {
       endTime = "23:59";
@@ -662,6 +665,7 @@ function AdminDashboard(props: {
   setMembers: (v: Member[] | ((prev: Member[]) => Member[])) => void;
   onRefresh: () => void;
   onSaveMemberRecords: (memberId: string, records: WorkRecord[]) => Promise<void>;
+  onSaveMemberShifts: (memberId: string, shifts: Shift[]) => Promise<void>;
   deviationApprovedIds: Set<string>;
   onApproveDeviation: (workRecordId: string) => Promise<void>;
 }) {
@@ -674,6 +678,7 @@ function AdminDashboard(props: {
     setMembers,
     onRefresh,
     onSaveMemberRecords,
+    onSaveMemberShifts,
     deviationApprovedIds,
     onApproveDeviation,
   } = props;
@@ -709,6 +714,8 @@ function AdminDashboard(props: {
   const [recordFormStart, setRecordFormStart] = useState("09:00");
   const [recordFormEnd, setRecordFormEnd] = useState("18:00");
   const [recordListMemberId, setRecordListMemberId] = useState<string | null>(null);
+  const [shiftEditMember, setShiftEditMember] = useState<Member | null>(null);
+  const [shiftWeekForm, setShiftWeekForm] = useState<Record<string, { s1: string; e1: string; s2: string; e2: string }>>({});
 
   const y = new Date().getFullYear();
   const m = new Date().getMonth() + 1;
@@ -773,10 +780,11 @@ function AdminDashboard(props: {
   const membersWithoutRecord = membersWithShiftOnDate.filter((m) => !hasRecordOnDate(m.id));
   const membersWithoutKpi = membersWithShiftOnDate.filter((m) => !hasKpiOnDate(m.id));
 
-  // 稼働乖離アラート（表示日・15分以上ずれかつ未承認の記録）
+  // 稼働乖離アラート（表示日・15分以上ずれかつ未承認の記録）。「稼働予定なし」のスロットは除外
   const getShiftSlots = (shift: Shift) => {
-    const slots: { start: string; end: string }[] = [{ start: shift.startPlanned, end: shift.endPlanned }];
-    if (shift.startPlanned2 && shift.endPlanned2) slots.push({ start: shift.startPlanned2, end: shift.endPlanned2 });
+    const slots: { start: string; end: string }[] = [];
+    if (shift.startPlanned !== ENTRY_NONE && shift.endPlanned !== ENTRY_NONE) slots.push({ start: shift.startPlanned, end: shift.endPlanned });
+    if (shift.startPlanned2 && shift.endPlanned2 && shift.startPlanned2 !== ENTRY_NONE && shift.endPlanned2 !== ENTRY_NONE) slots.push({ start: shift.startPlanned2, end: shift.endPlanned2 });
     return slots;
   };
   const deviationsForDate = allRecords
@@ -912,6 +920,72 @@ function AdminDashboard(props: {
 
   const targetWeekStart = getTargetWeekStart();
   const targetWeekDates = getWeekDates(targetWeekStart);
+  const deadlineForTargetWeek = getDeadlineForWeek(targetWeekStart);
+  const isPastDeadlineForTargetWeek = new Date() > deadlineForTargetWeek;
+  const membersWithoutEntryThisWeek = activeMembers.filter((m) => {
+    const userShifts = getShiftsForUser(allShifts, m.id);
+    return !targetWeekDates.some((d) => userShifts.some((s) => s.date === d));
+  });
+
+  useEffect(() => {
+    if (!shiftEditMember) return;
+    const weekDates = getWeekDates(targetWeekStart);
+    const map = getShiftsByDateForWeek(getShiftsForUser(allShifts, shiftEditMember.id), targetWeekStart);
+    const next: Record<string, { s1: string; e1: string; s2: string; e2: string }> = {};
+    weekDates.forEach((dateStr) => {
+      const s = map.get(dateStr);
+      const isNone = s && s.startPlanned === ENTRY_NONE;
+      next[dateStr] = {
+        s1: isNone ? ENTRY_NONE : (s ? s.startPlanned : "09:00"),
+        e1: isNone ? ENTRY_NONE : (s ? s.endPlanned : "18:00"),
+        s2: s && s.startPlanned2 ? s.startPlanned2 : "",
+        e2: s && s.endPlanned2 ? s.endPlanned2 : "",
+      };
+    });
+    setShiftWeekForm(next);
+  }, [shiftEditMember, targetWeekStart, allShifts]);
+
+  const updateShiftDay = (dateStr: string, field: "s1" | "e1" | "s2" | "e2", value: string) => {
+    setShiftWeekForm((prev) => {
+      const cur = prev[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
+      const next = { ...cur, [field]: value };
+      if (field === "s1" && value === ENTRY_NONE) next.e1 = ENTRY_NONE;
+      if (field === "e1" && value === ENTRY_NONE) next.s1 = ENTRY_NONE;
+      return { ...prev, [dateStr]: next };
+    });
+  };
+
+  const handleSaveShiftWeek = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shiftEditMember) return;
+    const weekDates = getWeekDates(targetWeekStart);
+    const byDate = getShiftsByDateForWeek(getShiftsForUser(allShifts, shiftEditMember.id), targetWeekStart);
+    const otherShifts = allShifts.filter((s) => s.userId === shiftEditMember.id && !weekDates.includes(s.date));
+    const newShifts: Shift[] = weekDates.map((dateStr) => {
+      const f = shiftWeekForm[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
+      const existing = byDate.get(dateStr);
+      const base: Shift = {
+        id: existing ? existing.id : crypto.randomUUID(),
+        userId: shiftEditMember.id,
+        date: dateStr,
+        startPlanned: f.s1,
+        endPlanned: f.s1 === ENTRY_NONE ? ENTRY_NONE : f.e1,
+      };
+      if (f.s1 !== ENTRY_NONE && f.s2 && f.e2) {
+        return { ...base, startPlanned2: f.s2, endPlanned2: f.e2 };
+      }
+      return base;
+    });
+    await onSaveMemberShifts(shiftEditMember.id, [...newShifts, ...otherShifts]);
+    setShiftEditMember(null);
+  };
+
+  const setAdminShiftDayNone = (dateStr: string, none: boolean) => {
+    setShiftWeekForm((prev) => ({
+      ...prev,
+      [dateStr]: none ? { s1: ENTRY_NONE, e1: ENTRY_NONE, s2: "", e2: "" } : { s1: "09:00", e1: "18:00", s2: "", e2: "" },
+    }));
+  };
 
   const navItems: { id: AdminSection; label: string }[] = [
     { id: "dashboard", label: "ダッシュボード" },
@@ -938,6 +1012,20 @@ function AdminDashboard(props: {
 
       {adminSection === "dashboard" && (
         <div className="space-y-6">
+          {isPastDeadlineForTargetWeek && membersWithoutEntryThisWeek.length > 0 && (
+            <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
+              <h2 className="mb-2 text-sm font-semibold text-amber-900">稼働予定が未登録のメンバーがいます</h2>
+              <p className="mb-3 text-xs text-amber-800">前週金曜 23:59 の締め切りを過ぎても、対象週の稼働予定（エントリー）が登録されていないメンバーがいます。「稼働予定管理」から代理登録できます。</p>
+              <p className="mb-2 text-sm font-medium text-slate-800">{membersWithoutEntryThisWeek.map((m) => m.name).join("、")}</p>
+              <button
+                type="button"
+                onClick={() => setAdminSection("shift")}
+                className="rounded bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700"
+              >
+                稼働予定管理で登録する
+              </button>
+            </section>
+          )}
           {membersWithMissingBankInfo.length > 0 && (
             <section className="rounded-xl border-2 border-red-300 bg-red-50 p-5 shadow-sm">
               <h2 className="mb-2 text-sm font-semibold text-red-800">【重要】振込先情報が未登録のメンバーがいます</h2>
@@ -1340,7 +1428,7 @@ function AdminDashboard(props: {
       {adminSection === "shift" && (
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-2 text-sm font-medium text-slate-700">稼働予定管理</h2>
-          <p className="mb-4 text-xs text-slate-500">対象週: {formatDisplayDate(targetWeekDates[0])} ～ {formatDisplayDate(targetWeekDates[6])}</p>
+          <p className="mb-4 text-xs text-slate-500">対象週: {formatDisplayDate(targetWeekDates[0])} ～ {formatDisplayDate(targetWeekDates[6])}。行をクリックするとエントリーを入力・編集できます。</p>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[600px] border-collapse text-sm">
               <thead>
@@ -1353,20 +1441,41 @@ function AdminDashboard(props: {
               <tbody>
                 {activeMembers.map((mem) => {
                   const userShifts = getShiftsForUser(allShifts, mem.id);
-                  const hasShiftThisWeek = targetWeekDates.some((d) => userShifts.some((s) => s.date === d));
+                  const weekShifts = targetWeekDates
+                    .map((d) => userShifts.find((s) => s.date === d))
+                    .filter((s): s is Shift => s != null);
+                  const hasShiftThisWeek = weekShifts.length > 0;
+                  const firstWeek = weekShifts[0];
+                  const firstWeekTime =
+                    firstWeek && firstWeek.startPlanned !== ENTRY_NONE
+                      ? `${firstWeek.startPlanned} - ${firstWeek.endPlanned}`
+                      : firstWeek
+                        ? "稼働予定なし"
+                        : null;
                   const recentShifts = [...userShifts].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
                   return (
-                    <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                    <tr
+                      key={mem.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setShiftEditMember(mem)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShiftEditMember(mem); } }}
+                      className="cursor-pointer border-b border-slate-100 hover:bg-slate-50/50 focus:bg-slate-50/80 focus:outline-none"
+                    >
                       <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
                       <td className="px-3 py-2.5 text-center">
                         {hasShiftThisWeek ? (
-                          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">登録済</span>
+                          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800" title="登録済み">
+                            {firstWeekTime ?? "登録済"}
+                          </span>
                         ) : (
                           <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">未登録</span>
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-slate-600">
-                        {recentShifts.length === 0 ? "—" : recentShifts.map((s) => `${formatDisplayDate(s.date)} ${s.startPlanned}～${s.endPlanned}`).join(" / ")}
+                        {recentShifts.length === 0
+                          ? "—"
+                          : recentShifts.map((s) => `${formatDisplayDate(s.date)} ${s.startPlanned === ENTRY_NONE ? "稼働予定なし" : `${s.startPlanned}～${s.endPlanned}`}`).join(" / ")}
                       </td>
                     </tr>
                   );
@@ -1374,6 +1483,97 @@ function AdminDashboard(props: {
               </tbody>
             </table>
           </div>
+
+          {shiftEditMember !== null && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" aria-modal="true" role="dialog">
+              <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg">
+                <h3 className="mb-1 text-sm font-semibold text-slate-800">{shiftEditMember.name} の稼働予定（エントリー）を編集</h3>
+                <p className="mb-4 text-xs text-slate-500">対象週: {formatDisplayDate(targetWeekDates[0])} ～ {formatDisplayDate(targetWeekDates[6])}</p>
+                <form onSubmit={handleSaveShiftWeek} className="space-y-3">
+                  {targetWeekDates.map((dateStr) => {
+                    const f = shiftWeekForm[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
+                    const dayNone = f.s1 === ENTRY_NONE;
+                    const optsWithNone = [ENTRY_NONE, ...get15MinOptions()];
+                    return (
+                      <div key={dateStr} className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="text-xs font-medium text-slate-700">{formatDisplayDate(dateStr)}</span>
+                          <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                            <input
+                              type="checkbox"
+                              checked={dayNone}
+                              onChange={(e) => setAdminShiftDayNone(dateStr, e.target.checked)}
+                              className="rounded border-slate-300"
+                            />
+                            この日の稼働予定なし
+                          </label>
+                        </div>
+                        {!dayNone && (
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="w-12 text-xs text-slate-500">予定1</span>
+                              <select
+                                value={f.s1}
+                                onChange={(e) => updateShiftDay(dateStr, "s1", e.target.value)}
+                                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                              >
+                                {optsWithNone.map((t) => (
+                                  <option key={t} value={t}>{t}</option>
+                                ))}
+                              </select>
+                              <span className="text-slate-400">～</span>
+                              <select
+                                value={f.e1}
+                                onChange={(e) => updateShiftDay(dateStr, "e1", e.target.value)}
+                                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                              >
+                                {optsWithNone.map((t) => (
+                                  <option key={t} value={t}>{t}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="w-12 text-xs text-slate-500">予定2</span>
+                              <select
+                                value={f.s2}
+                                onChange={(e) => updateShiftDay(dateStr, "s2", e.target.value)}
+                                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                              >
+                                <option value="">—</option>
+                                {get15MinOptions().map((t) => (
+                                  <option key={t} value={t}>{t}</option>
+                                ))}
+                              </select>
+                              <span className="text-slate-400">～</span>
+                              <select
+                                value={f.e2}
+                                onChange={(e) => updateShiftDay(dateStr, "e2", e.target.value)}
+                                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                              >
+                                <option value="">—</option>
+                                {get15MinOptions().map((t) => (
+                                  <option key={t} value={t}>{t}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        )}
+                        {dayNone && <p className="text-xs text-slate-500">稼働予定なし</p>}
+                      </div>
+                    );
+                  })}
+                  <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
+                    <button type="button" onClick={() => setShiftEditMember(null)} className="rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                      キャンセル
+                    </button>
+                    <button type="submit" className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600">
+                      保存
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -1869,6 +2069,8 @@ function HistorySection(props: {
   );
 }
 
+const ENTRY_NONE = "なし";
+
 type WeekFormState = Record<string, { s1: string; e1: string; s2: string; e2: string }>;
 
 function ShiftTab(props: {
@@ -1878,16 +2080,23 @@ function ShiftTab(props: {
   onRefresh: () => void;
 }) {
   const { userId, shifts, onSave, onRefresh } = props;
-  const options = get15MinOptions();
+  const timeOptions = get15MinOptions();
+  const optionsWithNone = [ENTRY_NONE, ...timeOptions];
   const [exceptionMode, setExceptionMode] = useState(false);
   const [weekStart, setWeekStart] = useState("");
   const [weekForm, setWeekForm] = useState<WeekFormState>({});
 
-  const targetStart = weekStart || getTargetWeekStart();
+  const targetStart = weekStart || getFirstOpenWeekStart();
   const weekDates = getWeekDates(targetStart);
   const deadline = getDeadlineForWeek(targetStart);
   const isPastDeadline = new Date() > deadline;
   const byDate = getShiftsByDateForWeek(shifts, targetStart);
+
+  const weekOptionsAll: string[] = [];
+  for (let i = 0; i <= 4; i++) {
+    weekOptionsAll.push(addWeeksToWeekStart(getTargetWeekStart(), i));
+  }
+  const weekOptions = weekOptionsAll.filter((ws) => isWeekOpenForEntry(ws));
 
   useEffect(() => {
     const dates = getWeekDates(targetStart);
@@ -1895,9 +2104,10 @@ function ShiftTab(props: {
     const next: WeekFormState = {};
     dates.forEach((dateStr) => {
       const s = map.get(dateStr);
+      const isNone = s && s.startPlanned === ENTRY_NONE;
       next[dateStr] = {
-        s1: s ? s.startPlanned : "09:00",
-        e1: s ? s.endPlanned : "18:00",
+        s1: isNone ? ENTRY_NONE : (s ? s.startPlanned : "09:00"),
+        e1: isNone ? ENTRY_NONE : (s ? s.endPlanned : "18:00"),
         s2: s && s.startPlanned2 ? s.startPlanned2 : "",
         e2: s && s.endPlanned2 ? s.endPlanned2 : "",
       };
@@ -1908,8 +2118,18 @@ function ShiftTab(props: {
   const updateDay = (dateStr: string, field: "s1" | "e1" | "s2" | "e2", value: string) => {
     setWeekForm((prev) => {
       const cur = prev[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
-      return { ...prev, [dateStr]: { ...cur, [field]: value } };
+      const next = { ...cur, [field]: value };
+      if (field === "s1" && value === ENTRY_NONE) next.e1 = ENTRY_NONE;
+      if (field === "e1" && value === ENTRY_NONE) next.s1 = ENTRY_NONE;
+      return { ...prev, [dateStr]: next };
     });
+  };
+
+  const setDayNone = (dateStr: string, none: boolean) => {
+    setWeekForm((prev) => ({
+      ...prev,
+      [dateStr]: none ? { s1: ENTRY_NONE, e1: ENTRY_NONE, s2: "", e2: "" } : { s1: "09:00", e1: "18:00", s2: "", e2: "" },
+    }));
   };
 
   const handleSubmitWeek = (e: React.FormEvent) => {
@@ -1923,9 +2143,9 @@ function ShiftTab(props: {
         userId,
         date: dateStr,
         startPlanned: f.s1,
-        endPlanned: f.e1,
+        endPlanned: f.s1 === ENTRY_NONE ? ENTRY_NONE : f.e1,
       };
-      if (f.s2 && f.e2) {
+      if (f.s1 !== ENTRY_NONE && f.s2 && f.e2) {
         return { ...base, startPlanned2: f.s2, endPlanned2: f.e2 };
       }
       return base;
@@ -1933,13 +2153,6 @@ function ShiftTab(props: {
     onSave([...newShifts, ...otherShifts]);
     onRefresh();
   };
-
-  const weekOptions: string[] = [];
-  for (let i = -4; i <= 2; i++) {
-    const d = new Date();
-    d.setDate(d.getDate() + 7 * i);
-    weekOptions.push(getWeekStart(d));
-  }
 
   return (
     <>
@@ -1950,9 +2163,9 @@ function ShiftTab(props: {
             予定の登録をお願いします
           </p>
         </div>
-        {exceptionMode && (
+        {exceptionMode && weekOptions.length > 0 && (
           <div className="mb-4">
-            <label className="mb-1 block text-sm text-slate-600">対象週を選択</label>
+            <label className="mb-1 block text-sm text-slate-600">対象週を選択（登録可能な週のみ表示）</label>
             <select
               value={targetStart}
               onChange={(e) => setWeekStart(e.target.value)}
@@ -1973,77 +2186,108 @@ function ShiftTab(props: {
             </select>
           </div>
         )}
+        {isPastDeadline && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            この週の登録締め切り（前週金曜 23:59）を過ぎているため編集できません。次週以降の稼働予定のみ登録可能です。対象週を切り替えてください。
+          </div>
+        )}
         <p className="mb-4 text-sm text-slate-600">
           {exceptionMode ? "選択した週の稼働予定を入力・修正できます。" : `${formatDisplayDate(weekDates[0])} ～ ${formatDisplayDate(weekDates[6])}`}
+          {!isPastDeadline && <span className="ml-1 text-xs text-slate-500">（締切: 前週金曜 23:59）</span>}
         </p>
         <form onSubmit={handleSubmitWeek} className="space-y-4">
-          {weekDates.map((dateStr) => (
-            <div key={dateStr} className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
-              <div className="mb-2 font-medium text-slate-800">{formatDisplayDate(dateStr)}</div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="w-14 text-xs text-slate-500">予定1</span>
-                  <select
-                    value={weekForm[dateStr] ? weekForm[dateStr].s1 : "09:00"}
-                    onChange={(e) => updateDay(dateStr, "s1", e.target.value)}
-                    className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-                  >
-                    {options.map((o) => (
-                      <option key={o} value={o}>{o}</option>
-                    ))}
-                  </select>
-                  <span className="text-slate-400">～</span>
-                  <select
-                    value={weekForm[dateStr] ? weekForm[dateStr].e1 : "18:00"}
-                    onChange={(e) => updateDay(dateStr, "e1", e.target.value)}
-                    className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-                  >
-                    {options.map((o) => (
-                      <option key={o} value={o}>{o}</option>
-                    ))}
-                  </select>
+          {weekDates.map((dateStr) => {
+            const f = weekForm[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
+            const dayNone = f.s1 === ENTRY_NONE;
+            return (
+              <div key={dateStr} className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="font-medium text-slate-800">{formatDisplayDate(dateStr)}</span>
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={dayNone}
+                      onChange={(e) => setDayNone(dateStr, e.target.checked)}
+                      disabled={isPastDeadline}
+                      className="rounded border-slate-300"
+                    />
+                    この日の稼働予定なし
+                  </label>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="w-14 text-xs text-slate-500">予定2</span>
-                  <select
-                    value={weekForm[dateStr] ? weekForm[dateStr].s2 : ""}
-                    onChange={(e) => updateDay(dateStr, "s2", e.target.value)}
-                    className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-                  >
-                    <option value="">—</option>
-                    {options.map((o) => (
-                      <option key={o} value={o}>{o}</option>
-                    ))}
-                  </select>
-                  <span className="text-slate-400">～</span>
-                  <select
-                    value={weekForm[dateStr] ? weekForm[dateStr].e2 : ""}
-                    onChange={(e) => updateDay(dateStr, "e2", e.target.value)}
-                    className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-                  >
-                    <option value="">—</option>
-                    {options.map((o) => (
-                      <option key={o} value={o}>{o}</option>
-                    ))}
-                  </select>
-                </div>
+                {!dayNone && (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="w-14 text-xs text-slate-500">予定1</span>
+                      <select
+                        value={f.s1}
+                        onChange={(e) => updateDay(dateStr, "s1", e.target.value)}
+                        disabled={isPastDeadline}
+                        className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                      >
+                        {optionsWithNone.map((o) => (
+                          <option key={o} value={o}>{o}</option>
+                        ))}
+                      </select>
+                      <span className="text-slate-400">～</span>
+                      <select
+                        value={f.e1}
+                        onChange={(e) => updateDay(dateStr, "e1", e.target.value)}
+                        disabled={isPastDeadline}
+                        className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                      >
+                        {optionsWithNone.map((o) => (
+                          <option key={o} value={o}>{o}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="w-14 text-xs text-slate-500">予定2</span>
+                      <select
+                        value={f.s2}
+                        onChange={(e) => updateDay(dateStr, "s2", e.target.value)}
+                        disabled={isPastDeadline}
+                        className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                      >
+                        <option value="">—</option>
+                        {timeOptions.map((o) => (
+                          <option key={o} value={o}>{o}</option>
+                        ))}
+                      </select>
+                      <span className="text-slate-400">～</span>
+                      <select
+                        value={f.e2}
+                        onChange={(e) => updateDay(dateStr, "e2", e.target.value)}
+                        disabled={isPastDeadline}
+                        className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                      >
+                        <option value="">—</option>
+                        {timeOptions.map((o) => (
+                          <option key={o} value={o}>{o}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+                {dayNone && <p className="text-xs text-slate-500">稼働予定なし（本人の意思で登録）</p>}
               </div>
-            </div>
-          ))}
-          <button type="submit" className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 sm:w-auto">
-            この週を保存
-          </button>
+            );
+          })}
+          {!isPastDeadline && (
+            <button type="submit" className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 sm:w-auto">
+              この週を保存
+            </button>
+          )}
         </form>
         <button
           type="button"
           onClick={() => {
             setExceptionMode(!exceptionMode);
             if (exceptionMode) setWeekStart("");
-            else setWeekStart(getTargetWeekStart());
+            else setWeekStart(getFirstOpenWeekStart());
           }}
           className="mt-4 text-sm text-slate-500 underline hover:text-slate-700"
         >
-          {exceptionMode ? "通常モードに戻る" : "稼働可能日時の登録を忘れた方はこちら"}
+          {exceptionMode ? "通常モードに戻る" : "別の週の稼働予定を登録する"}
         </button>
       </section>
 
@@ -2056,18 +2300,20 @@ function ShiftTab(props: {
             [...shifts]
               .sort((a, b) => b.date.localeCompare(a.date))
               .slice(0, 14)
-              .map((s) => (
-                <div key={s.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-5 sm:py-4">
-                  <div className="text-slate-800">
-                    <span className="font-medium">{formatDisplayDate(s.date)}</span>
-                    <span className="ml-2 text-sm text-slate-500">
-                      {s.startPlanned}～{s.endPlanned}
-                      {s.startPlanned2 && s.endPlanned2 ? ` / ${s.startPlanned2}～${s.endPlanned2}` : ""}
-                    </span>
+              .map((s) => {
+                const isNone = s.startPlanned === ENTRY_NONE;
+                return (
+                  <div key={s.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-5 sm:py-4">
+                    <div className="text-slate-800">
+                      <span className="font-medium">{formatDisplayDate(s.date)}</span>
+                      <span className="ml-2 text-sm text-slate-500">
+                        {isNone ? "稼働予定なし" : `${s.startPlanned}～${s.endPlanned}${s.startPlanned2 && s.endPlanned2 ? ` / ${s.startPlanned2}～${s.endPlanned2}` : ""}`}
+                      </span>
+                    </div>
+                    <div className="text-right font-semibold text-slate-700">{isNone ? "—" : formatDuration(getShiftPlannedMinutes(s))}</div>
                   </div>
-                  <div className="text-right font-semibold text-slate-700">{formatDuration(getShiftPlannedMinutes(s))}</div>
-                </div>
-              ))
+                );
+              })
           )}
         </div>
       </section>
@@ -2398,6 +2644,11 @@ export default function DashboardPage() {
     currentYearMonth === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
   const selectableMonths = getSelectableMonths(records, shifts, kpiRecords);
 
+  const memberTargetWeekStart = getTargetWeekStart();
+  const memberTargetWeekDates = getWeekDates(memberTargetWeekStart);
+  const memberHasEntryForTargetWeek =
+    !currentUserId || getShiftsForUser(allShifts, currentUserId).some((s) => memberTargetWeekDates.includes(s.date));
+
   const handleStart = async () => {
     if (openRecord || !currentUserId) return;
     const now = new Date();
@@ -2641,6 +2892,10 @@ export default function DashboardPage() {
               await saveRecordsForUser(memberId, records);
               await refresh();
             }}
+            onSaveMemberShifts={async (memberId, shifts) => {
+              await saveShiftsForUser(memberId, shifts);
+              await refresh();
+            }}
             deviationApprovedIds={deviationApprovedIds}
             onApproveDeviation={async (workRecordId) => {
               await saveDeviationApproval(workRecordId);
@@ -2649,6 +2904,19 @@ export default function DashboardPage() {
           />
         ) : tab === "home" ? (
           <>
+            {!memberHasEntryForTargetWeek && (
+              <section className="mb-6 rounded-xl border-2 border-amber-400 bg-amber-50 p-5 shadow-md">
+                <h2 className="mb-2 text-base font-bold text-amber-900">次週の稼働予定が登録されていません</h2>
+                <p className="mb-4 text-sm text-amber-800">前週金曜 23:59 までに、次週の稼働予定（エントリー）を登録してください。「稼働予定」タブから登録できます。</p>
+                <button
+                  type="button"
+                  onClick={() => setTab("shift")}
+                  className="rounded bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700"
+                >
+                  稼働予定を登録する
+                </button>
+              </section>
+            )}
             <section className="mb-6 rounded-xl bg-slate-800 p-6 text-white shadow-md sm:mb-8">
               <h2 className="mb-1 text-sm font-medium text-slate-300">当日の活動時間</h2>
               <p className="text-3xl font-bold sm:text-4xl">{formatDuration(todayMinutes)}</p>

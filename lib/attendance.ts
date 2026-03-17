@@ -298,15 +298,20 @@ export function timeToMinutes(hhmm: string): number {
   return (h ?? 0) * 60 + (m ?? 0);
 }
 
-/** 稼働予定の時間（分）を計算（予定1+2） */
+/** 「稼働予定なし」の値。このときは時間 0 として扱う */
+export const SHIFT_ENTRY_NONE = "なし";
+
+/** 稼働予定の時間（分）を計算（予定1+2）。稼働予定なしの場合は 0 */
 export function getShiftPlannedMinutes(shift: Shift): number {
+  if (shift.startPlanned === SHIFT_ENTRY_NONE || shift.startPlanned === "なし") return 0;
   const start = timeToMinutes(shift.startPlanned);
   const end = timeToMinutes(shift.endPlanned);
+  if (Number.isNaN(start) || Number.isNaN(end)) return 0;
   let mins = Math.max(0, end - start);
-  if (shift.startPlanned2 != null && shift.endPlanned2 != null) {
+  if (shift.startPlanned2 != null && shift.endPlanned2 != null && shift.startPlanned2 !== "なし" && shift.endPlanned2 !== "なし") {
     const s2 = timeToMinutes(shift.startPlanned2);
     const e2 = timeToMinutes(shift.endPlanned2);
-    mins += Math.max(0, e2 - s2);
+    if (!Number.isNaN(s2) && !Number.isNaN(e2)) mins += Math.max(0, e2 - s2);
   }
   return mins;
 }
@@ -349,6 +354,28 @@ export function getDeadlineForWeek(weekStart: string): Date {
   const friday = new Date(y, m - 1, d - 3);
   friday.setHours(23, 59, 0, 0);
   return friday;
+}
+
+/** 週開始日（YYYY-MM-DD）に 7n 日を加算した週開始を返す */
+export function addWeeksToWeekStart(weekStart: string, weeks: number): string {
+  const [y, m, d] = weekStart.split("-").map(Number);
+  const date = new Date(y, m - 1, d + 7 * weeks);
+  return toDateString(date);
+}
+
+/** 締め切り前の最初の週（登録可能な週）の月曜日。次週分は前週金曜23:59締めのため、締め切り過ぎなら次々週以降を返す */
+export function getFirstOpenWeekStart(): string {
+  let w = getTargetWeekStart();
+  const now = new Date();
+  while (now > getDeadlineForWeek(w)) {
+    w = addWeeksToWeekStart(w, 1);
+  }
+  return w;
+}
+
+/** 指定週がまだ登録可能か（前週金曜23:59より前か） */
+export function isWeekOpenForEntry(weekStart: string): boolean {
+  return new Date() <= getDeadlineForWeek(weekStart);
 }
 
 /** 指定週の稼働予定を日付でマップ */
