@@ -732,6 +732,8 @@ function AdminDashboard(props: {
   const [shiftEditMember, setShiftEditMember] = useState<Member | null>(null);
   const [shiftWeekForm, setShiftWeekForm] = useState<Record<string, { s1: string; e1: string; s2: string; e2: string }>>({});
   const [productivityPeriodKey, setProductivityPeriodKey] = useState("this_week");
+  const [slackTestSending, setSlackTestSending] = useState(false);
+  const [slackTestResult, setSlackTestResult] = useState<string | null>(null);
 
   const y = new Date().getFullYear();
   const m = new Date().getMonth() + 1;
@@ -891,6 +893,24 @@ function AdminDashboard(props: {
       const reason = e instanceof Error ? e.message : String(e);
       console.error("メンバー追加エラー:", e);
       alert(`追加に失敗しました：${reason}`);
+    }
+  };
+
+  const handleSlackTestSend = async () => {
+    setSlackTestResult(null);
+    setSlackTestSending(true);
+    try {
+      const res = await fetch("/api/slack-daily", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        setSlackTestResult("送信しました。Slackをご確認ください。");
+      } else {
+        setSlackTestResult(`送信に失敗しました：${data.error ?? data.detail ?? res.status}`);
+      }
+    } catch (e) {
+      setSlackTestResult(`エラー：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSlackTestSending(false);
     }
   };
 
@@ -1781,6 +1801,23 @@ function AdminDashboard(props: {
       {adminSection === "settings" && (
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-medium text-slate-700">管理設定（メンバー追加・編集）</h2>
+
+          <div className="mb-6 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+            <span className="text-xs font-medium text-slate-600">Slack 本日稼働予定通知（毎朝9:00 JST に自動送信）</span>
+            <button
+              type="button"
+              onClick={handleSlackTestSend}
+              disabled={slackTestSending}
+              className="rounded bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-500 disabled:opacity-50"
+            >
+              {slackTestSending ? "送信中…" : "Slack通知テスト送信"}
+            </button>
+            {slackTestResult != null && (
+              <span className={`text-sm ${slackTestResult.startsWith("送信しました") ? "text-green-700" : "text-red-700"}`}>
+                {slackTestResult}
+              </span>
+            )}
+          </div>
 
           <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-5 sm:p-6">
             <p className="mb-4 text-sm font-medium text-slate-700">新規メンバー追加</p>
