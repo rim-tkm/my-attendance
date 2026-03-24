@@ -1,18 +1,16 @@
 /**
- * 毎朝の Slack 通知（本日の業務委託の稼働予定者）。
- * - データ: Supabase `shifts`（当日・日本時間）＋有効ユーザー `users`
- * - 認証: `Authorization` が `Bearer ${CRON_SECRET}` と完全一致する場合のみ実行
- * - Cron: vercel.json で 0 0 * * *（UTC 0:00 = JST 9:00）に GET 本エンドポイント
+ * 毎日 JST 0:00（UTC 15:00）に前日のチーム実績を Slack へ通知。
+ * - 認証: `Authorization: Bearer ${CRON_SECRET}`（slack-daily と共通）
+ * - Cron: vercel.json `0 15 * * *`
  */
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/cron-verify";
-import { getTodayJstDateString, sendSlackDailyForDate } from "@/lib/slack-daily";
+import { getYesterdayJstDateString, sendSlackReportForDate } from "@/lib/slack-report";
 
-/** Vercel Cron: GET /api/slack-daily + Authorization: Bearer CRON_SECRET */
 export async function GET(request: NextRequest) {
   const denied = verifyCronSecret(request);
   if (denied) return denied;
-  const result = await sendSlackDailyForDate(getTodayJstDateString());
+  const result = await sendSlackReportForDate(getYesterdayJstDateString());
   if (!result.ok) {
     return NextResponse.json(
       { error: result.error, detail: result.detail, ok: false },
@@ -22,15 +20,15 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ ok: true, date: result.date });
 }
 
-/** 手動実行（curl 等）: POST + Authorization: Bearer CRON_SECRET、body: { "date": "YYYY-MM-DD" } 省略可 */
+/** 手動: POST + Bearer CRON_SECRET、body `{ "date": "YYYY-MM-DD" }` で対象日を指定可 */
 export async function POST(request: NextRequest) {
   const denied = verifyCronSecret(request);
   if (denied) return denied;
   const body = await request.json().catch(() => ({}));
   const dateOverride = typeof body?.date === "string" ? body.date : null;
   const targetDate =
-    dateOverride && /^\d{4}-\d{2}-\d{2}$/.test(dateOverride) ? dateOverride : getTodayJstDateString();
-  const result = await sendSlackDailyForDate(targetDate);
+    dateOverride && /^\d{4}-\d{2}-\d{2}$/.test(dateOverride) ? dateOverride : getYesterdayJstDateString();
+  const result = await sendSlackReportForDate(targetDate);
   if (!result.ok) {
     return NextResponse.json(
       { error: result.error, detail: result.detail, ok: false },

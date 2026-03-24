@@ -1,6 +1,5 @@
 import type { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { verifyUser } from "./users";
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -12,8 +11,14 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         if (!credentials?.loginId || !credentials?.password) return null;
-        const user = await verifyUser(credentials.loginId, credentials.password);
-        return user;
+        const { loginUser } = await import("@/lib/supabase-data");
+        const m = await loginUser(credentials.loginId, credentials.password);
+        if (!m) return null;
+        return {
+          id: m.id,
+          loginId: (m.loginAccount ?? credentials.loginId).trim(),
+          name: m.name,
+        };
       },
     }),
   ],
@@ -41,5 +46,5 @@ export const authOptions: NextAuthOptions = {
     strategy: "jwt",
     maxAge: 30 * 24 * 60 * 60, // 30日
   },
-  secret: process.env.AUTH_SECRET,
+  secret: process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET,
 };

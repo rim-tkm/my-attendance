@@ -336,6 +336,23 @@ export function getWeekDates(weekStart: string): string[] {
   return dates;
 }
 
+/** 開始日・終了日を含む連続日付（入れ替えて正規化）。最長約2年で打ち切り */
+export function getDateStringsInclusive(startDate: string, endDate: string): string[] {
+  const start = startDate <= endDate ? startDate : endDate;
+  const end = startDate <= endDate ? endDate : startDate;
+  const out: string[] = [];
+  let cur = start;
+  let guard = 0;
+  while (cur <= end && guard < 800) {
+    out.push(cur);
+    guard++;
+    const [y, m, d] = cur.split("-").map(Number);
+    const next = new Date(y, m - 1, d + 1);
+    cur = toDateString(next);
+  }
+  return out;
+}
+
 /** 提出対象週の月曜日：土日なら来週月曜、それ以外は今週月曜 */
 export function getTargetWeekStart(): string {
   const now = new Date();

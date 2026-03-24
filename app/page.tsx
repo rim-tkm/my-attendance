@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { signIn, signOut } from "next-auth/react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import type { WorkRecord, OpenRecord, Shift, KpiRecord, Member } from "@/lib/attendance";
 import {
   DEFAULT_HOURLY_RATE,
@@ -35,11 +36,28 @@ import {
   isWeekOpenForEntry,
   addWeeksToWeekStart,
   getShiftsByDateForWeek,
+  getDateStringsInclusive,
+  SHIFT_ENTRY_NONE,
   getKpiRates,
   safeRatePercent,
   getTotalMinutesForMonthByUser,
   calcMonthlyPay,
 } from "@/lib/attendance";
+import {
+  addCalendarDays,
+  buildMemberRoiRowsForRange,
+  buildRoiCsvDayRows,
+  buildRoiCsvContent,
+  buildTeamDailyRoiSeriesForRange,
+  firstDayOfRollingCalendarMonths,
+  getMonthDateRange,
+  normalizeRoiRange,
+  ROI_YEN_PER_CALL,
+  ROI_YEN_PER_FOLLOWUP,
+  ROI_YEN_PER_NON_DECISION_APO,
+  ROI_YEN_PER_DECISION_APO,
+  type DailyRoiPoint,
+} from "@/lib/roi-analysis";
 import {
   loadMembers,
   addMember,
@@ -73,6 +91,67 @@ function formatDisplayDate(dateStr: string): string {
   const d = parts[2];
   const date = new Date(y, (m || 1) - 1, d || 1);
   return date.toLocaleDateString("ja-JP", {
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  });
+}
+
+type AdminShiftDayFields = { s1: string; e1: string; s2: string; e2: string };
+
+function analyzeAdminShiftDay(f: AdminShiftDayFields): {
+  dayNone: boolean;
+  slot1Inverted: boolean;
+  slot2Incomplete: boolean;
+  slot2Inverted: boolean;
+  totalMinutes: number;
+} {
+  const dayNone = f.s1 === SHIFT_ENTRY_NONE;
+  if (dayNone) {
+    return { dayNone: true, slot1Inverted: false, slot2Incomplete: false, slot2Inverted: false, totalMinutes: 0 };
+  }
+  const t1s = timeToMinutes(f.s1);
+  const t1e = timeToMinutes(f.e1);
+  const slot1Inverted = !Number.isNaN(t1s) && !Number.isNaN(t1e) && t1e <= t1s;
+  const slot2Incomplete = Boolean(f.s2) !== Boolean(f.e2);
+  let slot2Inverted = false;
+  if (f.s2 && f.e2) {
+    const u = timeToMinutes(f.s2);
+    const v = timeToMinutes(f.e2);
+    slot2Inverted = !Number.isNaN(u) && !Number.isNaN(v) && v <= u;
+  }
+  let total = 0;
+  if (!slot1Inverted && !Number.isNaN(t1s) && !Number.isNaN(t1e)) total += Math.max(0, t1e - t1s);
+  if (f.s2 && f.e2 && !slot2Inverted) {
+    const u = timeToMinutes(f.s2);
+    const v = timeToMinutes(f.e2);
+    if (!Number.isNaN(u) && !Number.isNaN(v)) total += Math.max(0, v - u);
+  }
+  return { dayNone, slot1Inverted, slot2Incomplete, slot2Inverted, totalMinutes: total };
+}
+
+function adminShiftDayCanSave(f: AdminShiftDayFields): boolean {
+  const a = analyzeAdminShiftDay(f);
+  if (a.dayNone) return true;
+  if (a.slot1Inverted || a.slot2Incomplete || a.slot2Inverted) return false;
+  return a.totalMinutes > 0;
+}
+
+function formatAdminShiftOneDaySummary(s: Shift | undefined): string {
+  if (!s) return "未登録";
+  if (s.startPlanned === SHIFT_ENTRY_NONE) return "稼働予定なし";
+  let t = `${s.startPlanned}～${s.endPlanned}`;
+  if (s.startPlanned2 && s.endPlanned2 && s.startPlanned2.trim() && s.endPlanned2.trim()) {
+    t += ` ／ ${s.startPlanned2}～${s.endPlanned2}`;
+  }
+  return t;
+}
+
+function formatShiftSectionDateHeading(dateStr: string): string {
+  const parts = dateStr.split("-").map(Number);
+  const date = new Date(parts[0], (parts[1] || 1) - 1, parts[2] || 1);
+  return date.toLocaleDateString("ja-JP", {
+    year: "numeric",
     month: "long",
     day: "numeric",
     weekday: "short",
@@ -660,7 +739,81 @@ function printMemberCombinedPdf(
 }
 
 type Tab = "home" | "shift" | "kpi";
-type AdminSection = "dashboard" | "attendance" | "shift" | "kpi" | "settings";
+type AdminSection = "dashboard" | "attendance" | "shift" | "kpi" | "settings" | "roi";
+
+function RoiTrendChart({ points }: { points: DailyRoiPoint[] }) {
+  const vw = 640;
+  const vh = 200;
+  const pl = 44;
+  const pr = 10;
+  const pt = 12;
+  const pb = 30;
+  const gw = vw - pl - pr;
+  const gh = vh - pt - pb;
+  const n = points.length;
+  if (n === 0) {
+    return <p className="text-sm text-slate-500">表示する日付がありません。</p>;
+  }
+  const hasAny = points.some((p) => p.roi != null && Number.isFinite(p.roi));
+  if (!hasAny) {
+    return <p className="text-sm text-slate-500">この期間にコストが発生した日がなく、ROI を表示できません。</p>;
+  }
+  const rois = points.filter((p) => p.roi != null && Number.isFinite(p.roi)).map((p) => p.roi as number);
+  let min = Math.min(...rois);
+  let max = Math.max(...rois);
+  if (Math.abs(max - min) < 1e-6) {
+    min = Math.max(0, min - 0.3);
+    max = max + 0.3;
+  }
+  const pad = Math.max((max - min) * 0.1, 0.08);
+  min -= pad;
+  max += pad;
+  const yAt = (roi: number) => pt + gh - ((roi - min) / (max - min)) * gh;
+  const pathParts: string[] = [];
+  let started = false;
+  for (let i = 0; i < n; i++) {
+    const p = points[i];
+    const x = pl + (n <= 1 ? gw / 2 : (i / (n - 1)) * gw);
+    if (p.roi == null || !Number.isFinite(p.roi)) {
+      started = false;
+      continue;
+    }
+    const y = yAt(p.roi);
+    if (!started) {
+      pathParts.push(`M${x.toFixed(1)},${y.toFixed(1)}`);
+      started = true;
+    } else {
+      pathParts.push(`L${x.toFixed(1)},${y.toFixed(1)}`);
+    }
+  }
+  const d = pathParts.join(" ");
+  const refLines: { roi: number; label: string; dash?: string }[] = [
+    { roi: 1, label: "ROI 1.0", dash: "4 3" },
+    { roi: 2, label: "ROI 2.0", dash: "4 3" },
+  ];
+  return (
+    <div className="w-full overflow-x-auto">
+      <svg viewBox={`0 0 ${vw} ${vh}`} className="h-auto w-full max-w-[640px]" preserveAspectRatio="xMidYMid meet" aria-label="チーム日次ROIの推移">
+        <rect x={0} y={0} width={vw} height={vh} fill="#f8fafc" rx={4} />
+        {refLines.map(({ roi, dash }) => {
+          if (roi < min || roi > max) return null;
+          const y = yAt(roi);
+          return (
+            <line key={roi} x1={pl} y1={y} x2={pl + gw} y2={y} stroke="#cbd5e1" strokeWidth={1} strokeDasharray={dash} />
+          );
+        })}
+        <path d={d} fill="none" stroke="#0f172a" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+        <text x={pl} y={vh - 6} fill="#64748b" style={{ fontSize: 10 }}>
+          日付（月内）
+        </text>
+        <text x={4} y={pt + gh / 2} fill="#64748b" style={{ fontSize: 10 }} transform={`rotate(-90 4 ${pt + gh / 2})`}>
+          ROI
+        </text>
+      </svg>
+      <p className="mt-2 text-xs text-slate-500">破線は ROI 1.0（損益分岐目安）と 2.0（高貢献目安）です。チーム全体の日次集計です。</p>
+    </div>
+  );
+}
 
 const KPI_LABELS: { key: keyof Omit<KpiRecord, "id" | "date" | "userId">; label: string }[] = [
   { key: "totalCalls", label: "総コール数" },
@@ -671,7 +824,12 @@ const KPI_LABELS: { key: keyof Omit<KpiRecord, "id" | "date" | "userId">; label:
   { key: "nonDecisionMakerApo", label: "非決裁者アポ数" },
 ];
 
+/** NextAuth Cookie が使えない本番でも Slack 送信できるよう、管理者ログイン時にのみメモリ保持（再読み込みで消える） */
+const slackAdminAuthMemory = { current: null as { loginId: string; password: string } | null };
+
 function AdminDashboard(props: {
+  isAdminUser: boolean;
+  adminLoginAccount: string;
   allRecords: WorkRecord[];
   allOpenRecords: OpenRecord[];
   allShifts: Shift[];
@@ -685,6 +843,8 @@ function AdminDashboard(props: {
   onApproveDeviation: (workRecordId: string) => Promise<void>;
 }) {
   const {
+    isAdminUser,
+    adminLoginAccount,
     allRecords,
     allOpenRecords,
     allShifts,
@@ -731,9 +891,32 @@ function AdminDashboard(props: {
   const [recordListMemberId, setRecordListMemberId] = useState<string | null>(null);
   const [shiftEditMember, setShiftEditMember] = useState<Member | null>(null);
   const [shiftWeekForm, setShiftWeekForm] = useState<Record<string, { s1: string; e1: string; s2: string; e2: string }>>({});
+  const [shiftViewStart, setShiftViewStart] = useState(() => getWeekStart(new Date()));
+  const [shiftViewEnd, setShiftViewEnd] = useState(() => {
+    const ws = getWeekStart(new Date());
+    return getWeekDates(ws)[6];
+  });
   const [productivityPeriodKey, setProductivityPeriodKey] = useState("this_week");
   const [slackTestSending, setSlackTestSending] = useState(false);
   const [slackTestResult, setSlackTestResult] = useState<string | null>(null);
+  const [slackManualReportSending, setSlackManualReportSending] = useState(false);
+  const [roiSlackToast, setRoiSlackToast] = useState<string | null>(null);
+  const [roiYearMonth, setRoiYearMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [roiStartDate, setRoiStartDate] = useState(() => {
+    const d = new Date();
+    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    return getMonthDateRange(ym, toDateString(new Date())).start;
+  });
+  const [roiEndDate, setRoiEndDate] = useState(() => {
+    const d = new Date();
+    const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    return getMonthDateRange(ym, toDateString(new Date())).end;
+  });
+  /** ROI 対象メンバー。null ＝ 全員、配列 ＝ 指定IDのみ（空配列は誰も含めない） */
+  const [roiSelectedMemberIds, setRoiSelectedMemberIds] = useState<string[] | null>(null);
 
   const y = new Date().getFullYear();
   const m = new Date().getMonth() + 1;
@@ -900,12 +1083,12 @@ function AdminDashboard(props: {
     setSlackTestResult(null);
     setSlackTestSending(true);
     try {
-      const res = await fetch("/api/slack-daily", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
+      const { slackDailyTestAction } = await import("@/app/actions/slack-daily");
+      const data = await slackDailyTestAction();
+      if (data.ok) {
         setSlackTestResult("送信しました。Slackをご確認ください。");
       } else {
-        setSlackTestResult(`送信に失敗しました：${data.error ?? data.detail ?? res.status}`);
+        setSlackTestResult(`送信に失敗しました：${data.error ?? data.detail ?? "不明なエラー"}`);
       }
     } catch (e) {
       setSlackTestResult(`エラー：${e instanceof Error ? e.message : String(e)}`);
@@ -996,23 +1179,42 @@ function AdminDashboard(props: {
     return !targetWeekDates.some((d) => userShifts.some((s) => s.date === d));
   });
 
+  const shiftRangeNorm = useMemo(() => {
+    const a = shiftViewStart <= shiftViewEnd ? shiftViewStart : shiftViewEnd;
+    const b = shiftViewStart <= shiftViewEnd ? shiftViewEnd : shiftViewStart;
+    return { start: a, end: b };
+  }, [shiftViewStart, shiftViewEnd]);
+
+  const shiftViewDateList = useMemo(
+    () => getDateStringsInclusive(shiftRangeNorm.start, shiftRangeNorm.end),
+    [shiftRangeNorm.start, shiftRangeNorm.end]
+  );
+
   useEffect(() => {
     if (!shiftEditMember) return;
-    const weekDates = getWeekDates(targetWeekStart);
-    const map = getShiftsByDateForWeek(getShiftsForUser(allShifts, shiftEditMember.id), targetWeekStart);
+    const dates = shiftViewDateList;
+    const userShifts = getShiftsForUser(allShifts, shiftEditMember.id);
     const next: Record<string, { s1: string; e1: string; s2: string; e2: string }> = {};
-    weekDates.forEach((dateStr) => {
-      const s = map.get(dateStr);
+    dates.forEach((dateStr) => {
+      const s = userShifts.find((sh) => sh.date === dateStr);
       const isNone = s && s.startPlanned === ENTRY_NONE;
       next[dateStr] = {
-        s1: isNone ? ENTRY_NONE : (s ? s.startPlanned : "09:00"),
-        e1: isNone ? ENTRY_NONE : (s ? s.endPlanned : "18:00"),
+        s1: isNone ? ENTRY_NONE : s ? s.startPlanned : "09:00",
+        e1: isNone ? ENTRY_NONE : s ? s.endPlanned : "18:00",
         s2: s && s.startPlanned2 ? s.startPlanned2 : "",
         e2: s && s.endPlanned2 ? s.endPlanned2 : "",
       };
     });
     setShiftWeekForm(next);
-  }, [shiftEditMember, targetWeekStart, allShifts]);
+  }, [shiftEditMember, shiftViewDateList, allShifts]);
+
+  const shiftModalCanSave = useMemo(() => {
+    if (!shiftEditMember) return false;
+    return shiftViewDateList.every((dateStr) => {
+      const f = shiftWeekForm[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
+      return adminShiftDayCanSave(f);
+    });
+  }, [shiftEditMember, shiftViewDateList, shiftWeekForm]);
 
   const updateShiftDay = (dateStr: string, field: "s1" | "e1" | "s2" | "e2", value: string) => {
     setShiftWeekForm((prev) => {
@@ -1027,12 +1229,13 @@ function AdminDashboard(props: {
   const handleSaveShiftWeek = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!shiftEditMember) return;
-    const weekDates = getWeekDates(targetWeekStart);
-    const byDate = getShiftsByDateForWeek(getShiftsForUser(allShifts, shiftEditMember.id), targetWeekStart);
-    const otherShifts = allShifts.filter((s) => s.userId === shiftEditMember.id && !weekDates.includes(s.date));
-    const newShifts: Shift[] = weekDates.map((dateStr) => {
+    if (!shiftModalCanSave) return;
+    const dates = shiftViewDateList;
+    const userShifts = getShiftsForUser(allShifts, shiftEditMember.id);
+    const otherShifts = allShifts.filter((s) => s.userId === shiftEditMember.id && !dates.includes(s.date));
+    const newShifts: Shift[] = dates.map((dateStr) => {
       const f = shiftWeekForm[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
-      const existing = byDate.get(dateStr);
+      const existing = userShifts.find((sh) => sh.date === dateStr);
       const base: Shift = {
         id: existing ? existing.id : crypto.randomUUID(),
         userId: shiftEditMember.id,
@@ -1056,13 +1259,144 @@ function AdminDashboard(props: {
     }));
   };
 
+  const applyShiftShortcutThisWeek = () => {
+    const ws = getWeekStart(new Date());
+    setShiftViewStart(ws);
+    setShiftViewEnd(getWeekDates(ws)[6]);
+  };
+  const applyShiftShortcutNextWeek = () => {
+    const ws = getWeekStart(new Date());
+    const n = addWeeksToWeekStart(ws, 1);
+    setShiftViewStart(n);
+    setShiftViewEnd(getWeekDates(n)[6]);
+  };
+  const applyShiftShortcutNextMonth = () => {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const last = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+    setShiftViewStart(toDateString(first));
+    setShiftViewEnd(toDateString(last));
+  };
+
   const navItems: { id: AdminSection; label: string }[] = [
     { id: "dashboard", label: "ダッシュボード" },
     { id: "attendance", label: "稼働状況" },
     { id: "shift", label: "稼働予定管理" },
     { id: "kpi", label: "業務委託KPI" },
+    ...(isAdminUser ? ([{ id: "roi" as const, label: "生産性分析（ROI）" }] as const) : []),
     { id: "settings", label: "管理設定" },
   ];
+
+  useEffect(() => {
+    if (!isAdminUser && adminSection === "roi") setAdminSection("dashboard");
+  }, [isAdminUser, adminSection]);
+
+  const roiSelectableMonths = useMemo(
+    () => getSelectableMonths(allRecords, allShifts, allKpiRecords),
+    [allRecords, allShifts, allKpiRecords]
+  );
+
+  /** ROI は業務委託メンバーのみ（管理者ログイン admin は除外） */
+  const roiTargetMembers = useMemo(
+    () => activeMembers.filter((m) => (m.loginAccount ?? "").toLowerCase() !== "admin"),
+    [activeMembers]
+  );
+
+  const roiFilteredMembers = useMemo(() => {
+    if (roiSelectedMemberIds == null) return roiTargetMembers;
+    const set = new Set(roiSelectedMemberIds);
+    return roiTargetMembers.filter((m) => set.has(m.id));
+  }, [roiTargetMembers, roiSelectedMemberIds]);
+
+  useEffect(() => {
+    const valid = new Set(roiTargetMembers.map((m) => m.id));
+    setRoiSelectedMemberIds((prev) => {
+      if (prev == null) return null;
+      const next = prev.filter((id) => valid.has(id));
+      if (next.length === 0) return null;
+      return next;
+    });
+  }, [roiTargetMembers]);
+
+  const roiRange = useMemo(() => normalizeRoiRange(roiStartDate, roiEndDate), [roiStartDate, roiEndDate]);
+
+  const roiMemberRows = useMemo(
+    () => buildMemberRoiRowsForRange(roiRange.start, roiRange.end, roiFilteredMembers, allKpiRecords, allRecords),
+    [roiRange.start, roiRange.end, roiFilteredMembers, allKpiRecords, allRecords]
+  );
+
+  const roiDailyPoints = useMemo(
+    () => buildTeamDailyRoiSeriesForRange(roiRange.start, roiRange.end, roiFilteredMembers, allKpiRecords, allRecords, todayStr),
+    [roiRange.start, roiRange.end, roiFilteredMembers, allKpiRecords, allRecords, todayStr]
+  );
+
+  const handleRoiMonthChange = (ym: string) => {
+    setRoiYearMonth(ym);
+    const { start, end } = getMonthDateRange(ym, todayStr);
+    setRoiStartDate(start);
+    setRoiEndDate(end);
+  };
+
+  const handleRoiCsvDownload = () => {
+    const rows = buildRoiCsvDayRows(roiRange.start, roiRange.end, roiFilteredMembers, allKpiRecords, allRecords);
+    const blob = new Blob([buildRoiCsvContent(rows)], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const memPart = roiSelectedMemberIds == null ? "all" : `${roiFilteredMembers.length}mem`;
+    a.download = `roi_${roiRange.start}_${roiRange.end}_${memPart}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  useEffect(() => {
+    if (!roiSlackToast) return;
+    const t = setTimeout(() => setRoiSlackToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [roiSlackToast]);
+
+  const handleSlackManualRoiReport = async () => {
+    setRoiSlackToast(null);
+    setSlackManualReportSending(true);
+    try {
+      let loginId = slackAdminAuthMemory.current?.loginId ?? "";
+      let password = slackAdminAuthMemory.current?.password ?? "";
+      if (!loginId || !password) {
+        const fallbackId = adminLoginAccount.trim();
+        if (!fallbackId) {
+          alert("ログイン情報を確認できません。一度ログアウトして再ログインしてください。");
+          return;
+        }
+        const p = window.prompt("Slackに送信するため、管理者のパスワードを入力してください");
+        if (p == null || p === "") {
+          alert("送信をキャンセルしました。");
+          return;
+        }
+        loginId = fallbackId;
+        password = p;
+      }
+      const { slackManualReportAction } = await import("@/app/actions/slack-manual-report");
+      const data = await slackManualReportAction({
+        startDate: roiRange.start,
+        endDate: roiRange.end,
+        memberIds: roiSelectedMemberIds,
+        adminLoginId: loginId,
+        adminPassword: password,
+      });
+      if (!data.ok) {
+        const parts = [data.error, data.detail].filter(Boolean);
+        alert(`送信に失敗しました：${parts.join(" / ") || "理由不明"}`);
+        return;
+      }
+      setRoiSlackToast("送信完了！");
+    } catch (e) {
+      alert(`エラー：${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSlackManualReportSending(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -1529,78 +1863,120 @@ function AdminDashboard(props: {
       )}
 
       {adminSection === "shift" && (
-        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-2 text-sm font-medium text-slate-700">稼働予定管理</h2>
-          <p className="mb-4 text-xs text-slate-500">対象週: {formatDisplayDate(targetWeekDates[0])} ～ {formatDisplayDate(targetWeekDates[6])}。行をクリックするとエントリーを入力・編集できます。</p>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[600px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
-                  <th className="px-3 py-2.5 text-center font-medium text-slate-600">登録状況</th>
-                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">登録済み稼働予定（直近）</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeMembers.map((mem) => {
-                  const userShifts = getShiftsForUser(allShifts, mem.id);
-                  const weekShifts = targetWeekDates
-                    .map((d) => userShifts.find((s) => s.date === d))
-                    .filter((s): s is Shift => s != null);
-                  const hasShiftThisWeek = weekShifts.length > 0;
-                  const firstWeek = weekShifts[0];
-                  const firstWeekTime =
-                    firstWeek && firstWeek.startPlanned !== ENTRY_NONE
-                      ? `${firstWeek.startPlanned} - ${firstWeek.endPlanned}`
-                      : firstWeek
-                        ? "稼働予定なし"
-                        : null;
-                  const recentShifts = [...userShifts].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
-                  return (
-                    <tr
-                      key={mem.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setShiftEditMember(mem)}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setShiftEditMember(mem); } }}
-                      className="cursor-pointer border-b border-slate-100 hover:bg-slate-50/50 focus:bg-slate-50/80 focus:outline-none"
-                    >
-                      <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
-                      <td className="px-3 py-2.5 text-center">
-                        {hasShiftThisWeek ? (
-                          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800" title="登録済み">
-                            {firstWeekTime ?? "登録済"}
-                          </span>
-                        ) : (
-                          <span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">未登録</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-slate-600">
-                        {recentShifts.length === 0
-                          ? "—"
-                          : recentShifts.map((s) => `${formatDisplayDate(s.date)} ${s.startPlanned === ENTRY_NONE ? "稼働予定なし" : `${s.startPlanned}～${s.endPlanned}`}`).join(" / ")}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <h2 className="mb-3 text-sm font-medium text-slate-700">稼働予定管理</h2>
+          <p className="mb-3 text-xs text-slate-500">
+            表示期間を選び、日付ごとの一覧で内容を確認できます。メンバー行をタップすると、選択中の期間まとめて編集できます。
+          </p>
+          <div className="mb-5 flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50/80 p-3 sm:flex-row sm:flex-wrap sm:items-end">
+            <label className="flex min-w-0 flex-1 flex-col gap-1 sm:max-w-[200px]">
+              <span className="text-xs font-medium text-slate-600">開始日</span>
+              <input
+                type="date"
+                value={shiftViewStart}
+                onChange={(e) => setShiftViewStart(e.target.value)}
+                className="w-full min-w-0 rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+              />
+            </label>
+            <label className="flex min-w-0 flex-1 flex-col gap-1 sm:max-w-[200px]">
+              <span className="text-xs font-medium text-slate-600">終了日</span>
+              <input
+                type="date"
+                value={shiftViewEnd}
+                onChange={(e) => setShiftViewEnd(e.target.value)}
+                className="w-full min-w-0 rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={applyShiftShortcutThisWeek}
+                className="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 sm:text-sm"
+              >
+                今週
+              </button>
+              <button
+                type="button"
+                onClick={applyShiftShortcutNextWeek}
+                className="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 sm:text-sm"
+              >
+                来週
+              </button>
+              <button
+                type="button"
+                onClick={applyShiftShortcutNextMonth}
+                className="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 sm:text-sm"
+              >
+                来月
+              </button>
+            </div>
+          </div>
+          <p className="mb-4 text-xs font-medium text-slate-600">
+            表示中: {formatDisplayDate(shiftRangeNorm.start)} ～ {formatDisplayDate(shiftRangeNorm.end)}（{shiftViewDateList.length}日）
+          </p>
+
+          <div className="space-y-5">
+            {shiftViewDateList.map((dateStr) => (
+              <div key={dateStr} className="overflow-hidden rounded-lg border border-slate-200">
+                <div className="border-b border-slate-200 bg-slate-50 px-3 py-2 sm:px-4">
+                  <h3 className="text-xs font-semibold text-slate-800 sm:text-sm">{formatShiftSectionDateHeading(dateStr)}</h3>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-0 max-w-4xl border-collapse text-xs sm:text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100 bg-white">
+                        <th className="w-[28%] min-w-[5rem] px-2 py-2 text-left font-medium text-slate-600 sm:px-3">名前</th>
+                        <th className="px-2 py-2 text-left font-medium text-slate-600 sm:px-3">予定</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activeMembers.map((mem) => {
+                        const s = getShiftsForUser(allShifts, mem.id).find((sh) => sh.date === dateStr);
+                        return (
+                          <tr
+                            key={mem.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setShiftEditMember(mem)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setShiftEditMember(mem);
+                              }
+                            }}
+                            className="cursor-pointer border-b border-slate-100 last:border-b-0 hover:bg-slate-50/80 focus:bg-slate-100 focus:outline-none"
+                          >
+                            <td className="px-2 py-2 font-medium text-slate-800 sm:px-3">{mem.name}</td>
+                            <td className="px-2 py-2 text-slate-600 sm:px-3">
+                              <span className="break-words">{formatAdminShiftOneDaySummary(s)}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
           </div>
 
           {shiftEditMember !== null && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" aria-modal="true" role="dialog">
-              <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 shadow-lg">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-4" aria-modal="true" role="dialog">
+              <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-lg sm:p-5">
                 <h3 className="mb-1 text-sm font-semibold text-slate-800">{shiftEditMember.name} の稼働予定（エントリー）を編集</h3>
-                <p className="mb-4 text-xs text-slate-500">対象週: {formatDisplayDate(targetWeekDates[0])} ～ {formatDisplayDate(targetWeekDates[6])}</p>
+                <p className="mb-4 text-xs text-slate-500">
+                  期間: {formatDisplayDate(shiftRangeNorm.start)} ～ {formatDisplayDate(shiftRangeNorm.end)}
+                </p>
                 <form onSubmit={handleSaveShiftWeek} className="space-y-3">
-                  {targetWeekDates.map((dateStr) => {
+                  {shiftViewDateList.map((dateStr) => {
                     const f = shiftWeekForm[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
                     const dayNone = f.s1 === ENTRY_NONE;
                     const optsWithNone = [ENTRY_NONE, ...get15MinOptions()];
+                    const a = analyzeAdminShiftDay(f);
                     return (
                       <div key={dateStr} className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
-                        <div className="mb-2 flex items-center justify-between">
-                          <span className="text-xs font-medium text-slate-700">{formatDisplayDate(dateStr)}</span>
+                        <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <span className="text-xs font-medium text-slate-700">{formatShiftSectionDateHeading(dateStr)}</span>
                           <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
                             <input
                               type="checkbox"
@@ -1612,64 +1988,101 @@ function AdminDashboard(props: {
                           </label>
                         </div>
                         {!dayNone && (
-                          <div className="grid gap-2 sm:grid-cols-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="w-12 text-xs text-slate-500">予定1</span>
-                              <select
-                                value={f.s1}
-                                onChange={(e) => updateShiftDay(dateStr, "s1", e.target.value)}
-                                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-                              >
-                                {optsWithNone.map((t) => (
-                                  <option key={t} value={t}>{t}</option>
-                                ))}
-                              </select>
-                              <span className="text-slate-400">～</span>
-                              <select
-                                value={f.e1}
-                                onChange={(e) => updateShiftDay(dateStr, "e1", e.target.value)}
-                                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-                              >
-                                {optsWithNone.map((t) => (
-                                  <option key={t} value={t}>{t}</option>
-                                ))}
-                              </select>
+                          <>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
+                                <span className="w-10 shrink-0 text-xs text-slate-500 sm:w-12">予定1</span>
+                                <select
+                                  value={f.s1}
+                                  onChange={(e) => updateShiftDay(dateStr, "s1", e.target.value)}
+                                  className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1.5 py-1.5 text-xs sm:px-2 sm:text-sm"
+                                >
+                                  {optsWithNone.map((t) => (
+                                    <option key={t} value={t}>
+                                      {t}
+                                    </option>
+                                  ))}
+                                </select>
+                                <span className="shrink-0 text-slate-400">～</span>
+                                <select
+                                  value={f.e1}
+                                  onChange={(e) => updateShiftDay(dateStr, "e1", e.target.value)}
+                                  className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1.5 py-1.5 text-xs sm:px-2 sm:text-sm"
+                                >
+                                  {optsWithNone.map((t) => (
+                                    <option key={t} value={t}>
+                                      {t}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
+                                <span className="w-10 shrink-0 text-xs text-slate-500 sm:w-12">予定2</span>
+                                <select
+                                  value={f.s2}
+                                  onChange={(e) => updateShiftDay(dateStr, "s2", e.target.value)}
+                                  className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1.5 py-1.5 text-xs sm:px-2 sm:text-sm"
+                                >
+                                  <option value="">—</option>
+                                  {get15MinOptions().map((t) => (
+                                    <option key={t} value={t}>
+                                      {t}
+                                    </option>
+                                  ))}
+                                </select>
+                                <span className="shrink-0 text-slate-400">～</span>
+                                <select
+                                  value={f.e2}
+                                  onChange={(e) => updateShiftDay(dateStr, "e2", e.target.value)}
+                                  className="min-w-0 flex-1 rounded border border-slate-300 bg-white px-1.5 py-1.5 text-xs sm:px-2 sm:text-sm"
+                                >
+                                  <option value="">—</option>
+                                  {get15MinOptions().map((t) => (
+                                    <option key={t} value={t}>
+                                      {t}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
                             </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="w-12 text-xs text-slate-500">予定2</span>
-                              <select
-                                value={f.s2}
-                                onChange={(e) => updateShiftDay(dateStr, "s2", e.target.value)}
-                                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                            <div className="mt-2 space-y-1">
+                              {a.slot1Inverted && (
+                                <p className="text-xs font-medium text-red-600">終了時間は開始時間より後の時刻にしてください</p>
+                              )}
+                              {a.slot2Incomplete && (
+                                <p className="text-xs font-medium text-red-600">予定2は開始・終了を両方指定するか、両方空にしてください</p>
+                              )}
+                              {a.slot2Inverted && (
+                                <p className="text-xs font-medium text-red-600">予定2: 終了時間は開始時間より後の時刻にしてください</p>
+                              )}
+                              <p
+                                className={`text-xs font-medium ${!dayNone && a.totalMinutes <= 0 ? "text-red-600" : "text-slate-600"}`}
                               >
-                                <option value="">—</option>
-                                {get15MinOptions().map((t) => (
-                                  <option key={t} value={t}>{t}</option>
-                                ))}
-                              </select>
-                              <span className="text-slate-400">～</span>
-                              <select
-                                value={f.e2}
-                                onChange={(e) => updateShiftDay(dateStr, "e2", e.target.value)}
-                                className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
-                              >
-                                <option value="">—</option>
-                                {get15MinOptions().map((t) => (
-                                  <option key={t} value={t}>{t}</option>
-                                ))}
-                              </select>
+                                合計稼働時間（目安）: {dayNone ? "—" : formatDuration(a.totalMinutes)}
+                                {!dayNone && a.totalMinutes <= 0 && !a.slot1Inverted && (
+                                  <span className="ml-1">（0時間以下のため保存できません）</span>
+                                )}
+                              </p>
                             </div>
-                          </div>
+                          </>
                         )}
                         {dayNone && <p className="text-xs text-slate-500">稼働予定なし</p>}
                       </div>
                     );
                   })}
-                  <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
-                    <button type="button" onClick={() => setShiftEditMember(null)} className="rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                  <div className="flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end sm:gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShiftEditMember(null)}
+                      className="rounded border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
                       キャンセル
                     </button>
-                    <button type="submit" className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600">
+                    <button
+                      type="submit"
+                      disabled={!shiftModalCanSave}
+                      className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
                       保存
                     </button>
                   </div>
@@ -1798,12 +2211,274 @@ function AdminDashboard(props: {
         </section>
       )}
 
+      {adminSection === "roi" && isAdminUser && (
+        <section className="space-y-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div>
+            <h2 className="text-sm font-medium text-slate-700">生産性分析（ROI）</h2>
+            <p className="mt-1 max-w-2xl text-xs text-slate-500">
+              創出価値額＝総コール×{ROI_YEN_PER_CALL}円＋追いかけ作成×{ROI_YEN_PER_FOLLOWUP}円＋非決裁者アポ×
+              {ROI_YEN_PER_NON_DECISION_APO}円＋決裁者アポ×{ROI_YEN_PER_DECISION_APO.toLocaleString()}円。コスト（委託料概算）＝稼働時間×各自の委託料単価。ROI＝創出価値÷コスト。
+            </p>
+            <p className="mt-2 text-xs font-medium text-slate-700">
+              集計期間: {roiRange.start} ～ {roiRange.end}
+              <span className="ml-2 text-slate-600">
+                ／ 対象メンバー: {roiFilteredMembers.length}名
+                {roiSelectedMemberIds == null ? "（全員）" : roiFilteredMembers.length === 0 ? "（未選択）" : "（指定）"}
+              </span>
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-700">集計するメンバー</span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRoiSelectedMemberIds(null)}
+                  className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  全員
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRoiSelectedMemberIds(roiTargetMembers.map((m) => m.id))}
+                  className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  全選択
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRoiSelectedMemberIds([])}
+                  className="rounded border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  全解除
+                </button>
+              </div>
+            </div>
+            <p className="mb-3 text-xs text-slate-500">チェックを外すとそのメンバーを集計から除外します。「全員」は委託メンバー全員が対象です。</p>
+            <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
+              {roiTargetMembers.map((m) => {
+                const checked =
+                  roiSelectedMemberIds == null ? true : roiSelectedMemberIds.includes(m.id);
+                return (
+                  <label
+                    key={m.id}
+                    className="flex cursor-pointer items-center gap-2 rounded border border-transparent px-2 py-1 hover:bg-white/80"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        setRoiSelectedMemberIds((prev) => {
+                          if (prev == null) {
+                            return roiTargetMembers.map((x) => x.id).filter((id) => id !== m.id);
+                          }
+                          if (prev.includes(m.id)) {
+                            return prev.filter((id) => id !== m.id);
+                          }
+                          return [...prev, m.id];
+                        });
+                      }}
+                      className="rounded border-slate-300 text-slate-700"
+                    />
+                    <span className="text-sm text-slate-800">{m.name}</span>
+                    <span className="text-xs text-slate-400">{m.loginAccount || ""}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-4 border-b border-slate-100 pb-4">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-slate-600">対象月（プリセット）</span>
+              <select
+                value={roiYearMonth}
+                onChange={(e) => handleRoiMonthChange(e.target.value)}
+                className="rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+              >
+                {Array.from(new Set([...roiSelectableMonths, roiYearMonth]))
+                  .sort()
+                  .reverse()
+                  .map((ym) => {
+                    const [yy, mm] = ym.split("-");
+                    return (
+                      <option key={ym} value={ym}>
+                        {yy}年{mm}月
+                      </option>
+                    );
+                  })}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-slate-600">期間指定・開始日</span>
+              <input
+                type="date"
+                value={roiStartDate}
+                onChange={(e) => setRoiStartDate(e.target.value)}
+                className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-slate-600">期間指定・終了日</span>
+              <input
+                type="date"
+                value={roiEndDate}
+                onChange={(e) => setRoiEndDate(e.target.value)}
+                className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setRoiEndDate(todayStr);
+                setRoiStartDate(addCalendarDays(todayStr, -6));
+                setRoiYearMonth(todayStr.slice(0, 7));
+              }}
+              className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              直近1週間
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const start = firstDayOfRollingCalendarMonths(todayStr, 3);
+                setRoiStartDate(start);
+                setRoiEndDate(todayStr);
+                setRoiYearMonth(todayStr.slice(0, 7));
+              }}
+              className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              直近3ヶ月
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const start = firstDayOfRollingCalendarMonths(todayStr, 10);
+                setRoiStartDate(start);
+                setRoiEndDate(todayStr);
+                setRoiYearMonth(todayStr.slice(0, 7));
+              }}
+              className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              直近10ヶ月
+            </button>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="mb-2 text-xs font-medium text-slate-600">ROI 判定（信号機）</p>
+            <ul className="space-y-1.5 text-xs text-slate-600">
+              <li className="flex items-start gap-2">
+                <span className="mt-0.5 inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-red-500" />
+                <span>赤（ROI 1.0未満）: 支払った委託料に見合う創出価値が低い（要フォロー・契約見直しの検討材料）</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="mt-0.5 inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-amber-400" />
+                <span>黄（1.0以上〜2.0未満）: 最低限の貢献（教育・オペ改善の余地）</span>
+              </li>
+              <li className="flex items-start gap-2">
+                <span className="mt-0.5 inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" />
+                <span>緑（2.0以上）: 貢献度が高い</span>
+              </li>
+              <li className="text-slate-500">稼働がなくコスト0の期間は ROI・信号は「—」</li>
+            </ul>
+          </div>
+
+          <div className="overflow-x-auto rounded border border-slate-200">
+            <div className="flex flex-wrap items-center justify-end gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2">
+              <button
+                type="button"
+                onClick={handleRoiCsvDownload}
+                className="rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-600"
+              >
+                CSVをダウンロード
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSlackManualRoiReport()}
+                disabled={slackManualReportSending}
+                className="rounded bg-[#611f69] px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-[#4a1548] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {slackManualReportSending ? "送信中..." : "Slackにレポートを送信"}
+              </button>
+            </div>
+            <table className="w-full min-w-[760px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">総稼働時間</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">創出価値</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">コスト</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">ROI</th>
+                  <th className="px-3 py-2.5 text-center font-medium text-slate-600">信号</th>
+                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">
+                    決アポ率
+                    <span className="block text-[10px] font-normal text-slate-500">（決裁者アポ÷総コール）</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {roiMemberRows.map((row) => (
+                  <tr
+                    key={row.memberId}
+                    className={`border-b border-slate-100 ${
+                      row.signal === "red"
+                        ? "bg-red-50/90"
+                        : row.signal === "yellow"
+                          ? "bg-amber-50/90"
+                          : row.signal === "green"
+                            ? "bg-emerald-50/90"
+                            : ""
+                    }`}
+                  >
+                    <td className="px-3 py-2.5 font-medium text-slate-800">{row.name}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(row.totalMinutes)}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">¥{row.valueYen.toLocaleString("ja-JP")}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">¥{row.costYen.toLocaleString("ja-JP")}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-800">
+                      {row.roi != null ? row.roi.toFixed(2) : "—"}
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      {row.signal === "red" && (
+                        <span className="inline-flex rounded-full bg-red-600 px-2 py-0.5 text-xs font-medium text-white">赤</span>
+                      )}
+                      {row.signal === "yellow" && (
+                        <span className="inline-flex rounded-full bg-amber-500 px-2 py-0.5 text-xs font-medium text-white">黄</span>
+                      )}
+                      {row.signal === "green" && (
+                        <span className="inline-flex rounded-full bg-emerald-600 px-2 py-0.5 text-xs font-medium text-white">緑</span>
+                      )}
+                      {row.signal === "neutral" && <span className="text-slate-400">—</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">
+                      {row.decisionApoRate != null ? `${row.decisionApoRate}%` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <h3 className="mb-1 text-sm font-medium text-slate-700">
+              トレンド：チーム日次 ROI（{roiRange.start} ～ {roiRange.end}）
+            </h3>
+            <p className="mb-4 text-xs text-slate-500">その日のチーム全体の創出価値÷コスト。伸び・下落の傾向を把握するための目安です。</p>
+            <RoiTrendChart points={roiDailyPoints} />
+          </div>
+        </section>
+      )}
+
       {adminSection === "settings" && (
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-medium text-slate-700">管理設定（メンバー追加・編集）</h2>
 
-          <div className="mb-6 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
-            <span className="text-xs font-medium text-slate-600">Slack 本日稼働予定通知（毎朝9:00 JST に自動送信）</span>
+          <div className="mb-6 flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+            <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-medium text-slate-600">Slack 本日の業務委託の稼働予定者通知（毎朝9:00 JST・Vercel Cron は CRON_SECRET 必須）</span>
             <button
               type="button"
               onClick={handleSlackTestSend}
@@ -1817,6 +2492,12 @@ function AdminDashboard(props: {
                 {slackTestResult}
               </span>
             )}
+            </div>
+            <p className="text-xs text-slate-500">
+              自動送信は <code className="rounded bg-slate-200 px-1">/api/slack-daily</code>（GET）のみ。環境変数{" "}
+              <code className="rounded bg-slate-200 px-1">SLACK_WEBHOOK_URL</code> と{" "}
+              <code className="rounded bg-slate-200 px-1">CRON_SECRET</code> を Vercel に設定してください。
+            </p>
           </div>
 
           <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-5 sm:p-6">
@@ -2067,6 +2748,15 @@ function AdminDashboard(props: {
           </div>
         </section>
       )}
+
+      {roiSlackToast ? (
+        <div
+          className="fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-lg"
+          role="status"
+        >
+          {roiSlackToast}
+        </div>
+      ) : null}
 
       {reportMember && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setReportMember(null)}>
@@ -2824,9 +3514,22 @@ export default function DashboardPage() {
     setLoginError("");
     const user = await loginUser(loginAccount.trim(), loginPassword);
     if (user) {
+      if ((user.loginAccount ?? "").toLowerCase() === "admin") {
+        slackAdminAuthMemory.current = { loginId: loginAccount.trim(), password: loginPassword };
+      } else {
+        slackAdminAuthMemory.current = null;
+      }
+      const na = await signIn("credentials", {
+        loginId: loginAccount.trim(),
+        password: loginPassword,
+        redirect: false,
+      });
       setCurrentUserId(user.id);
       setLoginPassword("");
       if ((user.loginAccount ?? "").toLowerCase() !== "admin") setIsAdminMode(false);
+      if (na?.error) {
+        console.warn("NextAuth セッション作成に失敗（Slack送信などAPIで401になる可能性）:", na.error);
+      }
     } else {
       setLoginError("ユーザー名またはパスワードが正しくありません。");
     }
@@ -2846,6 +3549,17 @@ export default function DashboardPage() {
       });
       const mems = await loadMembers();
       setMembers(mems ?? []);
+      if (setupLogin.trim().toLowerCase() === "admin") {
+        slackAdminAuthMemory.current = { loginId: setupLogin.trim(), password: setupPassword };
+      }
+      const na = await signIn("credentials", {
+        loginId: setupLogin.trim(),
+        password: setupPassword,
+        redirect: false,
+      });
+      if (na?.error) {
+        console.warn("NextAuth セッション作成に失敗:", na.error);
+      }
       setCurrentUserId(newMember.id);
       setShowSetup(false);
       setSetupName("");
@@ -2861,6 +3575,8 @@ export default function DashboardPage() {
   };
 
   const handleLogout = () => {
+    slackAdminAuthMemory.current = null;
+    void signOut({ redirect: false });
     setCurrentUserId(null);
     setLoginAccount("");
     setLoginPassword("");
@@ -3001,6 +3717,8 @@ export default function DashboardPage() {
       <main className="mx-auto max-w-2xl px-4 py-6 sm:px-6 sm:py-8">
         {isAdminMode && isAdminUser ? (
           <AdminDashboard
+            isAdminUser={isAdminUser}
+            adminLoginAccount={currentMember?.loginAccount?.trim() ?? ""}
             allRecords={allRecords}
             allOpenRecords={allOpenRecords}
             allShifts={allShifts}

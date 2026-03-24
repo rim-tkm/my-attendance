@@ -3,6 +3,14 @@
     {
       "path": "/api/slack-daily",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/slack-report",
+      "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/slack-ranking",
+      "schedule": "0 0 1,15 * *"
     }
   ]
 }
