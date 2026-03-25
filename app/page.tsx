@@ -1190,10 +1190,26 @@ function AdminDashboard(props: {
     [shiftRangeNorm.start, shiftRangeNorm.end]
   );
 
+  const shiftEditMemberId = shiftEditMember?.id ?? null;
+
+  /** allShifts の参照が毎レンダー変わっても、期間内シフトの実体が同じなら編集モーダル用 effect を走らせない */
+  const shiftEditShiftsFingerprint = useMemo(() => {
+    if (shiftEditMemberId == null) return "";
+    const inRange = getShiftsForUser(allShifts, shiftEditMemberId).filter(
+      (s) => s.date >= shiftRangeNorm.start && s.date <= shiftRangeNorm.end
+    );
+    return inRange
+      .map((s) =>
+        [s.date, s.startPlanned, s.endPlanned, s.startPlanned2 ?? "", s.endPlanned2 ?? ""].join("\t")
+      )
+      .sort()
+      .join("|");
+  }, [shiftEditMemberId, allShifts, shiftRangeNorm.start, shiftRangeNorm.end]);
+
   useEffect(() => {
-    if (!shiftEditMember) return;
-    const dates = shiftViewDateList;
-    const userShifts = getShiftsForUser(allShifts, shiftEditMember.id);
+    if (shiftEditMemberId == null) return;
+    const dates = getDateStringsInclusive(shiftRangeNorm.start, shiftRangeNorm.end);
+    const userShifts = getShiftsForUser(allShifts, shiftEditMemberId);
     const next: Record<string, { s1: string; e1: string; s2: string; e2: string }> = {};
     dates.forEach((dateStr) => {
       const s = userShifts.find((sh) => sh.date === dateStr);
@@ -1205,8 +1221,31 @@ function AdminDashboard(props: {
         e2: s && s.endPlanned2 ? s.endPlanned2 : "",
       };
     });
-    setShiftWeekForm(next);
-  }, [shiftEditMember, shiftViewDateList, allShifts]);
+    setShiftWeekForm((prev) => {
+      const prevKeys = Object.keys(prev).sort().join("\0");
+      const nextKeys = Object.keys(next).sort().join("\0");
+      if (prevKeys === nextKeys) {
+        let same = true;
+        for (const k of Object.keys(next)) {
+          const a = prev[k];
+          const b = next[k];
+          if (!a || !b || a.s1 !== b.s1 || a.e1 !== b.e1 || a.s2 !== b.s2 || a.e2 !== b.e2) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return prev;
+      }
+      return next;
+    });
+    // allShifts の参照は不安定なことがあるため、期間内シフトの実体は shiftEditShiftsFingerprint で追う
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- allShifts は fingerprint 経由で反映
+  }, [shiftEditMemberId, shiftRangeNorm.start, shiftRangeNorm.end, shiftEditShiftsFingerprint]);
+
+  useEffect(() => {
+    if (shiftEditMemberId != null) return;
+    setShiftWeekForm({});
+  }, [shiftRangeNorm.start, shiftRangeNorm.end, shiftEditMemberId]);
 
   const shiftModalCanSave = useMemo(() => {
     if (!shiftEditMember) return false;
@@ -1912,7 +1951,7 @@ function AdminDashboard(props: {
             </div>
           </div>
           <p className="mb-4 text-xs font-medium text-slate-600">
-            表示中: {formatDisplayDate(shiftRangeNorm.start)} ～ {formatDisplayDate(shiftRangeNorm.end)}（{shiftViewDateList.length}日）
+            表示中: {formatDisplayDate(shiftRangeNorm.start)} ～ {formatDisplayDate(shiftRangeNorm.end)}（{shiftViewDateList.length}日間）
           </p>
 
           <div className="space-y-5">

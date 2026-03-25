@@ -336,19 +336,58 @@ export function getWeekDates(weekStart: string): string[] {
   return dates;
 }
 
-/** 開始日・終了日を含む連続日付（入れ替えて正規化）。最長約2年で打ち切り */
+/** ローカル暦の YYYY-MM-DD（`<input type="date">` と一致。toISOString ベースだとタイムゾーンで日付がずれる） */
+export function toLocalDateString(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** 暦日ベースの日数差（終了−開始、同日なら0）。無効な日付は null */
+function diffInclusiveCalendarDays(startYmd: string, endYmd: string): number | null {
+  if (!YMD_RE.test(startYmd) || !YMD_RE.test(endYmd)) return null;
+  const [ys, ms, ds] = startYmd.split("-").map(Number);
+  const [ye, me, de] = endYmd.split("-").map(Number);
+  const s = new Date(ys, ms - 1, ds);
+  const e = new Date(ye, me - 1, de);
+  if (s.getFullYear() !== ys || s.getMonth() !== ms - 1 || s.getDate() !== ds) return null;
+  if (e.getFullYear() !== ye || e.getMonth() !== me - 1 || e.getDate() !== de) return null;
+  const startUtc = Date.UTC(ys, ms - 1, ds);
+  const endUtc = Date.UTC(ye, me - 1, de);
+  return Math.floor((endUtc - startUtc) / (24 * 60 * 60 * 1000));
+}
+
+/**
+ * 開始日・終了日を含む連続日付（昇順）。
+ * - 引数の開始が終了より後なら []（入れ替えない）
+ * - ループは「含む日数」＝差分+1 回のみ（最大 ABS_MAX 日で打ち切り）
+ * - 1 日ずつ進めるのは setDate（ミリ秒加算は使わない）
+ */
+const DATE_RANGE_ABS_MAX = 400;
+
 export function getDateStringsInclusive(startDate: string, endDate: string): string[] {
-  const start = startDate <= endDate ? startDate : endDate;
-  const end = startDate <= endDate ? endDate : startDate;
+  if (!YMD_RE.test(startDate) || !YMD_RE.test(endDate)) return [];
+  if (startDate > endDate) return [];
+
+  const diff = diffInclusiveCalendarDays(startDate, endDate);
+  if (diff === null) return [];
+  const inclusiveCount = diff + 1;
+  if (inclusiveCount < 1 || inclusiveCount > DATE_RANGE_ABS_MAX) return [];
+
+  const [ys, ms, ds] = startDate.split("-").map(Number);
+  const current = new Date(ys, ms - 1, ds);
+  if (current.getFullYear() !== ys || current.getMonth() !== ms - 1 || current.getDate() !== ds) {
+    return [];
+  }
+
   const out: string[] = [];
-  let cur = start;
-  let guard = 0;
-  while (cur <= end && guard < 800) {
-    out.push(cur);
-    guard++;
-    const [y, m, d] = cur.split("-").map(Number);
-    const next = new Date(y, m - 1, d + 1);
-    cur = toDateString(next);
+  for (let i = 0; i < inclusiveCount; i++) {
+    out.push(toLocalDateString(current));
+    if (i === inclusiveCount - 1) break;
+    current.setDate(current.getDate() + 1);
   }
   return out;
 }
