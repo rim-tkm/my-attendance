@@ -1,4 +1,5 @@
 import { getSupabase } from "@/lib/supabase";
+import { postSlackIncomingWebhook, resolveSlackWebhookUrl, slackWebhookMissingMessage } from "@/lib/slack-webhook";
 import {
   calcMonthlyPay,
   DEFAULT_HOURLY_RATE,
@@ -76,9 +77,9 @@ export type SlackReportResult = { ok: true; date: string } | { ok: false; error:
  * 指定日（チーム全体）の KPI・稼働・概算委託料を集計し Slack に送信する。
  */
 export async function sendSlackReportForDate(dateStr: string): Promise<SlackReportResult> {
-  const webhookUrl = process.env.SLACK_WEBHOOK_URL?.trim();
+  const webhookUrl = resolveSlackWebhookUrl("report");
   if (!webhookUrl) {
-    return { ok: false, error: "SLACK_WEBHOOK_URL is not set" };
+    return { ok: false, error: "Slack webhook is not configured", detail: slackWebhookMissingMessage("report") };
   }
 
   const supabase = getSupabase();
@@ -143,15 +144,9 @@ ${dateLine}
 ⑪総稼働時間に対する委託料合計：${yenDisplay(totalPay)}
 ⑫その日のアポ単価（⑪÷⑥）：${apoUnit != null && Number.isFinite(apoUnit) ? yenDisplay(apoUnit) : "-"}`;
 
-  const res = await fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    return { ok: false, error: "Slack webhook failed", detail: err };
+  const posted = await postSlackIncomingWebhook(webhookUrl, { text });
+  if (!posted.ok) {
+    return { ok: false, error: posted.error, detail: posted.detail };
   }
 
   return { ok: true, date: dateStr };

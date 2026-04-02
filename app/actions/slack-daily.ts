@@ -1,13 +1,27 @@
 "use server";
 
+import { isWeekendYmd } from "@/lib/attendance";
 import { getTodayJstDateString, sendSlackDailyForDate } from "@/lib/slack-daily";
 
-/** 管理画面からのテスト送信（サーバー側のみで実行。Webhook URL はクライアントに出さない） */
-export async function slackDailyTestAction(dateStr?: string): Promise<{ ok: boolean; error?: string; detail?: string; date?: string }> {
+/** 管理画面からのテスト送信（サーバー側のみで実行。Webhook URL はクライアントに出さない）。土日も必ず送信試行する。 */
+export async function slackDailyTestAction(dateStr?: string): Promise<{
+  ok: boolean;
+  error?: string;
+  detail?: string;
+  date?: string;
+  skipped?: boolean;
+  skipReason?: "weekend";
+  /** テストで土日を回避せず送った場合 true（画面上の説明用） */
+  weekendTestSend?: boolean;
+}> {
   const target = dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : getTodayJstDateString();
-  const result = await sendSlackDailyForDate(target);
-  if (result.ok) {
-    return { ok: true, date: result.date };
+  const weekend = isWeekendYmd(target);
+  const result = await sendSlackDailyForDate(target, { bypassWeekendSkip: true });
+  if (!result.ok) {
+    return { ok: false, error: result.error, detail: result.detail, date: target };
   }
-  return { ok: false, error: result.error, detail: result.detail };
+  if (!result.sent) {
+    return { ok: true, date: result.date, skipped: true, skipReason: result.skipReason };
+  }
+  return { ok: true, date: result.date, weekendTestSend: weekend };
 }

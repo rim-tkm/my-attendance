@@ -18,6 +18,12 @@ export const ROI_YEN_PER_FOLLOWUP = 100;
 export const ROI_YEN_PER_NON_DECISION_APO = 200;
 export const ROI_YEN_PER_DECISION_APO = 10_000;
 
+/** 1人あたり期間コストに上乗せする固定費（オートコール + 管理コスト） */
+export const ROI_PER_PERSON_FIXED_COST_YEN = 20_000;
+/** 内訳表示用 */
+export const ROI_FIXED_COST_AUTOCALL_YEN = 10_000;
+export const ROI_FIXED_COST_ADMIN_YEN = 10_000;
+
 export function computeValueCreatedYenFromTotals(t: {
   totalCalls: number;
   followUpCreated: number;
@@ -41,14 +47,76 @@ export function computeValueCreatedYenFromKpi(k: KpiRecord): number {
   });
 }
 
-export function computeCostYen(totalMinutes: number, hourlyRate: number): number {
+/** 委託料（稼働時間×時給）のみ */
+export function computeLaborCostYen(totalMinutes: number, hourlyRate: number): number {
   return calcMonthlyPay(totalMinutes, hourlyRate);
+}
+
+/** 総コスト ＝ 委託料 + 固定費（1人あたり） */
+export function computeCostYen(totalMinutes: number, hourlyRate: number): number {
+  return computeLaborCostYen(totalMinutes, hourlyRate) + ROI_PER_PERSON_FIXED_COST_YEN;
 }
 
 /** 創出価値 ÷ コスト。コスト0は null */
 export function computeRoi(valueYen: number, costYen: number): number | null {
   if (!Number.isFinite(valueYen) || !Number.isFinite(costYen) || costYen <= 0) return null;
   return valueYen / costYen;
+}
+
+function kpiRowHasActivity(k: KpiRecord): boolean {
+  return (
+    k.totalCalls > 0 ||
+    k.followUpCreated > 0 ||
+    k.decisionMakerApo > 0 ||
+    k.nonDecisionMakerApo > 0
+  );
+}
+
+/**
+ * 期間固定費を「その日」に按分。allocationDays はビューに合わせる（CSV＝期間全日、日次グラフ＝表示日のみ）。
+ * 稼働コストがある場合は稼働コスト比、KPIのみの日は活動日均等、それ以外は allocationDays 均等。
+ */
+function fixedCostAllocatedToDayForMember(
+  mem: Member,
+  dateStr: string,
+  periodStart: string,
+  periodEnd: string,
+  allocationDays: readonly string[],
+  allKpiRecords: KpiRecord[],
+  allRecords: WorkRecord[]
+): number {
+  const rate = mem.hourlyRate != null && mem.hourlyRate >= 0 ? mem.hourlyRate : DEFAULT_HOURLY_RATE;
+  const inRange = (d: string) => d >= periodStart && d <= periodEnd;
+  const userRec = getRecordsForUser(allRecords, mem.id).filter((r) => inRange(r.date));
+  const periodMins = userRec.reduce((s, r) => s + r.durationMinutes, 0);
+  const laborPeriod = calcMonthlyPay(periodMins, rate);
+
+  const minsOnDate = userRec.filter((r) => r.date === dateStr).reduce((s, r) => s + r.durationMinutes, 0);
+  const laborDay = calcMonthlyPay(minsOnDate, rate);
+
+  const F = ROI_PER_PERSON_FIXED_COST_YEN;
+
+  if (laborPeriod > 0) {
+    return F * (laborDay / laborPeriod);
+  }
+
+  const userKpi = getKpiForUser(allKpiRecords, mem.id).filter((k) => inRange(k.date));
+  const activityDates = new Set<string>();
+  for (const r of userRec) {
+    if (r.durationMinutes > 0) activityDates.add(r.date);
+  }
+  for (const k of userKpi) {
+    if (kpiRowHasActivity(k)) activityDates.add(k.date);
+  }
+
+  if (activityDates.size > 0) {
+    if (!activityDates.has(dateStr)) return 0;
+    return F / activityDates.size;
+  }
+
+  const denom = allocationDays.length;
+  if (denom === 0 || !allocationDays.includes(dateStr)) return 0;
+  return F / denom;
 }
 
 export type RoiSignal = "red" | "yellow" | "green" | "neutral";
@@ -127,6 +195,8 @@ export type RoiCsvDayRow = {
   date: string;
   durationLabel: string;
   hourlyRate: number;
+  laborCostYen: number;
+  fixedCostYen: number;
   costYen: number;
   totalCalls: number;
   validCalls: number;
@@ -156,7 +226,9 @@ export function buildRoiCsvDayRows(
     for (const dateStr of days) {
       const k = getKpiForDate(userKpi, dateStr);
       const mins = userRec.filter((r) => r.date === dateStr).reduce((s, r) => s + r.durationMinutes, 0);
-      const costYen = calcMonthlyPay(mins, hourlyRate);
+      const laborCostYen = calcMonthlyPay(mins, hourlyRate);
+      const fixedCostYen = fixedCostAllocatedToDayForMember(mem, dateStr, start, end, days, allKpiRecords, allRecords);
+      const costYen = laborCostYen + fixedCostYen;
       const totalCalls = k?.totalCalls ?? 0;
       const validCalls = k?.validCalls ?? 0;
       const kcCount = k?.kcCount ?? 0;
@@ -171,6 +243,8 @@ export function buildRoiCsvDayRows(
         date: dateStr,
         durationLabel: formatDuration(mins),
         hourlyRate,
+        laborCostYen,
+        fixedCostYen,
         costYen,
         totalCalls,
         validCalls,
@@ -193,6 +267,8 @@ export function buildRoiCsvContent(rows: RoiCsvDayRow[]): string {
     "日付",
     "総稼働時間",
     "時給",
+    "給与コスト(稼働)",
+    "固定費(配分)",
     "コスト合計",
     "⓪総コール数",
     "①総有効コール",
@@ -213,6 +289,8 @@ export function buildRoiCsvContent(rows: RoiCsvDayRow[]): string {
         r.date,
         csvEscapeCell(r.durationLabel),
         String(r.hourlyRate),
+        String(r.laborCostYen),
+        String(r.fixedCostYen),
         String(r.costYen),
         String(r.totalCalls),
         String(r.validCalls),
@@ -241,9 +319,12 @@ export function getMonthDayStrings(yearMonth: string, capAtDateInclusive?: strin
   return out;
 }
 
-/** 指定日・チーム全体の創出価値・コスト */
+/** 指定日・チーム全体の創出価値・コスト（固定費は期間内でメンバーごとに按分） */
 export function computeTeamDayValueAndCost(
   dateStr: string,
+  periodStart: string,
+  periodEnd: string,
+  allocationDays: readonly string[],
   activeMembers: Member[],
   allKpiRecords: KpiRecord[],
   allRecords: WorkRecord[]
@@ -257,7 +338,17 @@ export function computeTeamDayValueAndCost(
       .filter((r) => r.date === dateStr)
       .reduce((s, r) => s + r.durationMinutes, 0);
     const rate = mem.hourlyRate != null && mem.hourlyRate >= 0 ? mem.hourlyRate : DEFAULT_HOURLY_RATE;
-    costYen += calcMonthlyPay(mins, rate);
+    const laborDay = calcMonthlyPay(mins, rate);
+    const fixedDay = fixedCostAllocatedToDayForMember(
+      mem,
+      dateStr,
+      periodStart,
+      periodEnd,
+      allocationDays,
+      allKpiRecords,
+      allRecords
+    );
+    costYen += laborDay + fixedDay;
   }
   return { valueYen, costYen };
 }
@@ -274,8 +365,17 @@ export function buildTeamDailyRoiSeries(
 ): DailyRoiPoint[] {
   const cap = yearMonth === todayStr.slice(0, 7) ? todayStr : undefined;
   const days = getMonthDayStrings(yearMonth, cap);
+  const { start, end } = getMonthDateRange(yearMonth, todayStr);
   return days.map((dateStr) => {
-    const { valueYen, costYen } = computeTeamDayValueAndCost(dateStr, activeMembers, allKpiRecords, allRecords);
+    const { valueYen, costYen } = computeTeamDayValueAndCost(
+      dateStr,
+      start,
+      end,
+      days,
+      activeMembers,
+      allKpiRecords,
+      allRecords
+    );
     return { date: dateStr, roi: computeRoi(valueYen, costYen) };
   });
 }
@@ -285,6 +385,8 @@ export type MemberRoiRow = {
   name: string;
   totalMinutes: number;
   valueYen: number;
+  laborCostYen: number;
+  fixedCostYen: number;
   costYen: number;
   roi: number | null;
   decisionApoRate: number | null;
@@ -308,7 +410,9 @@ export function buildMemberRoiRows(
     });
     const totalMinutes = getTotalMinutesForMonthByUser(allRecords, mem.id, yearMonth);
     const rate = mem.hourlyRate != null && mem.hourlyRate >= 0 ? mem.hourlyRate : DEFAULT_HOURLY_RATE;
-    const costYen = computeCostYen(totalMinutes, rate);
+    const laborCostYen = computeLaborCostYen(totalMinutes, rate);
+    const fixedCostYen = ROI_PER_PERSON_FIXED_COST_YEN;
+    const costYen = laborCostYen + fixedCostYen;
     const roi = computeRoi(valueYen, costYen);
     const decisionApoRate = safeRatePercent(totals.decisionMakerApo, totals.totalCalls);
     return {
@@ -316,6 +420,8 @@ export function buildMemberRoiRows(
       name: mem.name,
       totalMinutes,
       valueYen,
+      laborCostYen,
+      fixedCostYen,
       costYen,
       roi,
       decisionApoRate,
@@ -346,7 +452,9 @@ export function buildMemberRoiRowsForRange(
       .filter((r) => r.date >= start && r.date <= end)
       .reduce((s, r) => s + r.durationMinutes, 0);
     const rate = mem.hourlyRate != null && mem.hourlyRate >= 0 ? mem.hourlyRate : DEFAULT_HOURLY_RATE;
-    const costYen = computeCostYen(totalMinutes, rate);
+    const laborCostYen = computeLaborCostYen(totalMinutes, rate);
+    const fixedCostYen = ROI_PER_PERSON_FIXED_COST_YEN;
+    const costYen = laborCostYen + fixedCostYen;
     const roi = computeRoi(valueYen, costYen);
     const decisionApoRate = safeRatePercent(totals.decisionMakerApo, totals.totalCalls);
     return {
@@ -354,6 +462,8 @@ export function buildMemberRoiRowsForRange(
       name: mem.name,
       totalMinutes,
       valueYen,
+      laborCostYen,
+      fixedCostYen,
       costYen,
       roi,
       decisionApoRate,
@@ -374,7 +484,15 @@ export function buildTeamDailyRoiSeriesForRange(
   const { start, end } = normalizeRoiRange(startDate, endDate);
   const days = getDateStringsInclusive(start, end).filter((d) => d <= todayStr);
   return days.map((dateStr) => {
-    const { valueYen, costYen } = computeTeamDayValueAndCost(dateStr, activeMembers, allKpiRecords, allRecords);
+    const { valueYen, costYen } = computeTeamDayValueAndCost(
+      dateStr,
+      start,
+      end,
+      days,
+      activeMembers,
+      allKpiRecords,
+      allRecords
+    );
     return { date: dateStr, roi: computeRoi(valueYen, costYen) };
   });
 }

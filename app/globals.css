@@ -18,3 +18,55 @@
 body {
   @apply antialiased;
 }
+
+/* 管理画面：シフト表の PDF（印刷）・A4 横・背景色維持 */
+.shift-range-print-root {
+  display: none !important;
+}
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+  }
+
+  .shift-range-print-root,
+  .shift-range-print-root * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .admin-dashboard-screen-only {
+    display: none !important;
+  }
+
+  body.admin-shift-print-range .shift-range-print-root {
+    display: block !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+  }
+
+  body.admin-shift-print-range .shift-range-print-root .shift-range-print-title {
+    font-size: 20pt !important;
+    line-height: 1.25 !important;
+  }
+
+  .shift-range-print-table {
+    width: 100% !important;
+    table-layout: fixed;
+    font-size: 9pt !important;
+  }
+
+  .shift-range-print-table th,
+  .shift-range-print-table td {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}

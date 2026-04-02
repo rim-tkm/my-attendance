@@ -18,6 +18,7 @@ type DbUser = {
   account_holder?: string | null;
   invoice_number?: string | number | null;
   phone_number?: string | null;
+  slack_id?: string | null;
   is_active?: boolean | null;
 };
 
@@ -93,6 +94,7 @@ function toMember(r: DbUser): Member {
     accountHolder: accHolder !== "" ? accHolder : undefined,
     invoiceNumber: invNum !== "" ? invNum : undefined,
     phoneNumber: phone !== "" ? phone : undefined,
+    slackId: normStr(r.slack_id ?? "") !== "" ? normStr(r.slack_id ?? "") : undefined,
     isActive: r.is_active === undefined || r.is_active === null ? true : !!r.is_active,
   };
 }
@@ -178,29 +180,47 @@ export async function loadMembers(): Promise<Member[] | null> {
   }
 }
 
+function usersUpsertRowFromMember(m: Member): Record<string, unknown> {
+  const login = (m.loginAccount ?? "").trim();
+  return {
+    id: m.id,
+    name: m.name,
+    login_account: login === "" ? null : login,
+    password: m.password ?? "",
+    hourly_rate: m.hourlyRate ?? DEFAULT_HOURLY_RATE,
+    zip_code: m.postalCode ?? "",
+    address: m.address ?? "",
+    bank_name: m.bankName ?? "",
+    branch_name: m.branchName ?? "",
+    account_type: m.accountType ?? "普通",
+    account_number: m.accountNumber ?? "",
+    account_holder: m.accountHolder ?? "",
+    invoice_number: m.invoiceNumber ?? null,
+    phone_number: m.phoneNumber ?? "",
+    is_active: m.isActive !== false,
+  };
+}
+
+function slackIdSchemaErrorMessage(msg: string): boolean {
+  return /slack_id/i.test(msg) && (/schema cache/i.test(msg) || /column/i.test(msg) || /Could not find/i.test(msg));
+}
+
 export async function saveMembers(members: Member[]): Promise<void> {
   if (members.length === 0) return;
   const supabase = getSupabase();
   if (!supabase) return;
   try {
-    const rows = members.map((m) => ({
-      id: m.id,
-      name: m.name,
-      login_account: m.loginAccount ?? "",
-      password: m.password ?? "",
-      hourly_rate: m.hourlyRate ?? DEFAULT_HOURLY_RATE,
-      zip_code: m.postalCode ?? "",
-      address: m.address ?? "",
-      bank_name: m.bankName ?? "",
-      branch_name: m.branchName ?? "",
-      account_type: m.accountType ?? "普通",
-      account_number: m.accountNumber ?? "",
-      account_holder: m.accountHolder ?? "",
-      invoice_number: m.invoiceNumber ?? null,
-      phone_number: m.phoneNumber ?? "",
-      is_active: m.isActive !== false,
-    }));
-    await supabase.from("users").upsert(rows, { onConflict: "id" });
+    const rowsBase = members.map(usersUpsertRowFromMember);
+    const { error } = await supabase.from("users").upsert(rowsBase, { onConflict: "id" });
+    if (error) {
+      console.warn("saveMembers error:", error);
+      return;
+    }
+    for (const m of members) {
+      if (m.slackId !== undefined) {
+        await updateMember(m.id, { slackId: m.slackId ?? "" });
+      }
+    }
   } catch (e) {
     console.warn("saveMembers error:", e);
   }
@@ -233,10 +253,24 @@ export async function addMember(
   if (!supabase) {
     throw new Error("Supabase が設定されていません。");
   }
-  const { error } = await supabase.from("users").insert({
+
+  const loginNorm = (newMember.loginAccount ?? "").trim().toLowerCase();
+  if (loginNorm !== "") {
+    const existingLogins = await safeQuery<{ login_account: string | null }>(
+      supabase.from("users").select("login_account")
+    );
+    const taken = existingLogins.some(
+      (r) => (r.login_account ?? "").trim().toLowerCase() === loginNorm
+    );
+    if (taken) {
+      throw new Error("このログインIDは既に使用されています");
+    }
+  }
+
+  const insertRow = {
     id: newMember.id,
     name: newMember.name,
-    login_account: newMember.loginAccount,
+    login_account: loginNorm === "" ? null : (newMember.loginAccount ?? "").trim(),
     password: newMember.password,
     hourly_rate: newMember.hourlyRate,
     zip_code: "",
@@ -249,25 +283,40 @@ export async function addMember(
     invoice_number: null,
     phone_number: "",
     is_active: true,
-  });
+  };
+
+  const { error } = await supabase.from("users").insert(insertRow);
   if (error) {
     const message = error.message ?? String(error);
     console.error("addMember error:", error);
+    if (/duplicate key|unique constraint|23505/i.test(message)) {
+      if (/login/i.test(message)) {
+        throw new Error("このログインIDは既に使用されています");
+      }
+      if (/slack/i.test(message)) {
+        throw new Error("この Slack ID は既に別のメンバーで使用されています");
+      }
+      throw new Error("登録できませんでした（データの重複の可能性があります）。内容を確認して再度お試しください。");
+    }
     throw new Error(message);
   }
+
   return newMember;
 }
 
 export async function updateMember(
   memberId: string,
-  updates: Partial<Pick<Member, "name" | "loginAccount" | "password" | "hourlyRate" | "postalCode" | "address" | "bankName" | "branchName" | "accountType" | "accountNumber" | "accountHolder" | "invoiceNumber" | "phoneNumber" | "isActive">>
+  updates: Partial<Pick<Member, "name" | "loginAccount" | "password" | "hourlyRate" | "postalCode" | "address" | "bankName" | "branchName" | "accountType" | "accountNumber" | "accountHolder" | "invoiceNumber" | "phoneNumber" | "slackId" | "isActive">>
 ): Promise<void> {
   const supabase = getSupabase();
   if (!supabase) return;
   try {
     const body: Record<string, unknown> = {};
     if (updates.name !== undefined) body.name = updates.name;
-    if (updates.loginAccount !== undefined) body.login_account = updates.loginAccount;
+    if (updates.loginAccount !== undefined) {
+      const t = updates.loginAccount.trim();
+      body.login_account = t === "" ? null : t;
+    }
     if (updates.password !== undefined) body.password = updates.password;
     if (updates.hourlyRate !== undefined) body.hourly_rate = updates.hourlyRate;
     if (updates.postalCode !== undefined) body.zip_code = updates.postalCode;
@@ -279,9 +328,35 @@ export async function updateMember(
     if (updates.accountHolder !== undefined) body.account_holder = updates.accountHolder;
     if (updates.invoiceNumber !== undefined) body.invoice_number = updates.invoiceNumber;
     if (updates.phoneNumber !== undefined) body.phone_number = updates.phoneNumber;
+    if (updates.slackId !== undefined) {
+      const s = (updates.slackId ?? "").trim();
+      body.slack_id = s === "" ? null : s;
+    }
     if (updates.isActive !== undefined) body.is_active = updates.isActive;
     if (Object.keys(body).length === 0) return;
-    await supabase.from("users").update(body).eq("id", memberId);
+    const { error } = await supabase.from("users").update(body).eq("id", memberId);
+    if (error && slackIdSchemaErrorMessage(error.message ?? "") && "slack_id" in body) {
+      const { slack_id: _s, ...rest } = body;
+      if (Object.keys(rest).length > 0) {
+        const { error: e2 } = await supabase.from("users").update(rest).eq("id", memberId);
+        if (e2) {
+          const m = e2.message ?? String(e2);
+          if (/duplicate key|unique constraint|23505/i.test(m) && /login/i.test(m)) {
+            throw new Error("このログインIDは既に使用されています");
+          }
+          throw new Error(m);
+        }
+      }
+    } else if (error) {
+      const m = error.message ?? String(error);
+      if (/duplicate key|unique constraint|23505/i.test(m) && /login/i.test(m)) {
+        throw new Error("このログインIDは既に使用されています");
+      }
+      if (/duplicate key|unique constraint|23505/i.test(m) && /slack/i.test(m)) {
+        throw new Error("この Slack ID は既に別のメンバーで使用されています");
+      }
+      throw new Error(m);
+    }
   } catch (e) {
     console.warn("updateMember error:", e);
   }
@@ -370,6 +445,22 @@ export async function loadShifts(): Promise<Shift[]> {
   if (!supabase) return [];
   try {
     const rows = await safeQuery<DbShift>(supabase.from("shifts").select("*").order("date", { ascending: false }));
+    return rows.map(toShift);
+  } catch {
+    return [];
+  }
+}
+
+/** 指定期間（YYYY-MM-DD 含む）の稼働予定のみ取得 */
+export async function loadShiftsInDateRange(start: string, end: string): Promise<Shift[]> {
+  const supabase = getSupabase();
+  if (!supabase) return [];
+  const a = start <= end ? start : end;
+  const b = start <= end ? end : start;
+  try {
+    const rows = await safeQuery<DbShift>(
+      supabase.from("shifts").select("*").gte("date", a).lte("date", b).order("date", { ascending: true })
+    );
     return rows.map(toShift);
   } catch {
     return [];

@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { randomUUID } from "crypto";
 import path from "path";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 
@@ -65,7 +66,7 @@ export async function addUser(
   if (users.some((u) => u.loginId.toLowerCase() === normalized)) {
     return { ok: false, error: "このログインIDは既に使用されています" };
   }
-  const id = `user-${Date.now()}`;
+  const id = randomUUID();
   const passwordHash = await bcrypt.hash(password, 10);
   users.push({ id, loginId: loginId.trim(), name: name.trim(), passwordHash });
   saveUsers(users);

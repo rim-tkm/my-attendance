@@ -899,7 +899,6 @@ function AdminDashboard(props: {
     form?: string;
   } | null>(null);
   const [newMemberAdding, setNewMemberAdding] = useState(false);
-  const [memberDetailSaveError, setMemberDetailSaveError] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editLogin, setEditLogin] = useState("");
@@ -1233,7 +1232,6 @@ function AdminDashboard(props: {
   };
 
   const openDetail = (member: Member) => {
-    setMemberDetailSaveError(null);
     setDetailId(member.id);
     setEditName(member.name);
     setEditLogin(member.loginAccount ?? "");
@@ -1264,22 +1262,7 @@ function AdminDashboard(props: {
 
   const saveDetail = async () => {
     if (!detailId) return;
-    setMemberDetailSaveError(null);
-    if (!editName.trim()) {
-      setMemberDetailSaveError("名前を入力してください。");
-      return;
-    }
-    const loginTrim = editLogin.trim();
-    if (loginTrim) {
-      const clash = members.some(
-        (m) =>
-          m.id !== detailId && (m.loginAccount ?? "").trim().toLowerCase() === loginTrim.toLowerCase()
-      );
-      if (clash) {
-        setMemberDetailSaveError("このログインIDは既に使用されています。");
-        return;
-      }
-    }
+    // 振込先・請求管理番号・電話番号の必須バリデーション（null または空文字は保存不可）
     const zip = editPostalCode.trim();
     const addr = editAddress.trim();
     const bank = editBankName.trim();
@@ -1288,9 +1271,22 @@ function AdminDashboard(props: {
     const accHolder = editAccountHolder.trim();
     const phone = editPhoneNumber.trim();
     const invNum = editInvoiceNumber.trim();
+    const missing: string[] = [];
+    if (!zip) missing.push("郵便番号");
+    if (!addr) missing.push("住所");
+    if (!bank) missing.push("銀行名");
+    if (!branch) missing.push("支店名");
+    if (!accNum) missing.push("口座番号");
+    if (!accHolder) missing.push("口座名義");
+    if (!phone) missing.push("電話番号");
+    if (!invNum) missing.push("請求管理番号（3桁）");
+    if (missing.length > 0) {
+      alert(`振込先情報が未入力です。以下の項目を入力してください。\n\n${missing.join("、")}`);
+      return;
+    }
     const updates: Parameters<typeof updateMember>[1] = {
       name: editName.trim(),
-      loginAccount: editLogin,
+      loginAccount: editLogin.trim(),
       hourlyRate: editRate >= 0 ? editRate : DEFAULT_HOURLY_RATE,
       postalCode: zip,
       address: addr,
@@ -1303,15 +1299,9 @@ function AdminDashboard(props: {
       phoneNumber: phone,
     };
     if (editPass !== "") updates.password = editPass;
-    try {
-      await updateMember(detailId, updates);
-      await onRefresh();
-      setDetailId(null);
-      setMemberDetailSaveError(null);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setMemberDetailSaveError(msg);
-    }
+    await updateMember(detailId, updates);
+    await onRefresh();
+    setDetailId(null);
   };
 
   const targetWeekStart = addWeeksToWeekStart(getMondayOfCalendarWeekForYmd(getTodayJstDateString()), 1);
@@ -2897,40 +2887,64 @@ function AdminDashboard(props: {
 
           <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-5 sm:p-6">
             <p className="mb-4 text-sm font-medium text-slate-700">新規メンバー追加</p>
-            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5 lg:gap-6">
-              <div className="flex min-w-0 flex-col gap-2">
+            <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 xl:gap-6">
+              <div className="flex min-w-0 flex-col gap-1">
                 <label className="text-xs font-medium text-slate-600">名前</label>
-                <input type="text" value={newMemberName} onChange={(e) => setNewMemberName(e.target.value)} placeholder="表示名" className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
-                {newMemberFieldErrors?.name ? <p className="text-xs text-red-600">{newMemberFieldErrors.name}</p> : null}
+                <input
+                  type="text"
+                  value={newMemberName}
+                  onChange={(e) => {
+                    setNewMemberName(e.target.value);
+                    setNewMemberFieldErrors((prev) => (prev ? { ...prev, name: undefined } : null));
+                  }}
+                  placeholder="表示名"
+                  className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm"
+                  aria-invalid={!!newMemberFieldErrors?.name}
+                />
+                {newMemberFieldErrors?.name ? <p className="text-xs font-medium text-red-600">{newMemberFieldErrors.name}</p> : null}
               </div>
-              <div className="flex min-w-0 flex-col gap-2">
+              <div className="flex min-w-0 flex-col gap-1">
                 <label className="text-xs font-medium text-slate-600">ユーザー名（ログイン用・任意）</label>
-                <input type="text" value={newMemberLogin} onChange={(e) => setNewMemberLogin(e.target.value)} placeholder="空でも登録できます" className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
-                {newMemberFieldErrors?.login ? <p className="text-xs text-red-600">{newMemberFieldErrors.login}</p> : null}
+                <input
+                  type="text"
+                  value={newMemberLogin}
+                  onChange={(e) => {
+                    setNewMemberLogin(e.target.value);
+                    setNewMemberFieldErrors((prev) => (prev ? { ...prev, login: undefined } : null));
+                  }}
+                  placeholder="空でも登録できます"
+                  className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm"
+                  aria-invalid={!!newMemberFieldErrors?.login}
+                />
+                {newMemberFieldErrors?.login ? <p className="text-xs font-medium text-red-600">{newMemberFieldErrors.login}</p> : null}
               </div>
-              <div className="flex min-w-0 flex-col gap-2">
+              <div className="flex min-w-0 flex-col gap-1">
                 <label className="text-xs font-medium text-slate-600">パスワード</label>
                 <input
                   type="text"
                   autoComplete="off"
                   value={newMemberPassword}
-                  onChange={(e) => setNewMemberPassword(e.target.value)}
+                  onChange={(e) => {
+                    setNewMemberPassword(e.target.value);
+                    setNewMemberFieldErrors((prev) => (prev ? { ...prev, password: undefined } : null));
+                  }}
                   placeholder="初期値 12345（変更可）"
                   className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm font-mono"
+                  aria-invalid={!!newMemberFieldErrors?.password}
                 />
-                {newMemberFieldErrors?.password ? <p className="text-xs text-red-600">{newMemberFieldErrors.password}</p> : null}
+                {newMemberFieldErrors?.password ? <p className="text-xs font-medium text-red-600">{newMemberFieldErrors.password}</p> : null}
               </div>
-              <div className="flex min-w-0 flex-col gap-2">
+              <div className="flex min-w-0 flex-col gap-1">
                 <label className="text-xs font-medium text-slate-600">委託料単価（円/時間）</label>
                 <input type="number" min={0} value={newMemberHourlyRate} onChange={(e) => setNewMemberHourlyRate(parseInt(e.target.value, 10) || 0)} className="h-10 w-full min-w-0 rounded border border-slate-300 px-3 py-2 text-sm" />
               </div>
-              <div className="flex min-w-0 flex-col gap-2 lg:justify-end">
-                <label className="text-xs font-medium text-slate-600 lg:invisible">操作</label>
+              <div className="flex min-w-0 flex-col gap-1 xl:justify-end">
+                <label className="text-xs font-medium text-slate-600 xl:invisible">操作</label>
                 <button
                   type="button"
-                  disabled={newMemberAdding}
                   onClick={() => void handleAdd()}
-                  className="h-10 w-full rounded bg-slate-700 px-4 text-sm font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60 lg:w-full"
+                  disabled={newMemberAdding}
+                  className="h-10 w-full rounded bg-slate-700 px-4 text-sm font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60 xl:w-full"
                 >
                   {newMemberAdding ? "追加中…" : "追加"}
                 </button>
@@ -3040,34 +3054,19 @@ function AdminDashboard(props: {
                   <input type="text" value={editPhoneNumber} onChange={(e) => setEditPhoneNumber(e.target.value)} placeholder="03-1234-5678" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
               </div>
-              {memberDetailSaveError ? <p className="mt-3 text-sm text-red-600">{memberDetailSaveError}</p> : null}
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <button type="button" onClick={() => void saveDetail()} className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600">保存</button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDetailId(null);
-                    setMemberDetailSaveError(null);
-                  }}
-                  className="rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                >
-                  キャンセル
-                </button>
+                <button type="button" onClick={saveDetail} className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600">保存</button>
+                <button type="button" onClick={() => setDetailId(null)} className="rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">キャンセル</button>
                 {detailId && (
                   <button
                     type="button"
                     onClick={async () => {
                       if (!window.confirm("このメンバーを無効にしますか？一覧から非表示になりログインできなくなります。データは残り、後から「有効に戻す」で復元できます。")) return;
-                      try {
-                        await updateMember(detailId, { isActive: false });
-                        setDetailId(null);
-                        setMemberDetailSaveError(null);
-                        const mems = await loadMembers();
-                        setMembers(mems ?? []);
-                        onRefresh();
-                      } catch (e) {
-                        alert(e instanceof Error ? e.message : String(e));
-                      }
+                      await updateMember(detailId, { isActive: false });
+                      setDetailId(null);
+                      const mems = await loadMembers();
+                      setMembers(mems ?? []);
+                      onRefresh();
                     }}
                     className="rounded border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 hover:bg-amber-100"
                   >
@@ -3090,14 +3089,10 @@ function AdminDashboard(props: {
                     <button
                       type="button"
                       onClick={async () => {
-                        try {
-                          await updateMember(mem.id, { isActive: true });
-                          const mems = await loadMembers();
-                          setMembers(mems ?? []);
-                          onRefresh();
-                        } catch (e) {
-                          alert(e instanceof Error ? e.message : String(e));
-                        }
+                        await updateMember(mem.id, { isActive: true });
+                        const mems = await loadMembers();
+                        setMembers(mems ?? []);
+                        onRefresh();
                       }}
                       className="rounded bg-slate-600 px-3 py-1 text-xs font-medium text-white hover:bg-slate-500"
                     >

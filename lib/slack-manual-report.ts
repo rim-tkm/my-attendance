@@ -1,4 +1,5 @@
 import type { Member } from "@/lib/attendance";
+import { postSlackIncomingWebhook, resolveSlackWebhookUrl, slackWebhookMissingMessage } from "@/lib/slack-webhook";
 import { normalizeRoiRange } from "@/lib/roi-analysis";
 import {
   buildMemberRankingEntries,
@@ -41,9 +42,9 @@ export async function sendSlackManualRoiReport(
   endDate: string,
   memberIds: string[] | null
 ): Promise<SlackManualReportResult> {
-  const webhookUrl = process.env.SLACK_WEBHOOK_URL?.trim();
+  const webhookUrl = resolveSlackWebhookUrl("manual_report");
   if (!webhookUrl) {
-    return { ok: false, error: "SLACK_WEBHOOK_URL is not set" };
+    return { ok: false, error: "Slack webhook is not configured", detail: slackWebhookMissingMessage("manual_report") };
   }
 
   const { start, end } = normalizeRoiRange(startDate, endDate);
@@ -56,15 +57,9 @@ export async function sendSlackManualRoiReport(
   const entries = buildMemberRankingEntries(start, end, loaded.kpis, loaded.records, members);
   const text = formatManualPeriodRoiSlackMessage(formatPeriodLineJa(start, end), entries);
 
-  const res = await fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    return { ok: false, error: "Slack webhook failed", detail: err };
+  const posted = await postSlackIncomingWebhook(webhookUrl, { text });
+  if (!posted.ok) {
+    return { ok: false, error: posted.error, detail: posted.detail };
   }
 
   return { ok: true, start, end };

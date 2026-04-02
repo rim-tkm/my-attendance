@@ -1,4 +1,6 @@
+import { isWeekendYmd } from "@/lib/attendance";
 import { getSupabase } from "@/lib/supabase";
+import { postSlackIncomingWebhook, resolveSlackWebhookUrl, slackWebhookMissingMessage } from "@/lib/slack-webhook";
 
 const SLACK_ENTRY_NONE = "なし";
 
@@ -21,15 +23,28 @@ function hasRealSchedule(
   return s !== "" && s !== SLACK_ENTRY_NONE && e !== "" && e !== SLACK_ENTRY_NONE;
 }
 
-export type SlackDailyResult = { ok: true; date: string } | { ok: false; error: string; detail?: string };
+export type SlackDailyResult =
+  | { ok: true; date: string; sent: true }
+  | { ok: true; date: string; sent: false; skipReason: "weekend" }
+  | { ok: false; error: string; detail?: string };
+
+export type SendSlackDailyOptions = {
+  /** true のとき土日でも送信する（管理画面テスト・?test=true の手動実行用）。Cron 本番では付けない。 */
+  bypassWeekendSkip?: boolean;
+};
 
 /**
  * Supabase の shifts（稼働予定）から指定日に実際の予定があるユーザーを抽出し、Slack に送信する。
+ * 土日（対象日の暦）では既定では送信しない（稼働がない前提）。`bypassWeekendSkip` で回避可。
  */
-export async function sendSlackDailyForDate(dateStr: string): Promise<SlackDailyResult> {
-  const webhookUrl = process.env.SLACK_WEBHOOK_URL?.trim();
+export async function sendSlackDailyForDate(dateStr: string, options?: SendSlackDailyOptions): Promise<SlackDailyResult> {
+  if (!options?.bypassWeekendSkip && isWeekendYmd(dateStr)) {
+    return { ok: true, date: dateStr, sent: false, skipReason: "weekend" };
+  }
+
+  const webhookUrl = resolveSlackWebhookUrl("daily");
   if (!webhookUrl) {
-    return { ok: false, error: "SLACK_WEBHOOK_URL is not set" };
+    return { ok: false, error: "Slack webhook is not configured", detail: slackWebhookMissingMessage("daily") };
   }
 
   const supabase = getSupabase();
@@ -72,16 +87,10 @@ export async function sendSlackDailyForDate(dateStr: string): Promise<SlackDaily
       ? "おはようございます！本日の業務委託の稼働予定者はいません。"
       : `おはようございます！本日の業務委託の稼働予定者は ${names.map((n) => `${n}さん`).join("、")} です。`;
 
-  const res = await fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    return { ok: false, error: "Slack webhook failed", detail: err };
+  const posted = await postSlackIncomingWebhook(webhookUrl, { text });
+  if (!posted.ok) {
+    return { ok: false, error: posted.error, detail: posted.detail };
   }
 
-  return { ok: true, date: dateStr };
+  return { ok: true, date: dateStr, sent: true };
 }

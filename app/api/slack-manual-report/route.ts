@@ -1,6 +1,7 @@
 import { getToken } from "next-auth/jwt";
 import { getServerSession } from "next-auth";
 import { cookies } from "next/headers";
+import { slackSendFailureHttpStatus } from "@/lib/slack-webhook";
 import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
 import { sendSlackManualRoiReport } from "@/lib/slack-manual-report";
@@ -122,7 +123,7 @@ export async function POST(request: NextRequest) {
 
   const result = await sendSlackManualRoiReport(startDate, endDate, memberIds);
   if (!result.ok) {
-    const status = result.error === "Slack webhook failed" ? 502 : 500;
+    const status = slackSendFailureHttpStatus(result.error);
     return NextResponse.json(
       { ok: false, error: result.error, detail: "detail" in result ? result.detail : undefined },
       { status }

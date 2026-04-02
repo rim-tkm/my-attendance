@@ -5,6 +5,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/cron-verify";
+import { slackSendFailureHttpStatus } from "@/lib/slack-webhook";
 import { getTodayJstDateString, sendSlackRanking } from "@/lib/slack-ranking";
 
 export async function GET(request: NextRequest) {
@@ -14,12 +15,9 @@ export async function GET(request: NextRequest) {
   const today = getTodayJstDateString();
   const result = await sendSlackRanking(today);
   if (!result.ok) {
-    const status =
-      result.error === "Slack webhook failed"
-        ? 502
-        : result.error.includes("集計対象日")
-          ? 400
-          : 500;
+    const status = result.error.includes("集計対象日")
+      ? 400
+      : slackSendFailureHttpStatus(result.error);
     return NextResponse.json(
       { error: result.error, detail: "detail" in result ? result.detail : undefined, ok: false },
       { status }
@@ -45,12 +43,9 @@ export async function POST(request: NextRequest) {
 
   const result = await sendSlackRanking(anchor);
   if (!result.ok) {
-    const status =
-      result.error === "Slack webhook failed"
-        ? 502
-        : result.error.includes("集計対象日")
-          ? 400
-          : 500;
+    const status = result.error.includes("集計対象日")
+      ? 400
+      : slackSendFailureHttpStatus(result.error);
     return NextResponse.json(
       { error: result.error, detail: "detail" in result ? result.detail : undefined, ok: false },
       { status }

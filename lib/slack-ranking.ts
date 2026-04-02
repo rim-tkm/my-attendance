@@ -1,6 +1,5 @@
 import { getSupabase } from "@/lib/supabase";
 import {
-  calcMonthlyPay,
   DEFAULT_HOURLY_RATE,
   getKpiTotalsFromRecords,
   getKpiForUser,
@@ -10,7 +9,16 @@ import {
   type Member,
   type WorkRecord,
 } from "@/lib/attendance";
-import { computeRoi, computeValueCreatedYenFromTotals } from "@/lib/roi-analysis";
+import {
+  computeCostYen,
+  computeLaborCostYen,
+  computeRoi,
+  computeValueCreatedYenFromTotals,
+  ROI_FIXED_COST_ADMIN_YEN,
+  ROI_FIXED_COST_AUTOCALL_YEN,
+  ROI_PER_PERSON_FIXED_COST_YEN,
+} from "@/lib/roi-analysis";
+import { postSlackIncomingWebhook, resolveSlackWebhookUrl, slackWebhookMissingMessage } from "@/lib/slack-webhook";
 
 /** 日本時間の「今日」YYYY-MM-DD */
 export function getTodayJstDateString(): string {
@@ -135,6 +143,8 @@ export type MemberRankingEntry = {
   kcRate: number | null;
   apoFromKcRate: number | null;
   totalMinutes: number;
+  laborCostYen: number;
+  fixedCostYen: number;
   costYen: number;
   valueYen: number;
   apoUnitYen: number | null;
@@ -209,7 +219,9 @@ export function buildMemberRankingEntries(
       .filter((r) => r.date >= start && r.date <= end)
       .reduce((s, r) => s + r.durationMinutes, 0);
     const rate = mem.hourlyRate != null && mem.hourlyRate >= 0 ? mem.hourlyRate : DEFAULT_HOURLY_RATE;
-    const costYen = calcMonthlyPay(totalMinutes, rate);
+    const laborCostYen = computeLaborCostYen(totalMinutes, rate);
+    const fixedCostYen = ROI_PER_PERSON_FIXED_COST_YEN;
+    const costYen = computeCostYen(totalMinutes, rate);
     const roi = computeRoi(valueYen, costYen);
     const validCallRate = safeRatePercent(totals.validCalls, totals.totalCalls);
     const kcRate = safeRatePercent(totals.kcCount, totals.validCalls);
@@ -234,6 +246,8 @@ export function buildMemberRankingEntries(
       kcRate,
       apoFromKcRate,
       totalMinutes,
+      laborCostYen,
+      fixedCostYen,
       costYen,
       valueYen,
       apoUnitYen,
@@ -287,7 +301,9 @@ export function formatSlackMemberRankingDetails(entries: MemberRankingEntry[]): 
 
     lines.push(headline);
     lines.push("");
-    lines.push(`💰 生産性: 創出価値 ${yenDisplay(e.valueYen)} / コスト ${yenDisplay(e.costYen)}`);
+    lines.push(
+      `💰 生産性: 創出価値 ${yenDisplay(e.valueYen)} / 総コスト ${yenDisplay(e.costYen)}（給与: ${yenDisplay(e.laborCostYen)} / 固定費: ${yenDisplay(e.fixedCostYen)} ※オートコール${yenDisplay(ROI_FIXED_COST_AUTOCALL_YEN)}・管理${yenDisplay(ROI_FIXED_COST_ADMIN_YEN)}）`
+    );
     lines.push("");
     lines.push("📊 主要指標:");
     lines.push("");
@@ -303,7 +319,9 @@ export function formatSlackMemberRankingDetails(entries: MemberRankingEntry[]): 
   lines.push("");
   lines.push(sep);
   lines.push("");
-  lines.push("【判定】🔵 ROI 2.0以上 ／ 🟡 ROI 1.0以上（2.0未満） ／ 🔴 ROI 1.0未満 ／ ⚪️ 算出不可（稼働なし等）");
+  lines.push(
+    "【判定】🔵 ROI 2.0以上 ／ 🟡 ROI 1.0以上（2.0未満） ／ 🔴 ROI 1.0未満 ／ ⚪️ 算出不可（数値不整合など）"
+  );
 
   return lines.join("\n");
 }
@@ -318,9 +336,9 @@ export type SlackRankingResult =
   | { ok: false; error: string; detail?: string };
 
 export async function sendSlackRanking(anchorJst: string): Promise<SlackRankingResult> {
-  const webhookUrl = process.env.SLACK_WEBHOOK_URL?.trim();
+  const webhookUrl = resolveSlackWebhookUrl("ranking");
   if (!webhookUrl) {
-    return { ok: false, error: "SLACK_WEBHOOK_URL is not set" };
+    return { ok: false, error: "Slack webhook is not configured", detail: slackWebhookMissingMessage("ranking") };
   }
 
   const period = getRankingPeriodForAnchor(anchorJst);
@@ -342,15 +360,9 @@ export async function sendSlackRanking(anchorJst: string): Promise<SlackRankingR
   const entries = buildMemberRankingEntries(start, end, kpis, records, members);
   const text = formatSlackRankingMessage(period.labelJa, entries);
 
-  const res = await fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    return { ok: false, error: "Slack webhook failed", detail: err };
+  const posted = await postSlackIncomingWebhook(webhookUrl, { text });
+  if (!posted.ok) {
+    return { ok: false, error: posted.error, detail: posted.detail };
   }
 
   return { ok: true, anchor: anchorJst, start, end };

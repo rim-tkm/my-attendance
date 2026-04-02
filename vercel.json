@@ -11,6 +11,18 @@
     {
       "path": "/api/slack-ranking",
       "schedule": "0 0 1,15 * *"
+    },
+    {
+      "path": "/api/cron/weekly-schedule-report",
+      "schedule": "0 15 * * 5"
+    },
+    {
+      "path": "/api/cron/remind-unsubmitted",
+      "schedule": "0 11 * * 5"
+    },
+    {
+      "path": "/api/cron/remind-unsubmitted",
+      "schedule": "0 11 * * 6"
     }
   ]
 }

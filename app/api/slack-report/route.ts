@@ -3,6 +3,7 @@
  * - 認証: `Authorization: Bearer ${CRON_SECRET}`（slack-daily と共通）
  * - Cron: vercel.json `0 15 * * *`
  */
+import { slackSendFailureHttpStatus } from "@/lib/slack-webhook";
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/cron-verify";
 import { getYesterdayJstDateString, sendSlackReportForDate } from "@/lib/slack-report";
@@ -14,7 +15,7 @@ export async function GET(request: NextRequest) {
   if (!result.ok) {
     return NextResponse.json(
       { error: result.error, detail: result.detail, ok: false },
-      { status: result.error === "Slack webhook failed" ? 502 : 500 }
+      { status: slackSendFailureHttpStatus(result.error) }
     );
   }
   return NextResponse.json({ ok: true, date: result.date });
@@ -32,7 +33,7 @@ export async function POST(request: NextRequest) {
   if (!result.ok) {
     return NextResponse.json(
       { error: result.error, detail: result.detail, ok: false },
-      { status: result.error === "Slack webhook failed" ? 502 : 500 }
+      { status: slackSendFailureHttpStatus(result.error) }
     );
   }
   return NextResponse.json({ ok: true, date: result.date });

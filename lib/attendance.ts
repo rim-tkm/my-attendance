@@ -26,6 +26,8 @@ export interface Member {
   invoiceNumber?: string | null;
   /** 電話番号 */
   phoneNumber?: string;
+  /** Slack メンバーID（例: U0123…）。シフト催促で <@…> メンションに使用 */
+  slackId?: string | null;
   /** 有効フラグ。false の場合は論理削除（一覧非表示・ログイン不可）。未設定は true 扱い */
   isActive?: boolean;
 }
@@ -322,16 +324,16 @@ export function getWeekStart(d: Date): string {
   const day = date.getDay();
   const diff = day === 0 ? -6 : 1 - day;
   date.setDate(date.getDate() + diff);
-  return toDateString(date);
+  return toLocalDateString(date);
 }
 
-/** 月曜日から日曜日まで7日分の日付配列 */
+/** 月曜日から日曜日まで7日分の日付配列（ローカル暦・ISO週と一致） */
 export function getWeekDates(weekStart: string): string[] {
   const [y, m, d] = weekStart.split("-").map(Number);
   const dates: string[] = [];
   for (let i = 0; i < 7; i++) {
     const date = new Date(y, m - 1, d + i);
-    dates.push(toDateString(date));
+    dates.push(toLocalDateString(date));
   }
   return dates;
 }
@@ -392,46 +394,68 @@ export function getDateStringsInclusive(startDate: string, endDate: string): str
   return out;
 }
 
-/** 提出対象週の月曜日：土日なら来週月曜、それ以外は今週月曜 */
+/**
+ * 「来週」の月曜（提出リマインド・未登録判定の基準）。
+ * 今日を含む週の月曜から 1 週後（ISO 週・月曜始まり）。
+ */
 export function getTargetWeekStart(): string {
-  const now = new Date();
-  const day = now.getDay();
-  if (day === 0 || day === 6) {
-    const nextMon = new Date(now);
-    nextMon.setDate(now.getDate() + (day === 0 ? 1 : 2));
-    return getWeekStart(nextMon);
-  }
-  return getWeekStart(now);
+  return addWeeksToWeekStart(getWeekStart(new Date()), 1);
 }
 
-/** 稼働可能日時登録の案内用（前週金曜 23:59）の日付 */
-export function getDeadlineForWeek(weekStart: string): Date {
-  const [y, m, d] = weekStart.split("-").map(Number);
-  const friday = new Date(y, m - 1, d - 3);
-  friday.setHours(23, 59, 0, 0);
-  return friday;
+/** YYYY-MM-DD が属する週の月曜（日付のみの暦演算） */
+export function getMondayOfCalendarWeekForYmd(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const wd = new Date(y, m - 1, d).getDay();
+  const diff = wd === 0 ? -6 : 1 - wd;
+  const mon = new Date(y, m - 1, d + diff);
+  return toLocalDateString(mon);
+}
+
+/** YYYY-MM-DD の暦上が土曜・日曜か（getMondayOfCalendarWeekForYmd と同じ日付解釈） */
+export function isWeekendYmd(ymd: string): boolean {
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
+  const wd = new Date(y, m - 1, d).getDay();
+  return wd === 0 || wd === 6;
+}
+
+/**
+ * その週（weekStart = 月曜）のシフト提出締切: 直前の日曜 23:59:59.999（JST）を表す瞬間。
+ * 比較は getTime() で行う（日本は夏時間なしのため UTC 14:59:59.999 当日 = JST 23:59:59.999）。
+ */
+export function getDeadlineForWeek(weekStartMondayYmd: string): Date {
+  const [y0, m0, d0] = weekStartMondayYmd.split("-").map(Number);
+  const prevSun = new Date(y0, m0 - 1, d0 - 1);
+  const y = prevSun.getFullYear();
+  const mo = prevSun.getMonth();
+  const d = prevSun.getDate();
+  return new Date(Date.UTC(y, mo, d, 14, 59, 59, 999));
 }
 
 /** 週開始日（YYYY-MM-DD）に 7n 日を加算した週開始を返す */
 export function addWeeksToWeekStart(weekStart: string, weeks: number): string {
   const [y, m, d] = weekStart.split("-").map(Number);
   const date = new Date(y, m - 1, d + 7 * weeks);
-  return toDateString(date);
+  return toLocalDateString(date);
 }
 
-/** 締め切り前の最初の週（登録可能な週）の月曜日。次週分は前週金曜23:59締めのため、締め切り過ぎなら次々週以降を返す */
-export function getFirstOpenWeekStart(): string {
-  let w = getTargetWeekStart();
-  const now = new Date();
-  while (now > getDeadlineForWeek(w)) {
-    w = addWeeksToWeekStart(w, 1);
-  }
-  return w;
+/** この週の月曜を基準に「来週」「再来週」の月曜 */
+export function getSubmittableShiftWeekMondays(thisWeekMondayYmd: string): [string, string] {
+  return [addWeeksToWeekStart(thisWeekMondayYmd, 1), addWeeksToWeekStart(thisWeekMondayYmd, 2)];
 }
 
-/** 指定週がまだ登録可能か（前週金曜23:59より前か） */
+/** 提出を受け付ける週のうち、いま編集可能な最初の週（どちらも不可なら null） */
+export function getFirstOpenShiftWeekStart(thisWeekMondayYmd: string): string | null {
+  const [w1, w2] = getSubmittableShiftWeekMondays(thisWeekMondayYmd);
+  const t = Date.now();
+  if (t <= getDeadlineForWeek(w1).getTime()) return w1;
+  if (t <= getDeadlineForWeek(w2).getTime()) return w2;
+  return null;
+}
+
+/** 指定週がまだ登録可能か（前週の日曜 23:59 JST まで） */
 export function isWeekOpenForEntry(weekStart: string): boolean {
-  return new Date() <= getDeadlineForWeek(weekStart);
+  return Date.now() <= getDeadlineForWeek(weekStart).getTime();
 }
 
 /** 指定週の稼働予定を日付でマップ */

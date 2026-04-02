@@ -88,3 +88,6 @@ CREATE POLICY "Allow all for open_records" ON public.open_records FOR ALL USING 
 CREATE POLICY "Allow all for shifts" ON public.shifts FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for kpis" ON public.kpis FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all for deviation_approvals" ON public.deviation_approvals FOR ALL USING (true) WITH CHECK (true);
+
+-- Slack メンション用（任意・未実行でもアプリは動作します。列がある場合のみ slack_id が保存されます）
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS slack_id text;
