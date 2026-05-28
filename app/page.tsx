@@ -3431,7 +3431,7 @@ function AdminDashboard(props: {
                   </span>
                   <h3 className="text-sm font-semibold text-slate-800">一般メンバー</h3>
                 </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                   <div className="flex aspect-square max-h-44 flex-col items-center justify-center rounded-2xl border border-slate-100 bg-slate-50 p-5 text-center sm:max-h-none">
                     <p className="text-xs font-medium text-slate-500">合計稼働時間</p>
                     <p className="mt-3 text-3xl font-bold tabular-nums leading-none tracking-tight text-slate-900 sm:text-4xl">
@@ -3439,23 +3439,29 @@ function AdminDashboard(props: {
                     </p>
                   </div>
                   <div className="flex aspect-square max-h-44 flex-col items-center justify-center rounded-2xl border border-slate-100 bg-slate-50 p-5 text-center sm:max-h-none">
-                    <p className="text-xs font-medium text-slate-500">合計アポ数</p>
+                    <p className="text-xs font-medium text-slate-500">有効コールからのKC率</p>
                     <p className="mt-3 text-3xl font-bold tabular-nums leading-none tracking-tight text-slate-900 sm:text-4xl">
-                      {dashboardGeneralMetrics.totalApo}
+                      {dashboardGeneralMetrics.kcRate != null ? `${dashboardGeneralMetrics.kcRate}` : "—"}
+                    </p>
+                    {dashboardGeneralMetrics.kcRate != null ? (
+                      <p className="mt-2 text-sm font-medium text-slate-500">%（目標 16%）</p>
+                    ) : null}
+                  </div>
+                  <div className="flex aspect-square max-h-44 flex-col items-center justify-center rounded-2xl border border-slate-100 bg-slate-50 p-5 text-center sm:max-h-none">
+                    <p className="text-xs font-medium text-slate-500">決アポ数</p>
+                    <p className="mt-3 text-3xl font-bold tabular-nums leading-none tracking-tight text-slate-900 sm:text-4xl">
+                      {dashboardGeneralMetrics.decisionMakerApo}
                       <span className="ml-1 text-lg font-semibold text-slate-500 sm:text-xl">件</span>
                     </p>
                   </div>
                   <div className="flex aspect-square max-h-44 flex-col items-center justify-center rounded-2xl border border-slate-100 bg-slate-50 p-5 text-center sm:max-h-none">
-                    <p className="text-xs font-medium text-slate-500">時間あたりアポ率</p>
+                    <p className="text-xs font-medium text-slate-500">有効コールからのアポ率</p>
                     <p className="mt-3 text-3xl font-bold tabular-nums leading-none tracking-tight text-slate-900 sm:text-4xl">
-                      {dashboardGeneralMetrics.aposPerHour != null
-                        ? dashboardGeneralMetrics.aposPerHour.toFixed(2)
-                        : "—"}
+                      {dashboardGeneralMetrics.apoRate != null ? `${dashboardGeneralMetrics.apoRate}` : "—"}
                     </p>
-                    {dashboardGeneralMetrics.aposPerHour != null ? (
-                      <p className="mt-2 text-sm font-medium text-slate-500">件/時間</p>
+                    {dashboardGeneralMetrics.apoRate != null ? (
+                      <p className="mt-2 text-sm font-medium text-slate-500">%（目標 1%）</p>
                     ) : null}
-                    <p className="mt-3 text-[10px] leading-snug text-slate-400">決裁＋非決裁 ÷ 稼働</p>
                   </div>
                 </div>
               </div>
@@ -4457,9 +4463,9 @@ function AdminDashboard(props: {
                       </div>
                     </div>
                     <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
-                      <div className="text-xs font-medium text-slate-600">総アポ数（決裁者）</div>
+                      <div className="text-xs font-medium text-slate-600">合計アポ数</div>
                       <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
-                        {rangeTotals.decisionMakerApo}
+                        {rangeTotals.totalApo} 件
                       </div>
                     </div>
                     <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">

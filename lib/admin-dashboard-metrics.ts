@@ -1,5 +1,5 @@
 import type { KpiRecord, Member, WorkRecord } from "@/lib/attendance";
-import { getKpiForMonth, getKpiInDateRange, getKpiTotalsFromRecords } from "@/lib/attendance";
+import { getKpiForMonth, getKpiInDateRange, getKpiTotalsFromRecords, safeRatePercent } from "@/lib/attendance";
 import {
   calcInternInvoiceAmounts,
   getInternUnitRates,
@@ -35,6 +35,9 @@ export type GeneralDashboardMetrics = {
   totalMinutes: number;
   totalApo: number;
   aposPerHour: number | null;
+  decisionMakerApo: number;
+  kcRate: number | null;
+  apoRate: number | null;
 };
 
 export function computeGeneralDashboardMetrics(
@@ -50,7 +53,16 @@ export function computeGeneralDashboardMetrics(
     .reduce((s, r) => s + r.durationMinutes, 0);
   const hours = totalMinutes / 60;
   const aposPerHour = hours > 0 ? totals.totalApo / hours : null;
-  return { totalMinutes, totalApo: totals.totalApo, aposPerHour };
+  const kcRate = safeRatePercent(totals.kcCount, totals.validCalls);
+  const apoRate = safeRatePercent(totals.decisionMakerApo, totals.validCalls);
+  return {
+    totalMinutes,
+    totalApo: totals.totalApo,
+    aposPerHour,
+    decisionMakerApo: totals.decisionMakerApo,
+    kcRate,
+    apoRate,
+  };
 }
 
 export type InternDashboardMetrics = {
@@ -146,7 +158,17 @@ export function computeGeneralKpiMetricsForRange(
     .reduce((s, r) => s + r.durationMinutes, 0);
   const hours = totalMinutes / 60;
   const aposPerHour = hours > 0 ? totals.totalApo / hours : null;
-  return { totals, totalMinutes, totalApo: totals.totalApo, aposPerHour };
+  const kcRate = safeRatePercent(totals.kcCount, totals.validCalls);
+  const apoRate = safeRatePercent(totals.decisionMakerApo, totals.validCalls);
+  return {
+    totals,
+    totalMinutes,
+    totalApo: totals.totalApo,
+    aposPerHour,
+    decisionMakerApo: totals.decisionMakerApo,
+    kcRate,
+    apoRate,
+  };
 }
 
 export type InternConfirmedDailyPoint = {
