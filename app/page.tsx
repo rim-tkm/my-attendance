@@ -3441,7 +3441,7 @@ function AdminDashboard(props: {
                   <div className="flex aspect-square max-h-44 flex-col items-center justify-center rounded-2xl border border-slate-100 bg-slate-50 p-5 text-center sm:max-h-none">
                     <p className="text-xs font-medium text-slate-500">有効コールからのKC率</p>
                     <p className="mt-3 text-3xl font-bold tabular-nums leading-none tracking-tight text-slate-900 sm:text-4xl">
-                      {dashboardGeneralMetrics.kcRate != null ? `${dashboardGeneralMetrics.kcRate}` : "—"}
+                      {dashboardGeneralMetrics.kcRate != null ? dashboardGeneralMetrics.kcRate.toFixed(1) : "—"}
                     </p>
                     {dashboardGeneralMetrics.kcRate != null ? (
                       <p className="mt-2 text-sm font-medium text-slate-500">%（目標 16%）</p>
@@ -3457,7 +3457,7 @@ function AdminDashboard(props: {
                   <div className="flex aspect-square max-h-44 flex-col items-center justify-center rounded-2xl border border-slate-100 bg-slate-50 p-5 text-center sm:max-h-none">
                     <p className="text-xs font-medium text-slate-500">有効コールからのアポ率</p>
                     <p className="mt-3 text-3xl font-bold tabular-nums leading-none tracking-tight text-slate-900 sm:text-4xl">
-                      {dashboardGeneralMetrics.apoRate != null ? `${dashboardGeneralMetrics.apoRate}` : "—"}
+                      {dashboardGeneralMetrics.apoRate != null ? dashboardGeneralMetrics.apoRate.toFixed(1) : "—"}
                     </p>
                     {dashboardGeneralMetrics.apoRate != null ? (
                       <p className="mt-2 text-sm font-medium text-slate-500">%（目標 1%）</p>
@@ -4496,11 +4496,11 @@ function AdminDashboard(props: {
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
                     <div className="text-xs text-slate-300">有効コールからのKC率（目標 16%）</div>
-                    <div className="text-2xl font-bold">{rangeKcRate != null ? `${rangeKcRate}%` : "—"}</div>
+                    <div className="text-2xl font-bold">{rangeKcRate != null ? `${rangeKcRate.toFixed(1)}%` : "—"}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
                     <div className="text-xs text-slate-300">有効コールからのアポ率（目標 1%）</div>
-                    <div className="text-2xl font-bold">{rangeApoRate != null ? `${rangeApoRate}%` : "—"}</div>
+                    <div className="text-2xl font-bold">{rangeApoRate != null ? `${rangeApoRate.toFixed(1)}%` : "—"}</div>
                   </div>
                 </div>
                 </>
