@@ -4415,7 +4415,7 @@ function AdminDashboard(props: {
                 kpiGeneralRangeMetrics;
               const rangeValidRate = safeRatePercent(rangeTotals.validCalls, rangeTotals.totalCalls);
               const rangeKcRate = safeRatePercent(rangeTotals.kcCount, rangeTotals.validCalls);
-              const rangeApoRate = safeRatePercent(rangeTotals.decisionMakerApo, rangeTotals.kcCount);
+              const rangeApoRate = safeRatePercent(rangeTotals.decisionMakerApo, rangeTotals.validCalls);
               const summaryTotalPay = dashboardMemberSplit.general.reduce((s, mem) => {
                 const mins = getTotalMinutesForUserInDateRange(
                   allRecords,
@@ -4445,9 +4445,9 @@ function AdminDashboard(props: {
                       </div>
                     </div>
                     <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
-                      <div className="text-xs font-medium text-slate-600">合計アポ数</div>
+                      <div className="text-xs font-medium text-slate-600">決アポ数</div>
                       <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
-                        {rangeTotals.totalApo} 件
+                        {rangeTotals.decisionMakerApo} 件
                       </div>
                     </div>
                     <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
@@ -4489,11 +4489,11 @@ function AdminDashboard(props: {
                     <div className="text-2xl font-bold">{rangeValidRate != null ? `${rangeValidRate}%` : "—"}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
-                    <div className="text-xs text-slate-300">KC率（決裁者接続率）</div>
+                    <div className="text-xs text-slate-300">有効コールからのKC率（目標 16%）</div>
                     <div className="text-2xl font-bold">{rangeKcRate != null ? `${rangeKcRate}%` : "—"}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
-                    <div className="text-xs text-slate-300">アポ率</div>
+                    <div className="text-xs text-slate-300">有効コールからのアポ率（目標 1%）</div>
                     <div className="text-2xl font-bold">{rangeApoRate != null ? `${rangeApoRate}%` : "—"}</div>
                   </div>
                 </div>
