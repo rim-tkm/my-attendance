@@ -389,9 +389,125 @@ export type MemberRoiRow = {
   fixedCostYen: number;
   costYen: number;
   roi: number | null;
+  /** 決裁者アポ ÷ 総コール（従来 ROI 表の定義） */
   decisionApoRate: number | null;
   signal: RoiSignal;
+  /** 期間内 KPI 合計（生産性 CSV・業務委託 KPI と同式） */
+  kpiTotalCalls: number;
+  kpiValidCalls: number;
+  kpiTotalApo: number;
+  kpiDecisionApo: number;
+  kpiValidRate: number | null;
+  kpiApoRateKc: number | null;
+  kpiDecisionApoOverValid: number | null;
+  /** 有効コール / 実稼働 h（生産性 CSV と同式） */
+  productivityValidPerHour: number | null;
+  /** 合計委託料: 期間内稼働×単価（固定費除く。CSV 集計行と同じ） */
+  laborCommissionYen: number;
 };
+
+/** 有効コール/実稼働h（0 件時は null） */
+export function productivityValidCallsPerHourN(valid: number, workMin: number): number | null {
+  if (!Number.isFinite(valid) || valid <= 0) return null;
+  const h = workMin / 60;
+  if (!Number.isFinite(h) || h <= 0) return null;
+  return valid / h;
+}
+
+/** 業務委託KPI テーブル（生産性分析）の列ソートキー */
+export const ROI_KPI_OUTSOURCE_SORT_KEYS = [
+  "name",
+  "workMinutes",
+  "totalCalls",
+  "validCalls",
+  "totalApo",
+  "decisionApo",
+  "validRate",
+  "apoRateKc",
+  "decisionApoOverValid",
+  "productivity",
+  "commissionYen",
+  /** 給与相当＋固定費（画面上の総コスト） */
+  "totalCostYen",
+  /** 創出価値÷総コスト。算出不可は null（ソートでは常に末尾） */
+  "roi",
+] as const;
+export type RoiKpiOutsourceSortKey = (typeof ROI_KPI_OUTSOURCE_SORT_KEYS)[number];
+
+function cmpNullableNum(a: number | null, b: number | null, desc: boolean): number {
+  const av = a != null && Number.isFinite(a) ? a : null;
+  const bv = b != null && Number.isFinite(b) ? b : null;
+  if (av == null && bv == null) return 0;
+  if (av == null) return 1;
+  if (bv == null) return -1;
+  if (av === bv) return 0;
+  if (desc) return bv - av;
+  return av - bv;
+}
+
+function cmpNameJa(a: string, b: string, desc: boolean): number {
+  const t = a.localeCompare(b, "ja");
+  if (t === 0) return 0;
+  if (desc) return -t;
+  return t;
+}
+
+/** 業務委託KPI 列の数値比較（%・時間の内部値は数値） */
+export function compareMemberRoiRowsByKpiOutsourceKey(
+  a: MemberRoiRow,
+  b: MemberRoiRow,
+  key: RoiKpiOutsourceSortKey,
+  desc: boolean
+): number {
+  let d = 0;
+  switch (key) {
+    case "name":
+      d = cmpNameJa(a.name, b.name, desc);
+      break;
+    case "workMinutes":
+      d = cmpNullableNum(a.totalMinutes, b.totalMinutes, desc);
+      break;
+    case "totalCalls":
+      d = cmpNullableNum(a.kpiTotalCalls, b.kpiTotalCalls, desc);
+      break;
+    case "validCalls":
+      d = cmpNullableNum(a.kpiValidCalls, b.kpiValidCalls, desc);
+      break;
+    case "totalApo":
+      d = cmpNullableNum(a.kpiTotalApo, b.kpiTotalApo, desc);
+      break;
+    case "decisionApo":
+      d = cmpNullableNum(a.kpiDecisionApo, b.kpiDecisionApo, desc);
+      break;
+    case "validRate":
+      d = cmpNullableNum(a.kpiValidRate, b.kpiValidRate, desc);
+      break;
+    case "apoRateKc":
+      d = cmpNullableNum(a.kpiApoRateKc, b.kpiApoRateKc, desc);
+      break;
+    case "decisionApoOverValid":
+      d = cmpNullableNum(a.kpiDecisionApoOverValid, b.kpiDecisionApoOverValid, desc);
+      break;
+    case "productivity":
+      d = cmpNullableNum(a.productivityValidPerHour, b.productivityValidPerHour, desc);
+      break;
+    case "commissionYen":
+      d = cmpNullableNum(a.laborCommissionYen, b.laborCommissionYen, desc);
+      break;
+    case "totalCostYen":
+      d = cmpNullableNum(
+        Number.isFinite(a.costYen) ? a.costYen : null,
+        Number.isFinite(b.costYen) ? b.costYen : null,
+        desc
+      );
+      break;
+    case "roi":
+      d = cmpNullableNum(a.roi, b.roi, desc);
+      break;
+  }
+  if (d !== 0) return d;
+  return a.name.localeCompare(b.name, "ja");
+}
 
 export function buildMemberRoiRows(
   yearMonth: string,
@@ -415,6 +531,10 @@ export function buildMemberRoiRows(
     const costYen = laborCostYen + fixedCostYen;
     const roi = computeRoi(valueYen, costYen);
     const decisionApoRate = safeRatePercent(totals.decisionMakerApo, totals.totalCalls);
+    const laborCommissionYen = calcMonthlyPay(totalMinutes, rate);
+    const kpiValidRate = safeRatePercent(totals.validCalls, totals.totalCalls);
+    const kpiApoRateKc = safeRatePercent(totals.decisionMakerApo, totals.kcCount);
+    const kpiDecisionApoOverValid = safeRatePercent(totals.decisionMakerApo, totals.validCalls);
     return {
       memberId: mem.id,
       name: mem.name,
@@ -426,6 +546,15 @@ export function buildMemberRoiRows(
       roi,
       decisionApoRate,
       signal: roiTrafficSignal(roi),
+      kpiTotalCalls: totals.totalCalls,
+      kpiValidCalls: totals.validCalls,
+      kpiTotalApo: totals.totalApo,
+      kpiDecisionApo: totals.decisionMakerApo,
+      kpiValidRate,
+      kpiApoRateKc,
+      kpiDecisionApoOverValid,
+      productivityValidPerHour: productivityValidCallsPerHourN(totals.validCalls, totalMinutes),
+      laborCommissionYen,
     };
   });
 }
@@ -457,6 +586,10 @@ export function buildMemberRoiRowsForRange(
     const costYen = laborCostYen + fixedCostYen;
     const roi = computeRoi(valueYen, costYen);
     const decisionApoRate = safeRatePercent(totals.decisionMakerApo, totals.totalCalls);
+    const laborCommissionYen = calcMonthlyPay(totalMinutes, rate);
+    const kpiValidRate = safeRatePercent(totals.validCalls, totals.totalCalls);
+    const kpiApoRateKc = safeRatePercent(totals.decisionMakerApo, totals.kcCount);
+    const kpiDecisionApoOverValid = safeRatePercent(totals.decisionMakerApo, totals.validCalls);
     return {
       memberId: mem.id,
       name: mem.name,
@@ -468,6 +601,15 @@ export function buildMemberRoiRowsForRange(
       roi,
       decisionApoRate,
       signal: roiTrafficSignal(roi),
+      kpiTotalCalls: totals.totalCalls,
+      kpiValidCalls: totals.validCalls,
+      kpiTotalApo: totals.totalApo,
+      kpiDecisionApo: totals.decisionMakerApo,
+      kpiValidRate,
+      kpiApoRateKc,
+      kpiDecisionApoOverValid,
+      productivityValidPerHour: productivityValidCallsPerHourN(totals.validCalls, totalMinutes),
+      laborCommissionYen,
     };
   });
 }

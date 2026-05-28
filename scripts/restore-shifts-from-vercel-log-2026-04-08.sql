@@ -1,0 +1,5 @@
+-- このファイルは旧版です。最新のログから再生成する場合は次を実行してください:
+--   node scripts/parse-vercel-schedule-log.mjs ~/Downloads/your-export.json > scripts/restore-shifts-from-vercel-log-latest.sql
+--
+-- 2026-04-08 時点の my-attendance-log-export-2026-04-08T02-54-51.json（14日分）から
+-- パーサで生成した内容と同一です（ログに shiftSummary 行が無いため、復元可能は2件のみ）。

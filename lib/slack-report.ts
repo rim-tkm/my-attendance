@@ -125,8 +125,14 @@ export async function sendSlackReportForDate(dateStr: string): Promise<SlackRepo
 
   const apoUnit =
     totals.totalApo > 0 && Number.isFinite(totalPay) ? totalPay / totals.totalApo : null;
+  const decisionMakerApoUnit =
+    totals.decisionMakerApo > 0 && Number.isFinite(totalPay) ? totalPay / totals.decisionMakerApo : null;
 
   const dateLine = formatDateWithWeekdayJa(dateStr);
+  const apoDetailBlock = `💰 【アポ単価詳細】
+・通常アポ単価：${apoUnit != null && Number.isFinite(apoUnit) ? yenDisplay(apoUnit) : "—"}
+・決済者アポ単価：${decisionMakerApoUnit != null && Number.isFinite(decisionMakerApoUnit) ? yenDisplay(decisionMakerApoUnit) : "—"}`;
+
   const text = `【業務委託稼働報告】
 ${dateLine}
 ----------------------------
@@ -142,7 +148,8 @@ ${dateLine}
 ⑨KCからのアポ率（⑥÷②）：${pctDisplay(apoFromKcRate)}
 ⑩1日の総稼働時間：${formatDuration(totalMinutes)}
 ⑪総稼働時間に対する委託料合計：${yenDisplay(totalPay)}
-⑫その日のアポ単価（⑪÷⑥）：${apoUnit != null && Number.isFinite(apoUnit) ? yenDisplay(apoUnit) : "-"}`;
+⑫その日のアポ単価（⑪÷⑥）：${apoUnit != null && Number.isFinite(apoUnit) ? yenDisplay(apoUnit) : "-"}
+${apoDetailBlock}`;
 
   const posted = await postSlackIncomingWebhook(webhookUrl, { text });
   if (!posted.ok) {

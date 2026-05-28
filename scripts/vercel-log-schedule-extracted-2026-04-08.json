@@ -1,0 +1,26 @@
+{
+  "sources": [
+    "/Users/takuma/Downloads/my-attendance-log-export-2026-04-08T02-38-23.json",
+    "/Users/takuma/Downloads/my-attendance-log-export-2026-04-08T02-54-51.json"
+  ],
+  "note": "両方とも POST 本文は含まれず、attempting first-shift Slack からの1日分のみ抽出可能。77491ac6-… の30行などはログに時刻なし。今後の保存では [api/schedule] shiftSummary 1行に全行が出る。",
+  "parseCommand": "node scripts/parse-vercel-schedule-log.mjs <export.json> > scripts/restore-shifts-from-vercel-log-latest.sql",
+  "rowsLatestByUserDate": [
+    {
+      "userId": "77f99b3a-b96a-4945-8670-1510d143d803",
+      "date": "2026-04-08",
+      "startPlanned": "09:00",
+      "endPlanned": "18:00",
+      "source": "first-shift-Slack",
+      "latestTimestampInMs": 1775544855597
+    },
+    {
+      "userId": "bfa42f7a-fd2a-47de-91ca-50735df7b966",
+      "date": "2026-04-13",
+      "startPlanned": "10:00",
+      "endPlanned": "12:00",
+      "source": "first-shift-Slack",
+      "latestTimestampInMs": 1775572658923
+    }
+  ]
+}

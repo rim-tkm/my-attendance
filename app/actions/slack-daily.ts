@@ -3,7 +3,10 @@
 import { isWeekendYmd } from "@/lib/attendance";
 import { getTodayJstDateString, sendSlackDailyForDate } from "@/lib/slack-daily";
 
-/** 管理画面からのテスト送信（サーバー側のみで実行。Webhook URL はクライアントに出さない）。土日も必ず送信試行する。 */
+/**
+ * 管理画面からのテスト送信（サーバー側のみで実行。Webhook URL はクライアントに出さない）。
+ * `dateStr` に `YYYY-MM-DD` を渡すとその日の稼働予定一覧を送信。省略時は JST の今日。土日も必ず送信試行する。
+ */
 export async function slackDailyTestAction(dateStr?: string): Promise<{
   ok: boolean;
   error?: string;

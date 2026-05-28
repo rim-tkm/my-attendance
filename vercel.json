@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/slack-daily",
-      "schedule": "0 0 * * *"
+      "schedule": "0 23 * * *"
     },
     {
       "path": "/api/slack-report",
@@ -23,6 +23,10 @@
     {
       "path": "/api/cron/remind-unsubmitted",
       "schedule": "0 11 * * 6"
+    },
+    {
+      "path": "/api/cron/missed-punch-start",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

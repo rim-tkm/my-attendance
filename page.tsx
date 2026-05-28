@@ -1,7 +1,7 @@
 "use client";
 
 import { signIn, signOut } from "next-auth/react";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import type { WorkRecord, OpenRecord, Shift, KpiRecord, Member } from "@/lib/attendance";
 import {
   DEFAULT_HOURLY_RATE,
@@ -25,6 +25,7 @@ import {
   getThisWeekMondayDateString,
   getKpiInDateRange,
   getKpiTotalsFromRecords,
+  decisionMakerApoUnitYenFromPay,
   get15MinOptions,
   getShiftPlannedMinutes,
   timeToMinutes,
@@ -33,17 +34,32 @@ import {
   addWeeksToWeekStart,
   getMondayOfCalendarWeekForYmd,
   getSubmittableShiftWeekMondays,
+  getOrderedSubmittableShiftWeeks,
   getFirstOpenShiftWeekStart,
   isWeekOpenForEntry,
   getShiftsByDateForWeek,
   getDateStringsInclusive,
   SHIFT_ENTRY_NONE,
+  canonicalShiftForUserDate,
   isWeekendYmd,
   getKpiRates,
   safeRatePercent,
   getTotalMinutesForMonthByUser,
+  getTotalMinutesForUserInDateRange,
   calcMonthlyPay,
+  getActiveMembersMissingInvoiceNumber,
+  isMemberMissingInvoiceNumber,
+  KPI_DAY_DEFAULT_START_TIME,
+  coerceKpiTimestamptzField,
+  coerceKpiWorkDateYmd,
+  dedupeKpiRecordsByUserDate,
+  normalizeKpiStartTime,
 } from "@/lib/attendance";
+import {
+  formatAdminShiftSchedulePrimaryLine,
+  formatAdminShiftScheduleSecondaryLine,
+  getUserDayLaborSignals,
+} from "@/lib/shift-labor-display";
 import {
   addCalendarDays,
   buildMemberRoiRowsForRange,
@@ -53,6 +69,7 @@ import {
   firstDayOfRollingCalendarMonths,
   getMonthDateRange,
   normalizeRoiRange,
+  compareMemberRoiRowsByKpiOutsourceKey,
   ROI_YEN_PER_CALL,
   ROI_YEN_PER_FOLLOWUP,
   ROI_YEN_PER_NON_DECISION_APO,
@@ -61,6 +78,7 @@ import {
   ROI_FIXED_COST_AUTOCALL_YEN,
   ROI_PER_PERSON_FIXED_COST_YEN,
   type DailyRoiPoint,
+  type RoiKpiOutsourceSortKey,
 } from "@/lib/roi-analysis";
 import {
   loadMembers,
@@ -74,7 +92,6 @@ import {
   saveOpenRecords,
   saveRecordsForUser,
   setOpenRecordForUser,
-  saveShiftsForUser,
   saveKpiForUser,
   loginUser,
   loadDeviationApprovals,
@@ -82,13 +99,23 @@ import {
   exportAllDataFromSupabase,
   importAllDataToSupabase,
 } from "@/lib/supabase-data";
+import { persistOpenRecordClientBackup, readOpenRecordClientBackup } from "@/lib/open-record-client-backup";
+import { withNetworkRetry } from "@/lib/network-retry";
+import { parseStartInstantJstOnWorkDate } from "@/lib/punch-jst-time";
 import {
   exportScheduleToCsvString,
   formatScheduleColumnHeader,
   getMondayOfCalendarWeekContaining,
   getTodayJstDateString,
+  isWeekendYmdJst,
+  JST_WEEKEND_WORK_REJECTED_MESSAGE,
 } from "@/lib/export-schedule";
-
+import {
+  isWithinDailyPunchClockWindowJst,
+  isMemberEndPunchLockedByPlanAt,
+  PUNCH_OUTSIDE_WINDOW_MESSAGE,
+  PUNCH_DEADLINE_PASSED_MESSAGE,
+} from "@/lib/punch-time-guard";
 function formatTime(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
@@ -145,16 +172,6 @@ function adminShiftDayCanSave(f: AdminShiftDayFields): boolean {
   if (a.dayNone) return true;
   if (a.slot1Inverted || a.slot2Incomplete || a.slot2Inverted) return false;
   return a.totalMinutes > 0;
-}
-
-function formatAdminShiftOneDaySummary(s: Shift | undefined): string {
-  if (!s) return "未登録";
-  if (s.startPlanned === SHIFT_ENTRY_NONE) return "稼働予定なし";
-  let t = `${s.startPlanned}～${s.endPlanned}`;
-  if (s.startPlanned2 && s.endPlanned2 && s.startPlanned2.trim() && s.endPlanned2.trim()) {
-    t += ` ／ ${s.startPlanned2}～${s.endPlanned2}`;
-  }
-  return t;
 }
 
 /** ビジュアルシフト表用：セル種別 */
@@ -228,6 +245,23 @@ function getInvoiceNumber(yearMonth: string, managementNumber: string | null | u
   return `${year}${month}${padded}`;
 }
 
+/** メンバー一覧：請求管理番号の3桁表示用。未設定は null */
+function formatMemberInvoiceNumberThreeDigits(invoiceNumber: string | null | undefined): string | null {
+  const raw = String(invoiceNumber ?? "").replace(/\D/g, "");
+  if (!raw) return null;
+  return raw.slice(-3).padStart(3, "0");
+}
+
+type AdminMemberTableSortKey = "morning" | "intern" | "invoice" | "name" | "minutes" | "pay";
+
+function adminMemberTableSortGlyph(
+  sort: { key: AdminMemberTableSortKey; dir: "asc" | "desc" } | null,
+  column: AdminMemberTableSortKey
+): string {
+  if (!sort || sort.key !== column) return "⇅";
+  return sort.dir === "asc" ? "▲" : "▼";
+}
+
 /** 対象月の翌月15日を支払期限として返す（例: 2026-03 → 2026/04/15） */
 function getPaymentDueDate(yearMonth: string): string {
   const [y, m] = yearMonth.split("-").map(Number);
@@ -295,8 +329,8 @@ function getMemberIdsWithShiftOnDate(shifts: Shift[], dateStr: string): Set<stri
 /** 前日以前の「業務開始のみ」記録を稼働予定終了時刻で自動補完（日付変更時・起動時に実行） */
 async function runAutoComplete(): Promise<void> {
   const [records, openRecs, shifts] = await Promise.all([loadRecords(), loadOpenRecords(), loadShifts()]);
-  const todayStr = toDateString(new Date());
-  const openPast = openRecs.filter((o) => o.date < todayStr);
+  const todayStr = getTodayJstDateString();
+  const openPast = openRecs.filter((o) => o.date < todayStr && !isWeekendYmdJst(o.date));
   if (openPast.length === 0) return;
   const newRecords: WorkRecord[] = [];
   for (const o of openPast) {
@@ -316,11 +350,15 @@ async function runAutoComplete(): Promise<void> {
     if (built) newRecords.push(built);
   }
   if (newRecords.length === 0) return;
-  const updatedRecords = [...records, ...newRecords];
+  const updatedRecords = [...records, ...newRecords].filter((r) => !isWeekendYmdJst(r.date));
   const completedIds = new Set(openPast.map((x) => x.id));
   const updatedOpen = openRecs.filter((r) => !completedIds.has(r.id));
-  await saveRecords(updatedRecords);
-  await saveOpenRecords(updatedOpen);
+  try {
+    await saveRecords(updatedRecords);
+    await saveOpenRecords(updatedOpen);
+  } catch (e) {
+    console.warn("runAutoComplete save error:", e);
+  }
 }
 
 /** 1件の活動記録と稼働予定スロットから乖離情報を算出（15分以上で乖離）。スロットは { start, end } の配列 */
@@ -845,17 +883,112 @@ function RoiTrendChart({ points }: { points: DailyRoiPoint[] }) {
   );
 }
 
-const KPI_LABELS: { key: keyof Omit<KpiRecord, "id" | "date" | "userId">; label: string }[] = [
-  { key: "totalCalls", label: "総コール数" },
-  { key: "validCalls", label: "総有効コール数" },
-  { key: "kcCount", label: "KC数" },
-  { key: "followUpCreated", label: "追いかけ作成数" },
+type KpiFormFieldKey = keyof Omit<
+  KpiRecord,
+  | "id"
+  | "date"
+  | "userId"
+  | "kpiMissingSlackNotifiedAt"
+  | "startTime"
+  | "confirmedDecisionMakerApps"
+  | "confirmedNonDecisionMakerApps"
+>;
+
+const KPI_LABELS: { key: KpiFormFieldKey; label: string; callSystemHint?: string }[] = [
+  {
+    key: "totalCalls",
+    label: "総コール数",
+    callSystemHint: "（コールシステム上の『発信数』を入力してください）",
+  },
+  {
+    key: "validCalls",
+    label: "総有効コール数",
+    callSystemHint: "（見込み数 + コンタクト数 + キーマンコンタクト数 + 完了数の合計）",
+  },
+  {
+    key: "kcCount",
+    label: "KC数",
+    callSystemHint: "（キーマンコンタクト数）",
+  },
+  {
+    key: "followUpCreated",
+    label: "追いかけ作成数",
+    callSystemHint: "（見込み数）",
+  },
   { key: "decisionMakerApo", label: "決裁者アポ数" },
   { key: "nonDecisionMakerApo", label: "非決裁者アポ数" },
 ];
 
+const EMPTY_KPI_FORM_STRINGS: Record<KpiFormFieldKey, string> = {
+  totalCalls: "",
+  validCalls: "",
+  kcCount: "",
+  followUpCreated: "",
+  decisionMakerApo: "",
+  nonDecisionMakerApo: "",
+};
+
+function kpiStoredNumberToInputString(n: number): string {
+  return n === 0 ? "" : String(n);
+}
+
+function parseKpiFieldStringToInt(s: string): number {
+  const t = s.trim();
+  if (t === "") return 0;
+  const n = parseInt(t, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+function sanitizeKpiNumericInput(raw: string): string {
+  return raw.replace(/\D/g, "");
+}
+
+function handleKpiNumberInputFocus(e: React.FocusEvent<HTMLInputElement>) {
+  if (e.currentTarget.value === "0") {
+    e.currentTarget.select();
+  }
+}
+
 /** NextAuth Cookie が使えない本番でも Slack 送信できるよう、管理者ログイン時にのみメモリ保持（再読み込みで消える） */
 const slackAdminAuthMemory = { current: null as { loginId: string; password: string } | null };
+
+type KpiOutsourceTableSort = { key: RoiKpiOutsourceSortKey; dir: "asc" | "desc" } | null;
+
+function cycleKpiOutsourceSort(prev: KpiOutsourceTableSort, key: RoiKpiOutsourceSortKey): KpiOutsourceTableSort {
+  if (prev == null) return { key, dir: "desc" };
+  if (prev.key !== key) return { key, dir: "desc" };
+  if (prev.dir === "desc") return { key, dir: "asc" };
+  return null;
+}
+
+function RoiKpiOutsourceTh(props: {
+  label: string;
+  sublabel?: string;
+  sortKey: RoiKpiOutsourceSortKey;
+  sort: KpiOutsourceTableSort;
+  onSort: (k: RoiKpiOutsourceSortKey) => void;
+  align?: "left" | "right";
+}) {
+  const { label, sublabel, sortKey, sort, onSort, align = "right" } = props;
+  const active = sort != null && sort.key === sortKey;
+  const icon = !active ? "↕" : sort.dir === "desc" ? "↓" : "↑";
+  return (
+    <th className={`px-2 py-2.5 font-medium text-slate-600 sm:px-3 ${align === "right" ? "text-right" : "text-left"}`}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        title="クリック: 降順 → 昇順 → 元の順"
+        className={`group flex w-full flex-col gap-0.5 ${align === "right" ? "items-end text-right" : "items-start text-left"}`}
+      >
+        <span className="inline-flex items-baseline gap-1">
+          <span>{label}</span>
+          <span className="text-slate-400">{icon}</span>
+        </span>
+        {sublabel ? <span className="text-[10px] font-normal text-slate-500">{sublabel}</span> : null}
+      </button>
+    </th>
+  );
+}
 
 function AdminDashboard(props: {
   isAdminUser: boolean;
@@ -871,6 +1004,8 @@ function AdminDashboard(props: {
   onSaveMemberShifts: (memberId: string, shifts: Shift[]) => Promise<void>;
   deviationApprovedIds: Set<string>;
   onApproveDeviation: (workRecordId: string) => Promise<void>;
+  deepLinkMemberId?: string;
+  onAdminDeepLinkConsumed?: () => void;
 }) {
   const {
     isAdminUser,
@@ -886,6 +1021,8 @@ function AdminDashboard(props: {
     onSaveMemberShifts,
     deviationApprovedIds,
     onApproveDeviation,
+    deepLinkMemberId,
+    onAdminDeepLinkConsumed,
   } = props;
   const [adminSection, setAdminSection] = useState<AdminSection>("dashboard");
   const [newMemberName, setNewMemberName] = useState("");
@@ -899,6 +1036,7 @@ function AdminDashboard(props: {
     form?: string;
   } | null>(null);
   const [newMemberAdding, setNewMemberAdding] = useState(false);
+  const [invoiceSaveHint, setInvoiceSaveHint] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editLogin, setEditLogin] = useState("");
@@ -913,19 +1051,21 @@ function AdminDashboard(props: {
   const [editAccountHolder, setEditAccountHolder] = useState("");
   const [editInvoiceNumber, setEditInvoiceNumber] = useState("");
   const [editPhoneNumber, setEditPhoneNumber] = useState("");
-  const [kpiDate, setKpiDate] = useState(() => toDateString(new Date()));
-  const [dashboardDate, setDashboardDate] = useState(() => toDateString(new Date()));
+  const [editFirstWorkDate, setEditFirstWorkDate] = useState("");
+  const [kpiDate, setKpiDate] = useState(() => getTodayJstDateString());
+  const [dashboardDate, setDashboardDate] = useState(() => getTodayJstDateString());
   const [backupExpanded, setBackupExpanded] = useState(false);
   const [rangeStart, setRangeStart] = useState(() => getThisWeekMondayDateString());
-  const [rangeEnd, setRangeEnd] = useState(() => toDateString(new Date()));
+  const [rangeEnd, setRangeEnd] = useState(() => getTodayJstDateString());
   const [reportMember, setReportMember] = useState<Member | null>(null);
   const [reportMonth, setReportMonth] = useState(() => getLastMonthString());
   const [recordFormMember, setRecordFormMember] = useState<Member | null>(null);
   const [recordFormRecord, setRecordFormRecord] = useState<WorkRecord | null>(null);
-  const [recordFormDate, setRecordFormDate] = useState(() => toDateString(new Date()));
+  const [recordFormDate, setRecordFormDate] = useState(() => getTodayJstDateString());
   const [recordFormStart, setRecordFormStart] = useState("09:00");
   const [recordFormEnd, setRecordFormEnd] = useState("18:00");
   const [recordListMemberId, setRecordListMemberId] = useState<string | null>(null);
+  const attendanceRecordEditorRef = useRef<HTMLDivElement>(null);
   const [shiftEditMember, setShiftEditMember] = useState<Member | null>(null);
   const [shiftWeekForm, setShiftWeekForm] = useState<Record<string, { s1: string; e1: string; s2: string; e2: string }>>({});
   const [shiftViewStart, setShiftViewStart] = useState(() =>
@@ -937,7 +1077,16 @@ function AdminDashboard(props: {
   });
   const [productivityPeriodKey, setProductivityPeriodKey] = useState("this_week");
   const [slackTestSending, setSlackTestSending] = useState(false);
+  const [slackDailyTestDate, setSlackDailyTestDate] = useState(() => getTodayJstDateString());
   const [slackTestFeedback, setSlackTestFeedback] = useState<{
+    message: string;
+    variant: "success" | "error" | "info";
+  } | null>(null);
+  const [productivitySlackTestMemberId, setProductivitySlackTestMemberId] = useState("");
+  const [productivitySlackTestDate, setProductivitySlackTestDate] = useState(() => getTodayJstDateString());
+  const [productivitySlackTestForce, setProductivitySlackTestForce] = useState(false);
+  const [productivitySlackTestSending, setProductivitySlackTestSending] = useState(false);
+  const [productivitySlackTestFeedback, setProductivitySlackTestFeedback] = useState<{
     message: string;
     variant: "success" | "error" | "info";
   } | null>(null);
@@ -955,21 +1104,104 @@ function AdminDashboard(props: {
   const [roiStartDate, setRoiStartDate] = useState(() => {
     const d = new Date();
     const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    return getMonthDateRange(ym, toDateString(new Date())).start;
+    return getMonthDateRange(ym, getTodayJstDateString()).start;
   });
   const [roiEndDate, setRoiEndDate] = useState(() => {
     const d = new Date();
     const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    return getMonthDateRange(ym, toDateString(new Date())).end;
+    return getMonthDateRange(ym, getTodayJstDateString()).end;
   });
   /** ROI 対象メンバー。null ＝ 全員、配列 ＝ 指定IDのみ（空配列は誰も含めない） */
   const [roiSelectedMemberIds, setRoiSelectedMemberIds] = useState<string[] | null>(null);
+  /** 業務委託KPI 列ソート。null ＝ メンバー一覧の元の順。初期は決アポ数の多い順 */
+  const [kpiOutsourceSort, setKpiOutsourceSort] = useState<KpiOutsourceTableSort>({
+    key: "decisionApo",
+    dir: "desc",
+  });
 
-  const y = new Date().getFullYear();
-  const m = new Date().getMonth() + 1;
-  const currentYearMonth = `${y}-${String(m).padStart(2, "0")}`;
-  const todayStr = toDateString(new Date());
+  const currentYearMonth = getTodayJstDateString().slice(0, 7);
+  const todayStr = getTodayJstDateString();
   const activeMembers = members.filter((mem) => mem.isActive !== false);
+  const [adminMemberTableSort, setAdminMemberTableSort] = useState<{
+    key: AdminMemberTableSortKey;
+    dir: "asc" | "desc";
+  } | null>(null);
+  const sortedRowsForAdminMemberSettingsTable = useMemo(() => {
+    const rows = activeMembers.map((mem) => {
+      const monthMin = getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth);
+      const rate = mem.hourlyRate != null ? mem.hourlyRate : DEFAULT_HOURLY_RATE;
+      const pay = calcMonthlyPay(monthMin, rate);
+      const invDisplay = formatMemberInvoiceNumberThreeDigits(mem.invoiceNumber);
+      const invNum = invDisplay != null ? parseInt(invDisplay, 10) : null;
+      return { mem, monthMin, pay, invDisplay, invNum };
+    });
+    if (!adminMemberTableSort) return rows;
+    const { key, dir } = adminMemberTableSort;
+    rows.sort((ra, rb) => {
+      const a = ra.mem;
+      const b = rb.mem;
+      if (key === "invoice") {
+        if (ra.invNum == null && rb.invNum == null) {
+          /* tie-break */
+        } else if (ra.invNum == null) return 1;
+        else if (rb.invNum == null) return -1;
+        else {
+          const c = ra.invNum - rb.invNum;
+          if (c !== 0) return dir === "asc" ? c : -c;
+        }
+      } else if (key === "name") {
+        const c = a.name.localeCompare(b.name, "ja");
+        if (c !== 0) return dir === "asc" ? c : -c;
+      } else if (key === "minutes") {
+        const c = ra.monthMin - rb.monthMin;
+        if (c !== 0) return dir === "asc" ? c : -c;
+      } else if (key === "pay") {
+        const c = ra.pay - rb.pay;
+        if (c !== 0) return dir === "asc" ? c : -c;
+      } else if (key === "morning") {
+        const av = a.canWorkMorning === true ? 1 : 0;
+        const bv = b.canWorkMorning === true ? 1 : 0;
+        const c = av - bv;
+        if (c !== 0) return dir === "asc" ? c : -c;
+      } else if (key === "intern") {
+        const av = a.isIntern === true ? 1 : 0;
+        const bv = b.isIntern === true ? 1 : 0;
+        const c = av - bv;
+        if (c !== 0) return dir === "asc" ? c : -c;
+      }
+      return a.name.localeCompare(b.name, "ja");
+    });
+    return rows;
+  }, [activeMembers, allRecords, currentYearMonth, adminMemberTableSort]);
+  const toggleAdminMemberTableSort = useCallback((nextKey: AdminMemberTableSortKey) => {
+    setAdminMemberTableSort((prev) => {
+      if (!prev || prev.key !== nextKey) {
+        const firstDir: Record<AdminMemberTableSortKey, "asc" | "desc"> = {
+          morning: "desc",
+          intern: "desc",
+          invoice: "asc",
+          name: "asc",
+          minutes: "desc",
+          pay: "desc",
+        };
+        return { key: nextKey, dir: firstDir[nextKey] };
+      }
+      return { key: nextKey, dir: prev.dir === "asc" ? "desc" : "asc" };
+    });
+  }, []);
+  const productivitySlackTestCandidates = useMemo(
+    () => activeMembers.filter((m) => (m.loginAccount ?? "").toLowerCase() !== "admin"),
+    [activeMembers]
+  );
+  useEffect(() => {
+    const ids = productivitySlackTestCandidates.map((m) => m.id);
+    if (ids.length === 0) {
+      setProductivitySlackTestMemberId("");
+      return;
+    }
+    if (productivitySlackTestMemberId && ids.includes(productivitySlackTestMemberId)) return;
+    setProductivitySlackTestMemberId(ids[0] ?? "");
+  }, [productivitySlackTestCandidates, productivitySlackTestMemberId]);
   const archivedMembers = members.filter((mem) => mem.isActive === false);
   const teamTotals = getMonthlyKpiTotals(allKpiRecords, currentYearMonth);
   const teamValidRate = safeRatePercent(teamTotals.validCalls, teamTotals.totalCalls);
@@ -1051,6 +1283,7 @@ function AdminDashboard(props: {
     trimVal(m.accountNumber) !== "" &&
     trimVal(m.accountHolder) !== "";
   const membersWithMissingBankInfo = activeMembers.filter((m) => !hasKeyBankInfo(m));
+  const membersWithMissingInvoiceNumber = getActiveMembersMissingInvoiceNumber(members);
 
   // 必須項目：表示日に稼働予定があるメンバーのうち、活動記録・KPI 未対応
   const hasRecordOnDate = (userId: string) =>
@@ -1140,10 +1373,18 @@ function AdminDashboard(props: {
 
   const handleSlackTestSend = async () => {
     setSlackTestFeedback(null);
+    const dateArg = slackDailyTestDate.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateArg)) {
+      setSlackTestFeedback({
+        message: "テスト送信する日付を YYYY-MM-DD で選んでください。",
+        variant: "error",
+      });
+      return;
+    }
     setSlackTestSending(true);
     try {
       const { slackDailyTestAction } = await import("@/app/actions/slack-daily");
-      const data = await slackDailyTestAction();
+      const data = await slackDailyTestAction(dateArg);
       if (data.ok) {
         if (data.skipped && data.skipReason === "weekend") {
           setSlackTestFeedback({
@@ -1176,6 +1417,65 @@ function AdminDashboard(props: {
       });
     } finally {
       setSlackTestSending(false);
+    }
+  };
+
+  const handleProductivitySlackTest = async () => {
+    setProductivitySlackTestFeedback(null);
+    if (!productivitySlackTestMemberId.trim()) {
+      setProductivitySlackTestFeedback({ message: "メンバーを選択してください。", variant: "error" });
+      return;
+    }
+    const d = productivitySlackTestDate.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      setProductivitySlackTestFeedback({ message: "日付を YYYY-MM-DD で選んでください。", variant: "error" });
+      return;
+    }
+    setProductivitySlackTestSending(true);
+    try {
+      const { runKpiProductivityAlertAdminTestAction } = await import("@/app/actions/kpi-productivity-alert");
+      const data = await runKpiProductivityAlertAdminTestAction({
+        memberId: productivitySlackTestMemberId,
+        date: d,
+        forceSend: productivitySlackTestForce,
+      });
+      if (!data.ok) {
+        const det = data.detail?.trim();
+        setProductivitySlackTestFeedback({
+          message: det ? `${data.error}\n\n詳細: ${det}` : data.error,
+          variant: "error",
+        });
+        return;
+      }
+      const stats = `検算: 実稼働約 ${data.workHours.toFixed(2)}h / 有効コール ${data.validCalls} 件 / 基準 ${data.expectedCallsLabel} 件 / 閾値未満=${data.belowThreshold ? "はい" : "いいえ"}`;
+      if (data.notified) {
+        setProductivitySlackTestFeedback({
+          message: `Slack に生産性低下アラート（1時間あたり有効コール10件基準）を送信しました。\n対象日: ${d}\n${stats}`,
+          variant: "success",
+        });
+      } else if (data.skipped) {
+        const reason =
+          data.skipReason === "no_work_hours"
+            ? "この日の打刻（実稼働）がないため、本番と同じ条件では送信しません。"
+            : data.skipReason === "not_below_threshold"
+              ? "有効コール数が基準（稼働時間×10）を満たしているため送信しませんでした。"
+              : data.skipReason === "no_webhook"
+                ? "Webhook が未設定のため送信しませんでした。"
+                : "送信しませんでした。";
+        setProductivitySlackTestFeedback({
+          message: `${reason}\n${stats}\n\n「閾値に関係なく送信」をオンにすると、メンション含めた見え方を確認できます。`,
+          variant: "info",
+        });
+      } else {
+        setProductivitySlackTestFeedback({ message: `完了しました。\n${stats}`, variant: "info" });
+      }
+    } catch (e) {
+      setProductivitySlackTestFeedback({
+        message: e instanceof Error ? e.message : String(e),
+        variant: "error",
+      });
+    } finally {
+      setProductivitySlackTestSending(false);
     }
   };
 
@@ -1232,6 +1532,7 @@ function AdminDashboard(props: {
   };
 
   const openDetail = (member: Member) => {
+    setInvoiceSaveHint(null);
     setDetailId(member.id);
     setEditName(member.name);
     setEditLogin(member.loginAccount ?? "");
@@ -1246,6 +1547,7 @@ function AdminDashboard(props: {
     setEditAccountHolder(member.accountHolder ?? "");
     setEditInvoiceNumber(member.invoiceNumber ?? "");
     setEditPhoneNumber(member.phoneNumber ?? "");
+    setEditFirstWorkDate(member.firstWorkDate ?? "");
   };
 
   const openReport = (member: Member) => {
@@ -1279,12 +1581,12 @@ function AdminDashboard(props: {
     if (!accNum) missing.push("口座番号");
     if (!accHolder) missing.push("口座名義");
     if (!phone) missing.push("電話番号");
-    if (!invNum) missing.push("請求管理番号（3桁）");
     if (missing.length > 0) {
       alert(`振込先情報が未入力です。以下の項目を入力してください。\n\n${missing.join("、")}`);
       return;
     }
-    const updates: Parameters<typeof updateMember>[1] = {
+    const firstWorkYmd = editFirstWorkDate.trim();
+    const updates: Record<string, unknown> = {
       name: editName.trim(),
       loginAccount: editLogin.trim(),
       hourlyRate: editRate >= 0 ? editRate : DEFAULT_HOURLY_RATE,
@@ -1297,12 +1599,52 @@ function AdminDashboard(props: {
       accountHolder: accHolder,
       invoiceNumber: invNum,
       phoneNumber: phone,
+      firstWorkDate: firstWorkYmd === "" ? null : firstWorkYmd,
     };
     if (editPass !== "") updates.password = editPass;
-    await updateMember(detailId, updates);
-    await onRefresh();
-    setDetailId(null);
+    try {
+      const res = await fetch("/api/admin/member-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          memberId: detailId,
+          appBaseUrl: typeof window !== "undefined" ? window.location.origin : "",
+          updates,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(data.error || "保存に失敗しました");
+      await onRefresh();
+      if (invNum === "") {
+        console.warn("[admin] メンバー保存: 請求管理番号未入力", { memberId: detailId, name: editName.trim() });
+        setInvoiceSaveHint(
+          `「${editName.trim()}」は請求管理番号が未入力のまま保存しました。請求・帳票のため、登録を推奨します。`
+        );
+      } else {
+        setInvoiceSaveHint(null);
+      }
+      setDetailId(null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    }
   };
+
+  const adminDeepLinkHandledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!deepLinkMemberId) {
+      adminDeepLinkHandledRef.current = null;
+      return;
+    }
+    if (!isAdminUser) return;
+    if (adminDeepLinkHandledRef.current === deepLinkMemberId) return;
+    const m = members.find((x) => x.id === deepLinkMemberId);
+    if (!m) return;
+    adminDeepLinkHandledRef.current = deepLinkMemberId;
+    setAdminSection("settings");
+    openDetail(m);
+    onAdminDeepLinkConsumed?.();
+  }, [deepLinkMemberId, members, isAdminUser, onAdminDeepLinkConsumed]);
 
   const targetWeekStart = addWeeksToWeekStart(getMondayOfCalendarWeekForYmd(getTodayJstDateString()), 1);
   const targetWeekDates = getWeekDates(targetWeekStart);
@@ -1515,10 +1857,18 @@ function AdminDashboard(props: {
     ...(isAdminUser ? ([{ id: "roi" as const, label: "生産性分析（ROI）" }] as const) : []),
     { id: "settings", label: "管理設定" },
   ];
+  const invoiceMissingNavCount = membersWithMissingInvoiceNumber.length;
 
   useEffect(() => {
     if (!isAdminUser && adminSection === "roi") setAdminSection("dashboard");
   }, [isAdminUser, adminSection]);
+
+  useEffect(() => {
+    if (adminSection !== "attendance") return;
+    requestAnimationFrame(() => {
+      attendanceRecordEditorRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
+    });
+  }, [adminSection]);
 
   const roiSelectableMonths = useMemo(
     () => getSelectableMonths(allRecords, allShifts, allKpiRecords),
@@ -1553,6 +1903,25 @@ function AdminDashboard(props: {
     () => buildMemberRoiRowsForRange(roiRange.start, roiRange.end, roiFilteredMembers, allKpiRecords, allRecords),
     [roiRange.start, roiRange.end, roiFilteredMembers, allKpiRecords, allRecords]
   );
+
+  const kpiOutsourceTableRows = useMemo(() => {
+    const base = [...roiMemberRows];
+    const byMemberOrder = (x: (typeof base)[number], y: (typeof base)[number]) => {
+      const ix = roiFilteredMembers.findIndex((m) => m.id === x.memberId);
+      const iy = roiFilteredMembers.findIndex((m) => m.id === y.memberId);
+      return (ix < 0 ? 9999 : ix) - (iy < 0 ? 9999 : iy);
+    };
+    if (kpiOutsourceSort == null) {
+      return base.sort(byMemberOrder);
+    }
+    return base.sort((a, b) =>
+      compareMemberRoiRowsByKpiOutsourceKey(a, b, kpiOutsourceSort.key, kpiOutsourceSort.dir === "desc")
+    );
+  }, [roiMemberRows, kpiOutsourceSort, roiFilteredMembers]);
+
+  const onKpiOutsourceHeaderClick = useCallback((k: RoiKpiOutsourceSortKey) => {
+    setKpiOutsourceSort((prev) => cycleKpiOutsourceSort(prev, k));
+  }, []);
 
   const roiDailyPoints = useMemo(
     () => buildTeamDailyRoiSeriesForRange(roiRange.start, roiRange.end, roiFilteredMembers, allKpiRecords, allRecords, todayStr),
@@ -1710,9 +2079,17 @@ function AdminDashboard(props: {
             key={item.id}
             type="button"
             onClick={() => setAdminSection(item.id)}
-            className={`px-4 py-3 text-sm font-medium transition ${adminSection === item.id ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
+            className={`inline-flex items-center gap-1.5 px-4 py-3 text-sm font-medium transition ${adminSection === item.id ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
           >
             {item.label}
+            {item.id === "settings" && invoiceMissingNavCount > 0 ? (
+              <span
+                className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white"
+                title="請求管理番号未入力のメンバーがいます"
+              >
+                {invoiceMissingNavCount}
+              </span>
+            ) : null}
           </button>
         ))}
       </nav>
@@ -1749,6 +2126,25 @@ function AdminDashboard(props: {
                 className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
               >
                 今すぐ編集
+              </button>
+            </section>
+          )}
+          {membersWithMissingInvoiceNumber.length > 0 && (
+            <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
+              <h2 className="mb-2 text-sm font-semibold text-amber-900">請求管理番号が未入力のメンバーがいます</h2>
+              <p className="mb-3 text-xs text-amber-800">
+                保存は可能ですが、請求・管理用の 3 桁番号が空のメンバーがいます。「管理設定」から入力してください。
+              </p>
+              <p className="mb-4 text-sm font-medium text-slate-800">{membersWithMissingInvoiceNumber.map((m) => m.name).join("、")}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminSection("settings");
+                  openDetail(membersWithMissingInvoiceNumber[0]);
+                }}
+                className="rounded bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700"
+              >
+                管理設定で編集
               </button>
             </section>
           )}
@@ -1991,9 +2387,114 @@ function AdminDashboard(props: {
       )}
 
       {adminSection === "attendance" && (
-        <section className="space-y-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div>
-            <h2 className="mb-4 text-sm font-medium text-slate-700">稼働状況（本日）</h2>
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+          <header className="mb-6">
+            <h2 className="text-sm font-medium text-slate-700">稼働状況（本日）</h2>
+            <p className="mt-1 text-xs text-slate-500">まずメンバーを選んで活動記録を編集するか、下で本日の稼働状況を確認できます。</p>
+          </header>
+
+          <div
+            ref={attendanceRecordEditorRef}
+            id="admin-attendance-record-editor"
+            className="scroll-mt-24 mb-10 rounded-xl border-2 border-slate-300 bg-slate-50/95 p-5 shadow-md ring-1 ring-slate-200/80 sm:p-6"
+          >
+            <h3 className="text-sm font-semibold text-slate-900">活動記録の追加・編集</h3>
+            <p className="mb-5 mt-1 text-xs text-slate-600">
+              メンバーを選択し、記録の追加または既存記録の編集ができます。保存後は合計業務遂行時間・請求金額に即反映されます。
+            </p>
+            <div className="mb-4 flex flex-wrap items-end gap-4">
+              <label className="flex min-w-[12rem] flex-col gap-1.5">
+                <span className="text-xs font-semibold text-slate-700">メンバー</span>
+                <select
+                  value={recordListMemberId ?? ""}
+                  onChange={(e) => setRecordListMemberId(e.target.value || null)}
+                  className="rounded-lg border-2 border-slate-400 bg-white px-3 py-2.5 text-sm font-medium text-slate-900 shadow-sm outline-none focus:border-slate-700 focus:ring-2 focus:ring-slate-300"
+                >
+                  <option value="">選択してください</option>
+                  {activeMembers.map((mem) => (
+                    <option key={mem.id} value={mem.id}>
+                      {mem.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {recordListMemberId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const mem = members.find((m) => m.id === recordListMemberId);
+                    if (mem) {
+                      setRecordFormMember(mem);
+                      setRecordFormRecord(null);
+                      setRecordFormDate(getTodayJstDateString());
+                      setRecordFormStart("09:00");
+                      setRecordFormEnd("18:00");
+                    }
+                  }}
+                  className="rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-700"
+                >
+                  活動記録を追加
+                </button>
+              )}
+            </div>
+            {recordListMemberId &&
+              (() => {
+                const userRecords = getRecordsForUser(allRecords, recordListMemberId);
+                const sorted = [...userRecords].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 60);
+                const mem = members.find((m) => m.id === recordListMemberId);
+                return (
+                  <div className="overflow-x-auto rounded-lg border border-slate-200/90 bg-white">
+                    <table className="w-full min-w-[480px] border-collapse text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-100/90">
+                          <th className="px-3 py-2.5 text-left font-medium text-slate-600">日付</th>
+                          <th className="px-3 py-2.5 text-left font-medium text-slate-600">業務開始</th>
+                          <th className="px-3 py-2.5 text-left font-medium text-slate-600">業務終了</th>
+                          <th className="px-3 py-2.5 text-right font-medium text-slate-600">時間</th>
+                          <th className="px-3 py-2.5 text-right font-medium text-slate-600">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sorted.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
+                              {mem?.name ?? ""} の記録はまだありません
+                            </td>
+                          </tr>
+                        ) : (
+                          sorted.map((r) => (
+                            <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                              <td className="px-3 py-2.5 text-slate-800">{formatDisplayDate(r.date)}</td>
+                              <td className="px-3 py-2.5 tabular-nums text-slate-700">{getTimeFromIso(r.startRounded)}</td>
+                              <td className="px-3 py-2.5 tabular-nums text-slate-700">{getTimeFromIso(r.endRounded)}</td>
+                              <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(r.durationMinutes)}</td>
+                              <td className="px-3 py-2.5 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRecordFormRecord(r);
+                                    setRecordFormMember(members.find((m) => m.id === r.userId) ?? null);
+                                    setRecordFormDate(r.date);
+                                    setRecordFormStart(getTimeFromIso(r.startRounded));
+                                    setRecordFormEnd(getTimeFromIso(r.endRounded));
+                                  }}
+                                  className="text-slate-600 underline hover:text-slate-800"
+                                >
+                                  編集
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+          </div>
+
+          <div className="space-y-5 border-t border-slate-200 pt-8">
+            <h3 className="text-sm font-medium text-slate-700">本日の稼働状況</h3>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[500px] border-collapse text-sm">
                 <thead>
@@ -2004,13 +2505,13 @@ function AdminDashboard(props: {
                   </tr>
                 </thead>
                 <tbody>
-{activeMembers.map((mem) => {
-                  const open = getOpenRecordForUser(allOpenRecords, mem.id);
-                  const userRecords = getRecordsForUser(allRecords, mem.id);
-                  const todayMin = userRecords.filter((r) => r.date === todayStr).reduce((s, r) => s + r.durationMinutes, 0);
-                  return (
-                    <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                      <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
+                  {activeMembers.map((mem) => {
+                    const open = getOpenRecordForUser(allOpenRecords, mem.id);
+                    const userRecords = getRecordsForUser(allRecords, mem.id);
+                    const todayMin = userRecords.filter((r) => r.date === todayStr).reduce((s, r) => s + r.durationMinutes, 0);
+                    return (
+                      <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
+                        <td className="px-3 py-2.5 font-medium text-slate-800">{mem.name}</td>
                         <td className="px-3 py-2.5 text-center">
                           {open ? (
                             <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">活動中</span>
@@ -2025,93 +2526,6 @@ function AdminDashboard(props: {
                 </tbody>
               </table>
             </div>
-          </div>
-
-          <div className="border-t border-slate-200 pt-6">
-            <h2 className="mb-3 text-sm font-medium text-slate-700">活動記録の追加・編集</h2>
-            <p className="mb-4 text-xs text-slate-500">メンバーを選択し、記録の追加または既存記録の編集ができます。保存後は合計業務遂行時間・請求金額に即反映されます。</p>
-            <div className="mb-4 flex flex-wrap items-center gap-3">
-              <label className="flex flex-col gap-1">
-                <span className="text-xs font-medium text-slate-600">メンバー</span>
-                <select
-                  value={recordListMemberId ?? ""}
-                  onChange={(e) => setRecordListMemberId(e.target.value || null)}
-                  className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                >
-                  <option value="">選択してください</option>
-                  {activeMembers.map((mem) => (
-                    <option key={mem.id} value={mem.id}>{mem.name}</option>
-                  ))}
-                </select>
-              </label>
-              {recordListMemberId && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const mem = members.find((m) => m.id === recordListMemberId);
-                    if (mem) {
-                      setRecordFormMember(mem);
-                      setRecordFormRecord(null);
-                      setRecordFormDate(toDateString(new Date()));
-                      setRecordFormStart("09:00");
-                      setRecordFormEnd("18:00");
-                    }
-                  }}
-                  className="mt-5 rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600"
-                >
-                  活動記録を追加
-                </button>
-              )}
-            </div>
-            {recordListMemberId && (() => {
-              const userRecords = getRecordsForUser(allRecords, recordListMemberId);
-              const sorted = [...userRecords].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 60);
-              const mem = members.find((m) => m.id === recordListMemberId);
-              return (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[480px] border-collapse text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 bg-slate-50">
-                        <th className="px-3 py-2.5 text-left font-medium text-slate-600">日付</th>
-                        <th className="px-3 py-2.5 text-left font-medium text-slate-600">業務開始</th>
-                        <th className="px-3 py-2.5 text-left font-medium text-slate-600">業務終了</th>
-                        <th className="px-3 py-2.5 text-right font-medium text-slate-600">時間</th>
-                        <th className="px-3 py-2.5 text-right font-medium text-slate-600">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sorted.length === 0 ? (
-                        <tr><td colSpan={5} className="px-3 py-4 text-center text-slate-500">{mem?.name ?? ""} の記録はまだありません</td></tr>
-                      ) : (
-                        sorted.map((r) => (
-                          <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                            <td className="px-3 py-2.5 text-slate-800">{formatDisplayDate(r.date)}</td>
-                            <td className="px-3 py-2.5 tabular-nums text-slate-700">{getTimeFromIso(r.startRounded)}</td>
-                            <td className="px-3 py-2.5 tabular-nums text-slate-700">{getTimeFromIso(r.endRounded)}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(r.durationMinutes)}</td>
-                            <td className="px-3 py-2.5 text-right">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setRecordFormRecord(r);
-                                  setRecordFormMember(members.find((m) => m.id === r.userId) ?? null);
-                                  setRecordFormDate(r.date);
-                                  setRecordFormStart(getTimeFromIso(r.startRounded));
-                                  setRecordFormEnd(getTimeFromIso(r.endRounded));
-                                }}
-                                className="text-slate-600 underline hover:text-slate-800"
-                              >
-                                編集
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              );
-            })()}
           </div>
         </section>
       )}
@@ -2299,9 +2713,27 @@ function AdminDashboard(props: {
                     </td>
                     {shiftViewDateList.map((dateStr) => {
                       const s = shiftCellByUserDate.get(`${mem.id}\t${dateStr}`);
+                      const kpi = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), dateStr);
+                      const labor = getUserDayLaborSignals(allRecords, allOpenRecords, mem.id, dateStr);
+                      const primary = formatAdminShiftSchedulePrimaryLine(s, labor);
+                      const secondary = formatAdminShiftScheduleSecondaryLine(kpi, labor);
                       return (
-                        <td key={dateStr} className="align-top px-2 py-2 text-slate-600 sm:px-3">
-                          <span className="break-words">{formatAdminShiftOneDaySummary(s)}</span>
+                        <td
+                          key={dateStr}
+                          className={`align-top px-2 py-2 text-slate-600 sm:px-3 ${
+                            secondary.highlight ? "bg-sky-50/80" : "bg-slate-50/50"
+                          }`}
+                        >
+                          <div className="flex flex-col gap-0.5">
+                            <span className="break-words text-slate-800">{primary}</span>
+                            <span
+                              className={`text-[10px] leading-tight sm:text-[11px] ${
+                                secondary.highlight ? "font-medium text-blue-700" : "text-slate-400"
+                              }`}
+                            >
+                              {secondary.text}
+                            </span>
+                          </div>
                         </td>
                       );
                     })}
@@ -2477,12 +2909,66 @@ function AdminDashboard(props: {
             {(() => {
               const start = rangeStart <= rangeEnd ? rangeStart : rangeEnd;
               const end = rangeStart <= rangeEnd ? rangeEnd : rangeStart;
-              const rangeKpis = getKpiInDateRange(allKpiRecords, start, end);
+              const memberIds = new Set(activeMembers.map((m) => m.id));
+              const rangeKpis = getKpiInDateRange(allKpiRecords, start, end).filter((k) => memberIds.has(k.userId));
               const rangeTotals = getKpiTotalsFromRecords(rangeKpis);
               const rangeValidRate = safeRatePercent(rangeTotals.validCalls, rangeTotals.totalCalls);
               const rangeKcRate = safeRatePercent(rangeTotals.kcCount, rangeTotals.validCalls);
               const rangeApoRate = safeRatePercent(rangeTotals.decisionMakerApo, rangeTotals.kcCount);
+              const summaryTotalMinutes = activeMembers.reduce(
+                (s, mem) => s + getTotalMinutesForUserInDateRange(allRecords, mem.id, start, end),
+                0
+              );
+              const summaryTotalPay = activeMembers.reduce((s, mem) => {
+                const mins = getTotalMinutesForUserInDateRange(allRecords, mem.id, start, end);
+                return s + calcMonthlyPay(mins, mem.hourlyRate ?? DEFAULT_HOURLY_RATE);
+              }, 0);
+              const rangeDecisionApoUnitYen = decisionMakerApoUnitYenFromPay(
+                summaryTotalPay,
+                rangeTotals.decisionMakerApo
+              );
               return (
+                <>
+                  <div className="mb-4 flex flex-wrap gap-3">
+                    <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-slate-600">総稼働時間</div>
+                      <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
+                        {formatDuration(summaryTotalMinutes)}
+                      </div>
+                    </div>
+                    <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-slate-600">総支払額</div>
+                      <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
+                        {summaryTotalPay.toLocaleString("ja-JP")}円
+                      </div>
+                    </div>
+                    <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-slate-600">総コール数</div>
+                      <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
+                        {rangeTotals.totalCalls}
+                      </div>
+                    </div>
+                    <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-slate-600">総有効コール数</div>
+                      <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
+                        {rangeTotals.validCalls}
+                      </div>
+                    </div>
+                    <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-slate-600">総アポ数（決裁者）</div>
+                      <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
+                        {rangeTotals.decisionMakerApo}
+                      </div>
+                    </div>
+                    <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-slate-600">決アポ単価</div>
+                      <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
+                        {rangeDecisionApoUnitYen != null
+                          ? `${Math.round(rangeDecisionApoUnitYen).toLocaleString("ja-JP")}円`
+                          : "—"}
+                      </div>
+                    </div>
+                  </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <div className="rounded-lg bg-slate-800 p-4 text-white">
                     <div className="text-xs text-slate-300">総コール数</div>
@@ -2509,6 +2995,7 @@ function AdminDashboard(props: {
                     <div className="text-2xl font-bold">{rangeApoRate != null ? `${rangeApoRate}%` : "—"}</div>
                   </div>
                 </div>
+                </>
               );
             })()}
           </div>
@@ -2766,26 +3253,56 @@ function AdminDashboard(props: {
                 {slackManualReportSending ? "送信中..." : "Slackにレポートを送信"}
               </button>
             </div>
-            <table className="w-full min-w-[760px] border-collapse text-sm">
+            <table className="w-full min-w-[1100px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="px-3 py-2.5 text-left font-medium text-slate-600">名前</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">総稼働時間</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">創出価値</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">
-                    総コスト
-                    <span className="block text-[10px] font-normal text-slate-500">（給与／固定）</span>
-                  </th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">ROI</th>
-                  <th className="px-3 py-2.5 text-center font-medium text-slate-600">信号</th>
-                  <th className="px-3 py-2.5 text-right font-medium text-slate-600">
-                    決アポ率
-                    <span className="block text-[10px] font-normal text-slate-500">（決裁者アポ÷総コール）</span>
+                  <RoiKpiOutsourceTh
+                    label="氏名"
+                    sortKey="name"
+                    sort={kpiOutsourceSort}
+                    onSort={onKpiOutsourceHeaderClick}
+                    align="left"
+                  />
+                  <RoiKpiOutsourceTh
+                    label="実稼働合計"
+                    sublabel="（期間内）"
+                    sortKey="workMinutes"
+                    sort={kpiOutsourceSort}
+                    onSort={onKpiOutsourceHeaderClick}
+                  />
+                  <RoiKpiOutsourceTh label="総コール" sortKey="totalCalls" sort={kpiOutsourceSort} onSort={onKpiOutsourceHeaderClick} />
+                  <RoiKpiOutsourceTh label="有効コール" sortKey="validCalls" sort={kpiOutsourceSort} onSort={onKpiOutsourceHeaderClick} />
+                  <RoiKpiOutsourceTh label="アポ数" sublabel="（決裁+非）" sortKey="totalApo" sort={kpiOutsourceSort} onSort={onKpiOutsourceHeaderClick} />
+                  <RoiKpiOutsourceTh label="決アポ数" sublabel="（決裁者）" sortKey="decisionApo" sort={kpiOutsourceSort} onSort={onKpiOutsourceHeaderClick} />
+                  <RoiKpiOutsourceTh label="有効率" sublabel="（%）" sortKey="validRate" sort={kpiOutsourceSort} onSort={onKpiOutsourceHeaderClick} />
+                  <RoiKpiOutsourceTh label="アポ率" sublabel="（決裁者÷KC）" sortKey="apoRateKc" sort={kpiOutsourceSort} onSort={onKpiOutsourceHeaderClick} />
+                  <RoiKpiOutsourceTh label="決アポ率" sublabel="（決裁÷有効）" sortKey="decisionApoOverValid" sort={kpiOutsourceSort} onSort={onKpiOutsourceHeaderClick} />
+                  <RoiKpiOutsourceTh label="生産性" sublabel="（有効/ h）" sortKey="productivity" sort={kpiOutsourceSort} onSort={onKpiOutsourceHeaderClick} />
+                  <RoiKpiOutsourceTh
+                    label="合計委託料"
+                    sublabel="（稼働×単価）"
+                    sortKey="commissionYen"
+                    sort={kpiOutsourceSort}
+                    onSort={onKpiOutsourceHeaderClick}
+                  />
+                  <th className="px-2 py-2.5 text-right font-medium text-slate-600 sm:px-3">創出価値</th>
+                  <RoiKpiOutsourceTh
+                    label="総コスト"
+                    sublabel="（給与／固定）"
+                    sortKey="totalCostYen"
+                    sort={kpiOutsourceSort}
+                    onSort={onKpiOutsourceHeaderClick}
+                  />
+                  <RoiKpiOutsourceTh label="ROI" sortKey="roi" sort={kpiOutsourceSort} onSort={onKpiOutsourceHeaderClick} />
+                  <th className="px-2 py-2.5 text-center font-medium text-slate-600 sm:px-3">信号</th>
+                  <th className="px-2 py-2.5 text-right font-medium text-slate-600 sm:px-3">
+                    決裁÷総
+                    <span className="block text-[10px] font-normal text-slate-500">（参考）</span>
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {roiMemberRows.map((row) => (
+                {kpiOutsourceTableRows.map((row) => (
                   <tr
                     key={row.memberId}
                     className={`border-b border-slate-100 ${
@@ -2798,20 +3315,41 @@ function AdminDashboard(props: {
                             : ""
                     }`}
                   >
-                    <td className="px-3 py-2.5 font-medium text-slate-800">{row.name}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">{formatDuration(row.totalMinutes)}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">¥{row.valueYen.toLocaleString("ja-JP")}</td>
-                    <td className="px-3 py-2.5 text-right text-xs tabular-nums leading-snug text-slate-700">
+                    <td className="px-2 py-2.5 font-medium text-slate-800 sm:px-3">{row.name}</td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">
+                      {formatDuration(row.totalMinutes)}
+                    </td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">{row.kpiTotalCalls}</td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">{row.kpiValidCalls}</td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">{row.kpiTotalApo}</td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">{row.kpiDecisionApo}</td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">
+                      {row.kpiValidRate != null ? `${row.kpiValidRate}%` : "—"}
+                    </td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">
+                      {row.kpiApoRateKc != null ? `${row.kpiApoRateKc}%` : "—"}
+                    </td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">
+                      {row.kpiDecisionApoOverValid != null ? `${row.kpiDecisionApoOverValid}%` : "—"}
+                    </td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">
+                      {row.productivityValidPerHour != null ? row.productivityValidPerHour.toFixed(2) : "—"}
+                    </td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">
+                      ¥{row.laborCommissionYen.toLocaleString("ja-JP")}
+                    </td>
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-700 sm:px-3">¥{row.valueYen.toLocaleString("ja-JP")}</td>
+                    <td className="px-2 py-2.5 text-right text-xs tabular-nums leading-snug text-slate-700 sm:px-3">
                       <span className="font-medium">¥{row.costYen.toLocaleString("ja-JP")}</span>
                       <span className="mt-0.5 block text-[11px] font-normal text-slate-500">
                         給与: ¥{row.laborCostYen.toLocaleString("ja-JP")} / 固定: ¥
                         {row.fixedCostYen.toLocaleString("ja-JP")}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums font-medium text-slate-800">
+                    <td className="px-2 py-2.5 text-right tabular-nums font-medium text-slate-800 sm:px-3">
                       {row.roi != null ? row.roi.toFixed(2) : "—"}
                     </td>
-                    <td className="px-3 py-2.5 text-center">
+                    <td className="px-2 py-2.5 text-center sm:px-3">
                       {row.signal === "red" && (
                         <span className="inline-flex rounded-full bg-red-600 px-2 py-0.5 text-xs font-medium text-white">赤</span>
                       )}
@@ -2823,7 +3361,7 @@ function AdminDashboard(props: {
                       )}
                       {row.signal === "neutral" && <span className="text-slate-400">—</span>}
                     </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-700">
+                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-600 sm:px-3">
                       {row.decisionApoRate != null ? `${row.decisionApoRate}%` : "—"}
                     </td>
                   </tr>
@@ -2847,18 +3385,52 @@ function AdminDashboard(props: {
       {adminSection === "settings" && (
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-medium text-slate-700">管理設定（メンバー追加・編集）</h2>
-
-          <div className="mb-6 flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
-            <div className="flex flex-wrap items-center gap-3">
-            <span className="text-xs font-medium text-slate-600">Slack 本日の業務委託の稼働予定者通知（毎朝9:00 JST・Vercel Cron は CRON_SECRET 必須）</span>
-            <button
-              type="button"
-              onClick={handleSlackTestSend}
-              disabled={slackTestSending}
-              className="rounded bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-500 disabled:opacity-50"
+          {invoiceSaveHint ? (
+            <div
+              className="mb-4 flex flex-wrap items-start justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+              role="status"
             >
-              {slackTestSending ? "送信中…" : "Slack通知テスト送信"}
-            </button>
+              <p className="min-w-0 flex-1">{invoiceSaveHint}</p>
+              <button
+                type="button"
+                className="shrink-0 text-xs font-medium text-amber-800 underline hover:text-amber-950"
+                onClick={() => setInvoiceSaveHint(null)}
+              >
+                閉じる
+              </button>
+            </div>
+          ) : null}
+          <p className="mb-4 text-xs text-slate-500">
+            無効化したメンバーの復元・完全削除は{" "}
+            <a href="/admin/members/archived" className="font-medium text-slate-700 underline hover:text-slate-900">
+              アーカイブ一覧
+            </a>
+            からも行えます。
+          </p>
+
+          <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+            <span className="text-xs font-medium text-slate-600">
+              Slack 稼働予定者通知（日本時間 朝 8:00 前後の本番 Cron と同じ内容・Vercel Cron は CRON_SECRET 必須）
+            </span>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end sm:gap-3">
+              <label className="flex min-w-0 flex-col gap-1 sm:max-w-[12rem]">
+                <span className="text-xs font-medium text-slate-600">テスト送信する日付</span>
+                <input
+                  type="date"
+                  value={slackDailyTestDate}
+                  onChange={(e) => setSlackDailyTestDate(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void handleSlackTestSend()}
+                disabled={slackTestSending}
+                className="w-fit rounded bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-500 disabled:opacity-50"
+              >
+                {slackTestSending ? "送信中…" : "その日付でテスト送信"}
+              </button>
+            </div>
             {slackTestFeedback != null && (
               <div
                 className={`min-w-0 max-w-xl whitespace-pre-wrap text-sm font-medium ${
@@ -2873,16 +3445,86 @@ function AdminDashboard(props: {
                 {slackTestFeedback.variant === "error" ? `送信失敗\n${slackTestFeedback.message}` : slackTestFeedback.message}
               </div>
             )}
-            </div>
             <p className="text-xs text-slate-500">
               自動送信は <code className="rounded bg-slate-200 px-1">/api/slack-daily</code>（GET）のみ。Cron では土曜・日曜（JST の当日）は送信しません。手動で土日に送る場合は{" "}
               <code className="rounded bg-slate-200 px-1">?test=true</code> 付き GET または POST の{" "}
-              <code className="rounded bg-slate-200 px-1">{`{"test":true}`}</code>。上のボタンは土日も送信します。環境変数{" "}
-              <code className="rounded bg-slate-200 px-1">SLACK_WEBHOOK_URL</code>（共通）または朝の通知専用{" "}
+              <code className="rounded bg-slate-200 px-1">{`{"test":true}`}</code>。上のテストは<strong className="font-medium text-slate-700">選択した日付</strong>の予定一覧を土日も含め送信します。環境変数{" "}
+              <code className="rounded bg-slate-200 px-1">SLACK_WEBHOOK_URL</code>（共通）または日次通知専用{" "}
               <code className="rounded bg-slate-200 px-1">SLACK_WEBHOOK_DAILY_URL</code>、および{" "}
               <code className="rounded bg-slate-200 px-1">CRON_SECRET</code> を Vercel に設定してください。他の Slack 通知は{" "}
               <code className="rounded bg-slate-200 px-1">.env.example</code> の用途別 Webhook を参照してください。
             </p>
+          </div>
+
+          <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-amber-50/40 p-4 ring-1 ring-amber-200/60">
+            <span className="text-xs font-medium text-slate-800">
+              生産性低下アラート（KPI 保存直後・即時／1時間あたり有効コール10件未満・SLACK_WEBHOOK_PRODUCTIVITY_URL）
+            </span>
+            <p className="text-xs text-slate-600">
+              指定メンバー・指定日の打刻と KPI から判定し、本番と同じ体裁で Slack に送ります（メンション付き）。通常は閾値未満のときだけ送信します。
+            </p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+              <label className="flex min-w-0 flex-col gap-1 sm:max-w-[14rem]">
+                <span className="text-xs font-medium text-slate-600">メンバー</span>
+                <select
+                  value={productivitySlackTestMemberId}
+                  onChange={(e) => setProductivitySlackTestMemberId(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+                >
+                  {productivitySlackTestCandidates.length === 0 ? (
+                    <option value="">（管理者以外のメンバーがありません）</option>
+                  ) : (
+                    productivitySlackTestCandidates.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
+              <label className="flex min-w-0 flex-col gap-1 sm:max-w-[12rem]">
+                <span className="text-xs font-medium text-slate-600">対象日</span>
+                <input
+                  type="date"
+                  value={productivitySlackTestDate}
+                  onChange={(e) => setProductivitySlackTestDate(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+                />
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={productivitySlackTestForce}
+                  onChange={(e) => setProductivitySlackTestForce(e.target.checked)}
+                  className="rounded border-slate-300"
+                />
+                閾値に関係なく送信（Slack の見え方・メンション確認）
+              </label>
+              <button
+                type="button"
+                onClick={() => void handleProductivitySlackTest()}
+                disabled={productivitySlackTestSending || productivitySlackTestCandidates.length === 0}
+                className="w-fit rounded bg-amber-800 px-4 py-2 text-sm font-medium text-white hover:bg-amber-900 disabled:opacity-50"
+              >
+                {productivitySlackTestSending ? "送信中…" : "この条件でテスト送信"}
+              </button>
+            </div>
+            {productivitySlackTestFeedback != null && (
+              <div
+                className={`min-w-0 max-w-xl whitespace-pre-wrap text-sm font-medium ${
+                  productivitySlackTestFeedback.variant === "success"
+                    ? "text-green-800"
+                    : productivitySlackTestFeedback.variant === "info"
+                      ? "text-slate-700"
+                      : "text-red-700"
+                }`}
+                role="status"
+              >
+                {productivitySlackTestFeedback.variant === "error"
+                  ? `送信失敗\n${productivitySlackTestFeedback.message}`
+                  : productivitySlackTestFeedback.message}
+              </div>
+            )}
           </div>
 
           <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-5 sm:p-6">
@@ -2957,23 +3599,114 @@ function AdminDashboard(props: {
             <table className="w-full min-w-0 table-fixed border-collapse text-xs">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="w-[18%] px-1.5 py-1.5 text-left font-medium text-slate-600">名前</th>
-                  <th className="w-[14%] px-1.5 py-1.5 text-left font-medium text-slate-600">ログイン名</th>
-                  <th className="w-[10%] px-1.5 py-1.5 text-left font-medium text-slate-600">PW</th>
-                  <th className="w-[12%] px-1.5 py-1.5 text-right font-medium text-slate-600">活動時間</th>
-                  <th className="w-[14%] px-1.5 py-1.5 text-right font-medium text-slate-600">委託料</th>
-                  <th className="w-[22%] px-1.5 py-1.5 text-right font-medium text-slate-600">操作</th>
+                  <th className="w-[9%] px-1 py-1.5 text-left font-medium text-slate-600">
+                    <button
+                      type="button"
+                      onClick={() => toggleAdminMemberTableSort("invoice")}
+                      className="flex w-full min-w-0 items-center gap-0.5 rounded px-0.5 py-0.5 text-left hover:bg-slate-200/80"
+                      title={
+                        adminMemberTableSort?.key === "invoice"
+                          ? `管理番号 ${adminMemberTableSort.dir === "asc" ? "昇順（001から）" : "降順"}・クリックで切替`
+                          : "管理番号で並べ替え（初回クリック: 001から昇順）"
+                      }
+                    >
+                      <span className="min-w-0 truncate">管理番号</span>
+                      <span
+                        className={`shrink-0 text-[10px] font-normal leading-none ${
+                          adminMemberTableSort?.key === "invoice" ? "text-slate-900" : "text-slate-400"
+                        }`}
+                        aria-hidden
+                      >
+                        {adminMemberTableSortGlyph(adminMemberTableSort, "invoice")}
+                      </span>
+                    </button>
+                  </th>
+                  <th className="w-[16%] px-1 py-1.5 text-left font-medium text-slate-600">
+                    <button
+                      type="button"
+                      onClick={() => toggleAdminMemberTableSort("name")}
+                      className="flex w-full min-w-0 items-center gap-0.5 rounded px-0.5 py-0.5 text-left hover:bg-slate-200/80"
+                      title={
+                        adminMemberTableSort?.key === "name"
+                          ? `名前 ${adminMemberTableSort.dir === "asc" ? "昇順" : "降順"}・クリックで切替`
+                          : "名前で並べ替え（初回クリック: 昇順）"
+                      }
+                    >
+                      <span className="min-w-0 truncate">名前</span>
+                      <span
+                        className={`shrink-0 text-[10px] font-normal leading-none ${
+                          adminMemberTableSort?.key === "name" ? "text-slate-900" : "text-slate-400"
+                        }`}
+                        aria-hidden
+                      >
+                        {adminMemberTableSortGlyph(adminMemberTableSort, "name")}
+                      </span>
+                    </button>
+                  </th>
+                  <th className="w-[12%] px-1.5 py-1.5 text-left font-medium text-slate-600">ログイン名</th>
+                  <th className="w-[9%] px-1.5 py-1.5 text-left font-medium text-slate-600">PW</th>
+                  <th className="w-[11%] px-1 py-1.5 text-right font-medium text-slate-600">
+                    <button
+                      type="button"
+                      onClick={() => toggleAdminMemberTableSort("minutes")}
+                      className="ml-auto flex max-w-full min-w-0 items-center justify-end gap-0.5 rounded px-0.5 py-0.5 hover:bg-slate-200/80"
+                      title={
+                        adminMemberTableSort?.key === "minutes"
+                          ? `活動時間 ${adminMemberTableSort.dir === "asc" ? "昇順（短い順）" : "降順（長い順）"}・クリックで切替`
+                          : "活動時間で並べ替え（初回クリック: 長い順）"
+                      }
+                    >
+                      <span className="min-w-0 truncate">活動時間</span>
+                      <span
+                        className={`shrink-0 text-[10px] font-normal leading-none ${
+                          adminMemberTableSort?.key === "minutes" ? "text-slate-900" : "text-slate-400"
+                        }`}
+                        aria-hidden
+                      >
+                        {adminMemberTableSortGlyph(adminMemberTableSort, "minutes")}
+                      </span>
+                    </button>
+                  </th>
+                  <th className="w-[12%] px-1 py-1.5 text-right font-medium text-slate-600">
+                    <button
+                      type="button"
+                      onClick={() => toggleAdminMemberTableSort("pay")}
+                      className="ml-auto flex max-w-full min-w-0 items-center justify-end gap-0.5 rounded px-0.5 py-0.5 hover:bg-slate-200/80"
+                      title={
+                        adminMemberTableSort?.key === "pay"
+                          ? `委託料 ${adminMemberTableSort.dir === "asc" ? "昇順（小さい順）" : "降順（大きい順）"}・クリックで切替`
+                          : "委託料で並べ替え（初回クリック: 支払額が大きい順）"
+                      }
+                    >
+                      <span className="min-w-0 truncate">委託料</span>
+                      <span
+                        className={`shrink-0 text-[10px] font-normal leading-none ${
+                          adminMemberTableSort?.key === "pay" ? "text-slate-900" : "text-slate-400"
+                        }`}
+                        aria-hidden
+                      >
+                        {adminMemberTableSortGlyph(adminMemberTableSort, "pay")}
+                      </span>
+                    </button>
+                  </th>
+                  <th className="w-[21%] px-1.5 py-1.5 text-right font-medium text-slate-600">操作</th>
                 </tr>
               </thead>
               <tbody>
-                {activeMembers.map((mem) => {
-                  const monthMin = getTotalMinutesForMonthByUser(allRecords, mem.id, currentYearMonth);
-                  const rate = mem.hourlyRate != null ? mem.hourlyRate : DEFAULT_HOURLY_RATE;
-                  const pay = calcMonthlyPay(monthMin, rate);
+                {sortedRowsForAdminMemberSettingsTable.map(({ mem, monthMin, pay, invDisplay }) => {
                   const pw = mem.password || "—";
+                  const nameLine = invDisplay ? `${invDisplay} ${mem.name}` : mem.name;
                   return (
                     <tr key={mem.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                      <td className="min-w-0 overflow-hidden px-1.5 py-1.5 font-medium text-slate-800 truncate" title={mem.name}>{mem.name}</td>
+                      <td className="px-1.5 py-1.5 font-mono tabular-nums text-slate-600 whitespace-nowrap" title={invDisplay ?? ""}>
+                        {invDisplay ?? "—"}
+                      </td>
+                      <td className="min-w-0 px-1.5 py-1.5 font-medium text-slate-800" title={nameLine}>
+                        <div className="truncate">{nameLine}</div>
+                        {isMemberMissingInvoiceNumber(mem) ? (
+                          <div className="text-[10px] font-medium text-amber-700">請求番号未</div>
+                        ) : null}
+                      </td>
                       <td className="min-w-0 overflow-hidden px-1.5 py-1.5 font-mono text-slate-600 truncate" title={mem.loginAccount || ""}>{mem.loginAccount || "—"}</td>
                       <td className="min-w-0 overflow-hidden px-1.5 py-1.5 font-mono text-slate-600 truncate" title={pw}>{pw}</td>
                       <td className="px-1.5 py-1.5 text-right tabular-nums text-slate-700 whitespace-nowrap">{formatDuration(monthMin)}</td>
@@ -3010,6 +3743,18 @@ function AdminDashboard(props: {
                 <div>
                   <label className="mb-0.5 block text-xs text-slate-500">委託料単価（円/時間）</label>
                   <input type="number" min={0} value={editRate} onChange={(e) => setEditRate(parseInt(e.target.value, 10) || 0)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-0.5 block text-xs text-slate-500">初回稼働日</label>
+                  <input
+                    type="date"
+                    value={editFirstWorkDate}
+                    onChange={(e) => setEditFirstWorkDate(e.target.value)}
+                    className="w-full max-w-xs rounded border border-slate-300 px-3 py-2 text-sm"
+                  />
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    初めて日付を保存したときだけ、担当者へ Slack で通知されます（環境変数 SLACK_WEBHOOK_URL）。
+                  </p>
                 </div>
               </div>
               <h4 className="mt-4 mb-2 text-xs font-medium text-slate-600">振込先・インボイス</h4>
@@ -3048,6 +3793,7 @@ function AdminDashboard(props: {
                 <div>
                   <label className="mb-0.5 block text-xs text-slate-500">請求管理番号（3桁）</label>
                   <input type="text" inputMode="numeric" maxLength={3} value={editInvoiceNumber} onChange={(e) => setEditInvoiceNumber(e.target.value.replace(/\D/g, "").slice(0, 3))} placeholder="001" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                  <p className="mt-0.5 text-[11px] text-amber-800/90">未入力でも保存できます。空のまま保存すると管理者向けに通知・ログに記録されます。</p>
                 </div>
                 <div>
                   <label className="mb-0.5 block text-xs text-slate-500">電話番号</label>
@@ -3056,7 +3802,16 @@ function AdminDashboard(props: {
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button type="button" onClick={saveDetail} className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-600">保存</button>
-                <button type="button" onClick={() => setDetailId(null)} className="rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">キャンセル</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDetailId(null);
+                    setInvoiceSaveHint(null);
+                  }}
+                  className="rounded border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  キャンセル
+                </button>
                 {detailId && (
                   <button
                     type="button"
@@ -3086,18 +3841,44 @@ function AdminDashboard(props: {
                   <li key={mem.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-100 bg-white px-3 py-2 text-sm">
                     <span className="font-medium text-slate-700">{mem.name}</span>
                     <span className="text-slate-500">{mem.loginAccount || "—"}</span>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await updateMember(mem.id, { isActive: true });
-                        const mems = await loadMembers();
-                        setMembers(mems ?? []);
-                        onRefresh();
-                      }}
-                      className="rounded bg-slate-600 px-3 py-1 text-xs font-medium text-white hover:bg-slate-500"
-                    >
-                      有効に戻す
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await updateMember(mem.id, { isActive: true });
+                            const mems = await loadMembers();
+                            setMembers(mems ?? []);
+                            onRefresh();
+                          } catch (e) {
+                            alert(e instanceof Error ? e.message : String(e));
+                          }
+                        }}
+                        className="rounded bg-slate-600 px-3 py-1 text-xs font-medium text-white hover:bg-slate-500"
+                      >
+                        有効に戻す
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!window.confirm("本当にこのメンバーを完全に削除しますか？この操作は取り消せません。")) return;
+                          try {
+                            const res = await fetch(`/api/members/${encodeURIComponent(mem.id)}`, { method: "DELETE" });
+                            const data = (await res.json().catch(() => ({}))) as { error?: string };
+                            if (!res.ok) throw new Error(data.error || "削除に失敗しました");
+                            if (detailId === mem.id) setDetailId(null);
+                            const mems = await loadMembers();
+                            setMembers(mems ?? []);
+                            onRefresh();
+                          } catch (e) {
+                            alert(e instanceof Error ? e.message : String(e));
+                          }
+                        }}
+                        className="rounded border border-red-300 bg-red-50 px-3 py-1 text-xs font-medium text-red-800 hover:bg-red-100"
+                      >
+                        完全に削除
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -3360,34 +4141,75 @@ function ShiftDeadlineCountdown({ todayJstYmd }: { todayJstYmd: string }) {
 function ShiftTab(props: {
   userId: string;
   shifts: Shift[];
-  onSave: (s: Shift[]) => void;
-  onRefresh: () => void;
+  onSave: (s: Shift[]) => Promise<boolean>;
   todayJstYmd: string;
 }) {
-  const { userId, shifts, onSave, onRefresh, todayJstYmd } = props;
+  const { userId, shifts, onSave, todayJstYmd } = props;
   const timeOptions = get15MinOptions();
   const optionsWithNone = [ENTRY_NONE, ...timeOptions];
   const [weekStart, setWeekStart] = useState("");
   const [weekForm, setWeekForm] = useState<WeekFormState>({});
+  const [weekSaveLoading, setWeekSaveLoading] = useState(false);
+  const [shiftSaveToast, setShiftSaveToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!shiftSaveToast) return;
+    const t = window.setTimeout(() => setShiftSaveToast(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [shiftSaveToast]);
+
+  const shiftsDedupedForList = useMemo(() => {
+    const mine = shifts.filter((s) => s.userId === userId);
+    const byDate = new Map<string, Shift>();
+    for (const s of mine) {
+      const cur = byDate.get(s.date);
+      if (!cur || s.id < cur.id) byDate.set(s.date, s);
+    }
+    return Array.from(byDate.values()).sort((a, b) => b.date.localeCompare(a.date));
+  }, [shifts, userId]);
 
   const thisMon = getMondayOfCalendarWeekForYmd(todayJstYmd);
-  const [w1, w2] = getSubmittableShiftWeekMondays(thisMon);
-  const weekOptions = [w1, w2].filter((ws) => isWeekOpenForEntry(ws));
+  const weekOptions = getOrderedSubmittableShiftWeeks(thisMon);
+  const wNext = addWeeksToWeekStart(thisMon, 1);
+  const wNext2 = addWeeksToWeekStart(thisMon, 2);
   const defaultOpen = getFirstOpenShiftWeekStart(thisMon);
   const targetStart =
     weekStart && weekOptions.includes(weekStart) ? weekStart : defaultOpen || weekOptions[0] || "";
   const weekDates = targetStart ? getWeekDates(targetStart) : [];
-  const isPastDeadline = targetStart ? Date.now() > getDeadlineForWeek(targetStart).getTime() : true;
-  const byDate = targetStart ? getShiftsByDateForWeek(shifts, targetStart) : new Map<string, Shift>();
+  /** 表示中の週に JST の「今日」が含まれる＝今週扱いで締切なし（月曜文字列の不一致で誤って締切済みにしない） */
+  const isViewingWeekContainingTodayJst =
+    weekDates.length > 0 && todayJstYmd >= weekDates[0] && todayJstYmd <= weekDates[6];
+  const isPastDeadline =
+    !!targetStart &&
+    !isViewingWeekContainingTodayJst &&
+    Date.now() > getDeadlineForWeek(targetStart).getTime();
+  const byDate = targetStart ? getShiftsByDateForWeek(shifts, targetStart, userId) : new Map<string, Shift>();
 
   useEffect(() => {
     if (!targetStart) return;
     const dates = getWeekDates(targetStart);
-    const map = getShiftsByDateForWeek(shifts, targetStart);
+    const viewingContainsTodayJst =
+      dates.length > 0 && todayJstYmd >= dates[0] && todayJstYmd <= dates[6];
+    const map = getShiftsByDateForWeek(shifts, targetStart, userId);
     const next: WeekFormState = {};
     dates.forEach((dateStr) => {
       if (isWeekendYmd(dateStr)) {
         next[dateStr] = shiftFormWeekendNone();
+        return;
+      }
+      if (viewingContainsTodayJst && dateStr <= todayJstYmd) {
+        const s = map.get(dateStr);
+        if (s) {
+          const isNone = s.startPlanned === ENTRY_NONE;
+          next[dateStr] = {
+            s1: isNone ? ENTRY_NONE : s.startPlanned,
+            e1: isNone ? ENTRY_NONE : s.endPlanned,
+            s2: s.startPlanned2 ?? "",
+            e2: s.endPlanned2 ?? "",
+          };
+          return;
+        }
+        next[dateStr] = { s1: ENTRY_NONE, e1: ENTRY_NONE, s2: "", e2: "" };
         return;
       }
       const s = map.get(dateStr);
@@ -3403,10 +4225,24 @@ function ShiftTab(props: {
       const merged: WeekFormState = { ...next, ...prev };
       dates.forEach((d) => {
         if (isWeekendYmd(d)) merged[d] = shiftFormWeekendNone();
+        else if (viewingContainsTodayJst && d <= todayJstYmd) {
+          const s = map.get(d);
+          if (s) {
+            const isNone = s.startPlanned === ENTRY_NONE;
+            merged[d] = {
+              s1: isNone ? ENTRY_NONE : s.startPlanned,
+              e1: isNone ? ENTRY_NONE : s.endPlanned,
+              s2: s.startPlanned2 ?? "",
+              e2: s.endPlanned2 ?? "",
+            };
+          } else {
+            merged[d] = { s1: ENTRY_NONE, e1: ENTRY_NONE, s2: "", e2: "" };
+          }
+        }
       });
       return merged;
     });
-  }, [targetStart, shifts]);
+  }, [targetStart, shifts, todayJstYmd, userId]);
 
   const updateDay = (dateStr: string, field: "s1" | "e1" | "s2" | "e2", value: string) => {
     setWeekForm((prev) => {
@@ -3428,9 +4264,11 @@ function ShiftTab(props: {
   const copyPreviousWeek = () => {
     if (!targetStart || isPastDeadline) return;
     const prevMon = addWeeksToWeekStart(targetStart, -1);
-    const prevMap = getShiftsByDateForWeek(shifts, prevMon);
+    const prevMap = getShiftsByDateForWeek(shifts, prevMon, userId);
     const curDates = getWeekDates(targetStart);
     const prevDates = getWeekDates(prevMon);
+    const viewingContainsTodayJst =
+      curDates.length > 0 && todayJstYmd >= curDates[0] && todayJstYmd <= curDates[6];
     setWeekForm((prev) => {
       const next = { ...prev };
       curDates.forEach((dateStr, i) => {
@@ -3438,6 +4276,9 @@ function ShiftTab(props: {
           next[dateStr] = shiftFormWeekendNone();
           return;
         }
+        const skipPast =
+          (viewingContainsTodayJst && dateStr <= todayJstYmd) || (!viewingContainsTodayJst && dateStr < todayJstYmd);
+        if (skipPast) return;
         const ps = prevMap.get(prevDates[i]);
         const isNone = ps && ps.startPlanned === ENTRY_NONE;
         next[dateStr] = {
@@ -3451,20 +4292,28 @@ function ShiftTab(props: {
     });
   };
 
-  const handleSubmitWeek = (e: React.FormEvent) => {
+  const handleSubmitWeek = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!targetStart || isPastDeadline) return;
-    const otherShifts = shifts.filter((s) => !weekDates.includes(s.date));
-    const newShifts: Shift[] = weekDates.map((dateStr) => {
+    if (!targetStart || isPastDeadline || weekSaveLoading) return;
+    const otherShifts = shifts.filter((s) => s.userId === userId && !weekDates.includes(s.date));
+    const newShifts: Shift[] = weekDates.flatMap((dateStr) => {
       const existing = byDate.get(dateStr);
       if (isWeekendYmd(dateStr)) {
-        return {
-          id: existing ? existing.id : crypto.randomUUID(),
-          userId,
-          date: dateStr,
-          startPlanned: ENTRY_NONE,
-          endPlanned: ENTRY_NONE,
-        };
+        return [
+          {
+            id: existing ? existing.id : crypto.randomUUID(),
+            userId,
+            date: dateStr,
+            startPlanned: ENTRY_NONE,
+            endPlanned: ENTRY_NONE,
+          },
+        ];
+      }
+      if (isViewingWeekContainingTodayJst && dateStr <= todayJstYmd) {
+        return existing ? [existing] : [];
+      }
+      if (dateStr < todayJstYmd) {
+        return existing ? [existing] : [];
       }
       const f = weekForm[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
       const base = {
@@ -3475,30 +4324,45 @@ function ShiftTab(props: {
         endPlanned: f.s1 === ENTRY_NONE ? ENTRY_NONE : f.e1,
       };
       if (f.s1 !== ENTRY_NONE && f.s2 && f.e2) {
-        return { ...base, startPlanned2: f.s2, endPlanned2: f.e2 };
+        return [{ ...base, startPlanned2: f.s2, endPlanned2: f.e2 }];
       }
-      return base;
+      return [base];
     });
-    onSave([...newShifts, ...otherShifts]);
-    onRefresh();
+    setWeekSaveLoading(true);
+    try {
+      const ok = await onSave([...newShifts, ...otherShifts]);
+      if (ok) setShiftSaveToast("保存が完了しました！");
+    } finally {
+      setWeekSaveLoading(false);
+    }
   };
 
   return (
     <>
+      {shiftSaveToast ? (
+        <div
+          className="fixed left-1/2 top-4 z-[70] max-w-[min(90vw,24rem)] -translate-x-1/2 rounded-lg bg-emerald-800 px-5 py-2.5 text-center text-sm font-medium text-white shadow-lg"
+          role="status"
+        >
+          {shiftSaveToast}
+        </div>
+      ) : null}
       <section className="mb-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:p-6">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-medium text-slate-700">稼働可能日時の登録</h2>
-          <p className="text-xs text-slate-500">提出は「来週」「再来週」の2週間分のみです</p>
+          <p className="text-xs text-slate-500">「今週」は締切なし。来週・再来週は従来どおり前週日曜23:59までです</p>
         </div>
-        <p className="mb-3 text-xs text-slate-600">土曜・日曜は稼働予定の入力はできません（常に「稼働予定なし」として扱います）。</p>
+        <p className="mb-3 text-xs text-slate-600">
+          土曜・日曜は稼働予定の入力はできません（常に「稼働予定なし」として扱います）。「今週」を選んだときは、明日以降の平日のみ編集できます。今日を含む過去の平日は画面上変更できませんが、保存しても登録済みの予定は消えません。来週・再来週では、今日より前の日は変更できません。
+        </p>
         {!targetStart && (
           <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-            現在、提出を受け付けている週はありません（いずれも締め切り済み）。次の提出サイクルをお待ちください。
+            現在、提出を受け付けている週はありません。次の提出サイクルをお待ちください。
           </div>
         )}
         {targetStart && weekOptions.length > 1 && (
           <div className="mb-4">
-            <label className="mb-1 block text-sm text-slate-600">対象週（来週・再来週から選択）</label>
+            <label className="mb-1 block text-sm text-slate-600">対象週（今週・来週・再来週から選択）</label>
             <select
               value={targetStart}
               onChange={(e) => setWeekStart(e.target.value)}
@@ -3509,7 +4373,11 @@ function ShiftTab(props: {
                 const mon = new Date(yy, mm - 1, dd);
                 const sun = new Date(mon);
                 sun.setDate(sun.getDate() + 6);
-                const which = ws === w1 ? "来週" : "再来週";
+                const optDates = getWeekDates(ws);
+                const isOptCurrentWeek =
+                  optDates.length > 0 && todayJstYmd >= optDates[0] && todayJstYmd <= optDates[6];
+                const which =
+                  isOptCurrentWeek ? "今週" : ws === wNext ? "来週" : ws === wNext2 ? "再来週" : "対象週";
                 const label = `${which}（${mon.getMonth() + 1}/${mon.getDate()}～${sun.getMonth() + 1}/${sun.getDate()}）`;
                 return (
                   <option key={ws} value={ws}>
@@ -3528,8 +4396,11 @@ function ShiftTab(props: {
         {targetStart && (
           <p className="mb-4 text-sm text-slate-600">
             {formatDisplayDate(weekDates[0])} ～ {formatDisplayDate(weekDates[6])}
-            {!isPastDeadline && (
+            {!isPastDeadline && !isViewingWeekContainingTodayJst && (
               <span className="ml-1 text-xs text-slate-500">（締切: 前週の日曜 23:59・日本時間）</span>
+            )}
+            {isViewingWeekContainingTodayJst && (
+              <span className="ml-1 text-xs text-slate-500">（今週分は締切なし・明日以降の平日のみ編集可）</span>
             )}
           </p>
         )}
@@ -3538,7 +4409,8 @@ function ShiftTab(props: {
             <button
               type="button"
               onClick={copyPreviousWeek}
-              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              disabled={weekSaveLoading}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               先週の予定をコピー
             </button>
@@ -3551,17 +4423,27 @@ function ShiftTab(props: {
               const f = weekForm[dateStr] || { s1: "09:00", e1: "18:00", s2: "", e2: "" };
               const dayNone = f.s1 === ENTRY_NONE;
               const weekend = isWeekendYmd(dateStr);
+              const lockedThisWeekPast =
+                isViewingWeekContainingTodayJst && !weekend && dateStr <= todayJstYmd;
+              const lockedOtherPast =
+                !isViewingWeekContainingTodayJst && !weekend && dateStr < todayJstYmd;
+              const dayLocked = isPastDeadline || lockedThisWeekPast || lockedOtherPast;
               return (
-                <div key={dateStr} className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+                <div
+                  key={dateStr}
+                  className={`rounded-lg border border-slate-200 p-3 ${dayLocked && !weekend ? "bg-slate-100/90 opacity-65" : "bg-slate-50/50"}`}
+                >
                   <div className="mb-2 flex items-center justify-between">
                     <span className="font-medium text-slate-800">{formatDisplayDate(dateStr)}</span>
                     {!weekend && (
-                      <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                      <label
+                        className={`flex items-center gap-2 text-xs text-slate-600 ${dayLocked ? "cursor-not-allowed" : "cursor-pointer"}`}
+                      >
                         <input
                           type="checkbox"
                           checked={dayNone}
                           onChange={(e) => setDayNone(dateStr, e.target.checked)}
-                          disabled={isPastDeadline}
+                          disabled={dayLocked}
                           className="rounded border-slate-300"
                         />
                         この日の稼働予定なし
@@ -3571,6 +4453,14 @@ function ShiftTab(props: {
                   {weekend && (
                     <p className="text-xs font-medium text-slate-600">土曜・日曜は登録できません（稼働予定なし固定）。</p>
                   )}
+                  {!weekend && lockedThisWeekPast && (
+                    <p className="text-xs text-slate-500">
+                      今週のこの日（今日以前）は編集できません。保存しても登録済みの予定はそのまま残ります。編集できるのは明日以降の平日です。
+                    </p>
+                  )}
+                  {!weekend && lockedOtherPast && (
+                    <p className="text-xs text-slate-500">この日は既に過ぎているため変更できません。</p>
+                  )}
                   {!weekend && !dayNone && (
                     <div className="grid gap-2 sm:grid-cols-2">
                       <div className="flex flex-wrap items-center gap-2">
@@ -3578,7 +4468,7 @@ function ShiftTab(props: {
                         <select
                           value={f.s1}
                           onChange={(e) => updateDay(dateStr, "s1", e.target.value)}
-                          disabled={isPastDeadline}
+                          disabled={dayLocked}
                           className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
                         >
                           {optionsWithNone.map((o) => (
@@ -3591,7 +4481,7 @@ function ShiftTab(props: {
                         <select
                           value={f.e1}
                           onChange={(e) => updateDay(dateStr, "e1", e.target.value)}
-                          disabled={isPastDeadline}
+                          disabled={dayLocked}
                           className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
                         >
                           {optionsWithNone.map((o) => (
@@ -3606,7 +4496,7 @@ function ShiftTab(props: {
                         <select
                           value={f.s2}
                           onChange={(e) => updateDay(dateStr, "s2", e.target.value)}
-                          disabled={isPastDeadline}
+                          disabled={dayLocked}
                           className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
                         >
                           <option value="">—</option>
@@ -3620,7 +4510,7 @@ function ShiftTab(props: {
                         <select
                           value={f.e2}
                           onChange={(e) => updateDay(dateStr, "e2", e.target.value)}
-                          disabled={isPastDeadline}
+                          disabled={dayLocked}
                           className="rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
                         >
                           <option value="">—</option>
@@ -3633,13 +4523,32 @@ function ShiftTab(props: {
                       </div>
                     </div>
                   )}
-                  {!weekend && dayNone && <p className="text-xs text-slate-500">稼働予定なし（本人の意思で登録）</p>}
+                  {!weekend && dayNone && (
+                    <p className="text-xs text-slate-500">
+                      {lockedThisWeekPast ? "稼働予定なし（登録済みの場合は保存してもこの内容に勝手には変えません）" : "稼働予定なし（本人の意思で登録）"}
+                    </p>
+                  )}
                 </div>
               );
             })}
-          {targetStart && !isPastDeadline && (
-            <button type="submit" className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 sm:w-auto">
-              この週を保存
+          {targetStart && (
+            <button
+              type="submit"
+              disabled={isPastDeadline || weekSaveLoading}
+              title={isPastDeadline ? "この週の提出期限を過ぎています。別の週を選ぶか、管理者にご相談ください。" : undefined}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+            >
+              {weekSaveLoading ? (
+                <>
+                  <span
+                    className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white border-t-transparent"
+                    aria-hidden
+                  />
+                  保存中...
+                </>
+              ) : (
+                "この週を保存"
+              )}
             </button>
           )}
         </form>
@@ -3648,13 +4557,10 @@ function ShiftTab(props: {
       <section className="rounded-xl bg-white shadow-sm ring-1 ring-slate-200/80">
         <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-medium text-slate-600 sm:px-5 sm:py-4">登録した稼働予定一覧</h2>
         <div className="divide-y divide-slate-100">
-          {shifts.length === 0 ? (
+          {shiftsDedupedForList.length === 0 ? (
             <div className="px-4 py-8 text-center text-slate-500 sm:px-5">まだ稼働予定がありません</div>
           ) : (
-            [...shifts]
-              .sort((a, b) => b.date.localeCompare(a.date))
-              .slice(0, 14)
-              .map((s) => {
+            shiftsDedupedForList.slice(0, 14).map((s) => {
                 const isNone = s.startPlanned === ENTRY_NONE;
                 return (
                   <div key={s.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-5 sm:py-4">
@@ -3679,60 +4585,74 @@ function KpiTab(props: {
   userId: string;
   kpiRecords: KpiRecord[];
   currentYearMonth: string;
-  onSave: (k: KpiRecord[]) => void;
-  onRefresh: () => void;
+  onSave: (savedDay: KpiRecord, allForUser: KpiRecord[]) => void | Promise<void>;
 }) {
-  const { userId, kpiRecords, currentYearMonth, onSave, onRefresh } = props;
-  const today = toDateString(new Date());
+  const { userId, kpiRecords, currentYearMonth, onSave } = props;
+  const today = getTodayJstDateString();
   const [kpiDate, setKpiDate] = useState(today);
-  const [totalCalls, setTotalCalls] = useState(0);
-  const [validCalls, setValidCalls] = useState(0);
-  const [kcCount, setKcCount] = useState(0);
-  const [followUpCreated, setFollowUpCreated] = useState(0);
-  const [decisionMakerApo, setDecisionMakerApo] = useState(0);
-  const [nonDecisionMakerApo, setNonDecisionMakerApo] = useState(0);
-  const [saved, setSaved] = useState(false);
+  const [kpiFields, setKpiFields] = useState<Record<KpiFormFieldKey, string>>(() => ({ ...EMPTY_KPI_FORM_STRINGS }));
+  const [kpiSaveBusy, setKpiSaveBusy] = useState(false);
 
   useEffect(() => {
     const existing = getKpiForDate(kpiRecords, kpiDate);
     if (existing) {
-      setTotalCalls(existing.totalCalls);
-      setValidCalls(existing.validCalls);
-      setKcCount(existing.kcCount);
-      setFollowUpCreated(existing.followUpCreated);
-      setDecisionMakerApo(existing.decisionMakerApo);
-      setNonDecisionMakerApo(existing.nonDecisionMakerApo);
+      setKpiFields({
+        totalCalls: kpiStoredNumberToInputString(existing.totalCalls),
+        validCalls: kpiStoredNumberToInputString(existing.validCalls),
+        kcCount: kpiStoredNumberToInputString(existing.kcCount),
+        followUpCreated: kpiStoredNumberToInputString(existing.followUpCreated),
+        decisionMakerApo: kpiStoredNumberToInputString(existing.decisionMakerApo),
+        nonDecisionMakerApo: kpiStoredNumberToInputString(existing.nonDecisionMakerApo),
+      });
     } else {
-      setTotalCalls(0);
-      setValidCalls(0);
-      setKcCount(0);
-      setFollowUpCreated(0);
-      setDecisionMakerApo(0);
-      setNonDecisionMakerApo(0);
+      setKpiFields({ ...EMPTY_KPI_FORM_STRINGS });
     }
-    setSaved(false);
   }, [kpiDate, kpiRecords]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const existingRec = getKpiForDate(kpiRecords, kpiDate);
-    const rec: KpiRecord = {
-      id: existingRec ? existingRec.id : crypto.randomUUID(),
-      userId,
-      date: kpiDate,
-      totalCalls,
-      validCalls,
-      kcCount,
-      followUpCreated,
-      decisionMakerApo,
-      nonDecisionMakerApo,
-    };
-    const next = existingRec
-      ? kpiRecords.map((r) => (r.date === kpiDate ? rec : r))
-      : [rec, ...kpiRecords.filter((r) => r.date !== kpiDate)];
-    onSave(next);
-    onRefresh();
-    setSaved(true);
+    if (kpiSaveBusy) return;
+    if (isWeekendYmdJst(kpiDate)) {
+      alert(JST_WEEKEND_WORK_REJECTED_MESSAGE);
+      return;
+    }
+    setKpiSaveBusy(true);
+    try {
+      const dateYmd = coerceKpiWorkDateYmd(kpiDate);
+      if (!dateYmd) {
+        alert("日付が不正です。もう一度お試しください。");
+        return;
+      }
+      const existingRec = getKpiForDate(kpiRecords, dateYmd);
+      const slotStart = normalizeKpiStartTime(existingRec ?? { startTime: KPI_DAY_DEFAULT_START_TIME });
+      const preservedNotify = existingRec ? coerceKpiTimestamptzField(existingRec.kpiMissingSlackNotifiedAt) : undefined;
+      const rec: KpiRecord = {
+        id: existingRec ? existingRec.id : crypto.randomUUID(),
+        userId,
+        date: dateYmd,
+        startTime: slotStart,
+        totalCalls: parseKpiFieldStringToInt(kpiFields.totalCalls),
+        validCalls: parseKpiFieldStringToInt(kpiFields.validCalls),
+        kcCount: parseKpiFieldStringToInt(kpiFields.kcCount),
+        followUpCreated: parseKpiFieldStringToInt(kpiFields.followUpCreated),
+        decisionMakerApo: parseKpiFieldStringToInt(kpiFields.decisionMakerApo),
+        nonDecisionMakerApo: parseKpiFieldStringToInt(kpiFields.nonDecisionMakerApo),
+        ...(preservedNotify ? { kpiMissingSlackNotifiedAt: preservedNotify } : {}),
+      };
+      const next = existingRec
+        ? kpiRecords.map((r) =>
+            r.date === dateYmd && normalizeKpiStartTime(r) === normalizeKpiStartTime(existingRec) ? rec : r
+          )
+        : [
+            rec,
+            ...kpiRecords.filter(
+              (r) => !(r.date === rec.date && normalizeKpiStartTime(r) === normalizeKpiStartTime(rec))
+            ),
+          ];
+      await onSave(rec, next);
+    } finally {
+      setKpiSaveBusy(false);
+    }
   };
 
   const totals = getMonthlyKpiTotals(kpiRecords, currentYearMonth);
@@ -3814,46 +4734,44 @@ function KpiTab(props: {
               required
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-800"
             />
+            {isWeekendYmdJst(kpiDate) && (
+              <p className="mt-1 text-xs font-medium text-amber-800">{JST_WEEKEND_WORK_REJECTED_MESSAGE}</p>
+            )}
           </div>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-            {KPI_LABELS.map(({ key, label }) => (
-              <div key={key}>
-                <label className="mb-1 block text-sm text-slate-600">{label}</label>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3">
+            {KPI_LABELS.map(({ key, label, callSystemHint }) => (
+              <div key={key} className="flex min-w-0 flex-col gap-1.5">
+                <label className="text-sm font-medium text-slate-700">{label}</label>
+                {callSystemHint ? (
+                  <p className="text-[11px] leading-snug text-slate-500 sm:text-xs">{callSystemHint}</p>
+                ) : null}
                 <input
                   type="number"
                   min={0}
-                  value={
-                    key === "totalCalls"
-                      ? totalCalls
-                      : key === "validCalls"
-                        ? validCalls
-                        : key === "kcCount"
-                          ? kcCount
-                          : key === "followUpCreated"
-                            ? followUpCreated
-                            : key === "decisionMakerApo"
-                              ? decisionMakerApo
-                              : nonDecisionMakerApo
+                  inputMode="numeric"
+                  placeholder="0"
+                  value={kpiFields[key]}
+                  onChange={(e) =>
+                    setKpiFields((prev) => ({
+                      ...prev,
+                      [key]: sanitizeKpiNumericInput(e.target.value),
+                    }))
                   }
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value, 10) || 0;
-                    if (key === "totalCalls") setTotalCalls(v);
-                    else if (key === "validCalls") setValidCalls(v);
-                    else if (key === "kcCount") setKcCount(v);
-                    else if (key === "followUpCreated") setFollowUpCreated(v);
-                    else if (key === "decisionMakerApo") setDecisionMakerApo(v);
-                    else setNonDecisionMakerApo(v);
-                  }}
+                  onFocus={handleKpiNumberInputFocus}
                   className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-800"
                 />
               </div>
             ))}
           </div>
           <div className="flex items-center gap-3">
-            <button type="submit" className="rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600">
-              保存する
+            <button
+              type="submit"
+              title={isWeekendYmdJst(kpiDate) ? JST_WEEKEND_WORK_REJECTED_MESSAGE : undefined}
+              disabled={kpiSaveBusy || isWeekendYmdJst(kpiDate)}
+              className="rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {kpiSaveBusy ? "保存中…" : "保存する"}
             </button>
-            {saved && <span className="text-sm text-green-600">保存しました</span>}
           </div>
         </form>
       </section>
@@ -3902,6 +4820,65 @@ export default function DashboardPage() {
   const [showMemberReportModal, setShowMemberReportModal] = useState(false);
   const [memberReportMonth, setMemberReportMonth] = useState("");
   const [deviationApprovedIds, setDeviationApprovedIds] = useState<Set<string>>(new Set());
+  const [adminEditMemberFromUrl, setAdminEditMemberFromUrl] = useState<string | undefined>(undefined);
+  const [punchSubmitPhase, setPunchSubmitPhase] = useState<
+    "idle" | "start_sending" | "end_sending" | "start_done" | "end_done" | "end_modal_open"
+  >("idle");
+  const [punchToast, setPunchToast] = useState<{ message: string; isError?: boolean; prominent?: boolean } | null>(null);
+  const [memberDataToast, setMemberDataToast] = useState<{ message: string; isError: boolean } | null>(null);
+  const punchInFlightRef = useRef(false);
+  const [punchUiTick, setPunchUiTick] = useState(0);
+  const [showEndWithoutStartModal, setShowEndWithoutStartModal] = useState(false);
+  const [manualStartTimeHhmm, setManualStartTimeHhmm] = useState("09:00");
+  const [endModalSubmitting, setEndModalSubmitting] = useState(false);
+  const [punchCompleteFlash, setPunchCompleteFlash] = useState(false);
+  const punchCompleteTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (punchCompleteTimerRef.current) window.clearTimeout(punchCompleteTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (punchSubmitPhase !== "start_done") return;
+    const uid = currentUserId;
+    if (!uid) return;
+    const or = getOpenRecordForUser(allOpenRecords, uid);
+    if (or) setPunchSubmitPhase("idle");
+  }, [punchSubmitPhase, allOpenRecords, currentUserId]);
+
+  useEffect(() => {
+    if (punchSubmitPhase !== "start_done") return;
+    const uid = currentUserId;
+    if (!uid) return;
+    const or = getOpenRecordForUser(allOpenRecords, uid);
+    if (or) return;
+    const id = window.setTimeout(() => setPunchSubmitPhase("idle"), 4000);
+    return () => window.clearTimeout(id);
+  }, [punchSubmitPhase, allOpenRecords, currentUserId]);
+
+  useEffect(() => {
+    if (punchSubmitPhase !== "end_done") return;
+    const id = window.setTimeout(() => setPunchSubmitPhase("idle"), 1400);
+    return () => window.clearTimeout(id);
+  }, [punchSubmitPhase]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search);
+    const id = q.get("adminEditMember")?.trim();
+    if (id) setAdminEditMemberFromUrl(id);
+  }, []);
+
+  const clearAdminEditDeepLink = useCallback(() => {
+    setAdminEditMemberFromUrl(undefined);
+    if (typeof window === "undefined") return;
+    const u = new URL(window.location.href);
+    if (!u.searchParams.has("adminEditMember")) return;
+    u.searchParams.delete("adminEditMember");
+    const qs = u.searchParams.toString();
+    window.history.replaceState({}, "", `${u.pathname}${qs ? `?${qs}` : ""}`);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -3924,6 +4901,40 @@ export default function DashboardPage() {
       setLoadError("データの取得に失敗しました。Supabase の設定とテーブルを確認してください。");
     }
   }, []);
+
+  const syncOpenRecordFromDbAndLocal = useCallback(async () => {
+    if (!currentUserId || isAdminMode) return;
+    const uid = currentUserId;
+    const todayJst = getTodayJstDateString();
+    const minDate = addCalendarDays(todayJst, -1);
+    try {
+      const list = await loadOpenRecords();
+      const fromDb = getOpenRecordForUser(list, uid);
+      if (fromDb) {
+        setAllOpenRecords((prev) => {
+          const cur = getOpenRecordForUser(prev, uid);
+          if (cur && cur.id === fromDb.id && cur.startRounded === fromDb.startRounded) return prev;
+          return [...prev.filter((r) => r.userId !== uid), fromDb];
+        });
+        persistOpenRecordClientBackup(uid, fromDb);
+        return;
+      }
+      const localBackup = readOpenRecordClientBackup(uid);
+      if (!localBackup) return;
+      if (localBackup.date < minDate) {
+        persistOpenRecordClientBackup(uid, null);
+        return;
+      }
+      try {
+        await setOpenRecordForUser(uid, localBackup, { bypassPunchTimeRestrictions: true });
+        await refresh();
+      } catch {
+        persistOpenRecordClientBackup(uid, null);
+      }
+    } catch {
+      /* 一時的な通信エラーは無視 */
+    }
+  }, [currentUserId, isAdminMode, refresh]);
 
   const hydrate = useCallback(async () => {
     setLoadError(null);
@@ -3981,21 +4992,84 @@ export default function DashboardPage() {
     if (mounted) void hydrate();
   }, [mounted, hydrate]);
 
+  useEffect(() => {
+    if (tab !== "home" || !currentUserId || isAdminMode) return;
+    void syncOpenRecordFromDbAndLocal();
+  }, [tab, currentUserId, isAdminMode, syncOpenRecordFromDbAndLocal]);
+
+  useEffect(() => {
+    if (!currentUserId || isAdminMode) return;
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      void syncOpenRecordFromDbAndLocal();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [currentUserId, isAdminMode, syncOpenRecordFromDbAndLocal]);
+
+  useEffect(() => {
+    if (!punchToast) return;
+    const ms = punchToast.isError ? 8000 : punchToast.prominent ? 5500 : 4500;
+    const t = window.setTimeout(() => setPunchToast(null), ms);
+    return () => window.clearTimeout(t);
+  }, [punchToast]);
+
+  useEffect(() => {
+    if (!memberDataToast) return;
+    const t = window.setTimeout(() => setMemberDataToast(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [memberDataToast]);
+
+  useEffect(() => {
+    if (tab !== "home" || !currentUserId || isAdminMode) return;
+    const id = window.setInterval(() => setPunchUiTick((n) => n + 1), 20000);
+    return () => window.clearInterval(id);
+  }, [tab, currentUserId, isAdminMode]);
+
   const records = isAdminMode ? allRecords : getRecordsForUser(allRecords, currentUserId ?? "");
   const openRecord = getOpenRecordForUser(allOpenRecords, currentUserId ?? "");
   const shifts = isAdminMode ? allShifts : getShiftsForUser(allShifts, currentUserId ?? "");
   const kpiRecords = isAdminMode ? allKpiRecords : getKpiForUser(allKpiRecords, currentUserId ?? "");
 
-  const todayStr = toDateString(new Date());
+  const todayStr = getTodayJstDateString();
+  const punchBlockedJstWeekend = isWeekendYmdJst(todayStr);
+  void punchUiTick;
+  const punchNow = new Date();
+  const memberPunchContext = !isAdminMode && !!currentUserId;
+  const punchWindowOkJst = isWithinDailyPunchClockWindowJst(punchNow);
+  const openShiftForPunch =
+    openRecord != null
+      ? canonicalShiftForUserDate(allShifts, openRecord.userId, openRecord.date)
+      : undefined;
+  const endPunchLockedPastPlan =
+    !!openRecord &&
+    memberPunchContext &&
+    !isWeekendYmdJst(openRecord.date) &&
+    isMemberEndPunchLockedByPlanAt(punchNow, openRecord.date, openShiftForPunch);
+  const punchFlowBusy = punchSubmitPhase !== "idle";
+  const punchStartDisabled =
+    !memberPunchContext ||
+    !!openRecord ||
+    punchFlowBusy ||
+    punchBlockedJstWeekend ||
+    !punchWindowOkJst;
+  const punchEndDisabledWithOpen =
+    !memberPunchContext ||
+    !openRecord ||
+    punchFlowBusy ||
+    isWeekendYmdJst(openRecord.date) ||
+    !punchWindowOkJst ||
+    endPunchLockedPastPlan;
+  const punchEndDisabledNoOpen = !memberPunchContext || punchFlowBusy;
+  const punchEndDisabled = openRecord ? punchEndDisabledWithOpen : punchEndDisabledNoOpen;
   const todayMinutes = getTotalMinutesForDate(records, todayStr);
-  const currentYearMonth =
-    selectedMonth || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+  const jstYm = getTodayJstDateString().slice(0, 7);
+  const currentYearMonth = selectedMonth || jstYm;
   const monthRecords = getRecordsForMonth(records, currentYearMonth);
   const monthShifts = shifts.filter((s) => s.date.startsWith(currentYearMonth));
   const monthKpi = getKpiForMonth(kpiRecords, currentYearMonth);
   const totalMinutes = getTotalMinutesForMonth(records, currentYearMonth);
-  const isCurrentMonth =
-    currentYearMonth === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`;
+  const isCurrentMonth = currentYearMonth === jstYm;
   const selectableMonths = getSelectableMonths(records, shifts, kpiRecords);
 
   const memberTargetWeekStart = addWeeksToWeekStart(getMondayOfCalendarWeekForYmd(getTodayJstDateString()), 1);
@@ -4003,46 +5077,265 @@ export default function DashboardPage() {
   const memberHasEntryForTargetWeek =
     !currentUserId || getShiftsForUser(allShifts, currentUserId).some((s) => memberTargetWeekDates.includes(s.date));
 
+  const PUNCH_SAVED_TOAST = "打刻しました！";
+  const PUNCH_SAVE_ERR_TOAST = "エラー：電波の良い場所で再試行してください";
+
   const handleStart = async () => {
-    if (openRecord || !currentUserId) return;
-    const now = new Date();
-    const rounded = roundUpTo15Minutes(now);
-    const newOpen: OpenRecord = {
-      id: crypto.randomUUID(),
-      userId: currentUserId,
-      startRaw: now.toISOString(),
-      startRounded: rounded.toISOString(),
-      date: toDateString(now),
-    };
-    await setOpenRecordForUser(currentUserId, newOpen);
-    await refresh();
+    if (!currentUserId || punchInFlightRef.current) return;
+    if (openRecord) return;
+    if (punchSubmitPhase !== "idle") return;
+    punchInFlightRef.current = true;
+    setPunchSubmitPhase("start_sending");
+    const uid = currentUserId;
+    try {
+      if (punchBlockedJstWeekend) {
+        setPunchToast({ message: JST_WEEKEND_WORK_REJECTED_MESSAGE, isError: true });
+        setPunchSubmitPhase("idle");
+        return;
+      }
+      const guardNow = new Date();
+      if (!isWithinDailyPunchClockWindowJst(guardNow)) {
+        setPunchToast({ message: PUNCH_OUTSIDE_WINDOW_MESSAGE, isError: true });
+        setPunchSubmitPhase("idle");
+        return;
+      }
+      const now = new Date();
+      const rounded = roundUpTo15Minutes(now);
+      const newOpen: OpenRecord = {
+        id: crypto.randomUUID(),
+        userId: uid,
+        startRaw: now.toISOString(),
+        startRounded: rounded.toISOString(),
+        date: getTodayJstDateString(now),
+      };
+      setAllOpenRecords((prev) => [...prev.filter((r) => r.userId !== uid), newOpen]);
+      persistOpenRecordClientBackup(uid, newOpen);
+      await withNetworkRetry(async () => {
+        await setOpenRecordForUser(uid, newOpen);
+        await refresh();
+        const list = await loadOpenRecords();
+        const canonical = getOpenRecordForUser(list, uid);
+        if (canonical) persistOpenRecordClientBackup(uid, canonical);
+      });
+      setPunchToast({ message: PUNCH_SAVED_TOAST, isError: false, prominent: true });
+      setPunchSubmitPhase("start_done");
+    } catch (e) {
+      setAllOpenRecords((prev) => prev.filter((r) => r.userId !== uid));
+      persistOpenRecordClientBackup(uid, null);
+      try {
+        await refresh();
+      } catch {
+        /* ignore */
+      }
+      const msg = e instanceof Error ? e.message : "";
+      const knownPunchErr =
+        msg === JST_WEEKEND_WORK_REJECTED_MESSAGE ||
+        msg === PUNCH_OUTSIDE_WINDOW_MESSAGE ||
+        msg === PUNCH_DEADLINE_PASSED_MESSAGE;
+      setPunchToast({
+        message: knownPunchErr ? msg : PUNCH_SAVE_ERR_TOAST,
+        isError: true,
+      });
+      setPunchSubmitPhase("idle");
+    } finally {
+      punchInFlightRef.current = false;
+    }
   };
 
   const handleEnd = async () => {
-    if (!openRecord || !currentUserId) return;
-    const now = new Date();
-    const endRounded = roundDownTo15Minutes(now);
-    const startRounded = new Date(openRecord.startRounded);
-    const durationMinutes = calcDurationMinutes(startRounded, endRounded);
-    const newRecord: WorkRecord = {
-      id: openRecord.id,
-      userId: currentUserId,
-      startRaw: openRecord.startRaw,
-      startRounded: openRecord.startRounded,
-      endRaw: now.toISOString(),
-      endRounded: endRounded.toISOString(),
-      durationMinutes,
-      date: openRecord.date,
-    };
-    const userRecords = getRecordsForUser(allRecords, currentUserId);
-    const next = [newRecord, ...userRecords];
-    await saveRecordsForUser(currentUserId, next);
-    await setOpenRecordForUser(currentUserId, null);
-    await refresh();
+    if (!openRecord || !currentUserId || punchInFlightRef.current) return;
+    if (punchSubmitPhase !== "idle") return;
+    punchInFlightRef.current = true;
+    setPunchSubmitPhase("end_sending");
+    const uid = currentUserId;
+    const snap = openRecord;
+    try {
+      if (isWeekendYmdJst(snap.date)) {
+        setPunchToast({ message: JST_WEEKEND_WORK_REJECTED_MESSAGE, isError: true });
+        setPunchSubmitPhase("idle");
+        return;
+      }
+      const tGuard = new Date();
+      if (!isWithinDailyPunchClockWindowJst(tGuard)) {
+        setPunchToast({ message: PUNCH_OUTSIDE_WINDOW_MESSAGE, isError: true });
+        setPunchSubmitPhase("idle");
+        return;
+      }
+      const shiftForEnd = canonicalShiftForUserDate(allShifts, uid, snap.date);
+      if (isMemberEndPunchLockedByPlanAt(tGuard, snap.date, shiftForEnd)) {
+        setPunchToast({ message: PUNCH_DEADLINE_PASSED_MESSAGE, isError: true });
+        setPunchSubmitPhase("idle");
+        return;
+      }
+      const now = new Date();
+      const endRounded = roundDownTo15Minutes(now);
+      const startRounded = new Date(snap.startRounded);
+      const durationMinutes = calcDurationMinutes(startRounded, endRounded);
+      const newRecord: WorkRecord = {
+        id: snap.id,
+        userId: uid,
+        startRaw: snap.startRaw,
+        startRounded: snap.startRounded,
+        endRaw: now.toISOString(),
+        endRounded: endRounded.toISOString(),
+        durationMinutes,
+        date: snap.date,
+      };
+      const userRecords = getRecordsForUser(allRecords, uid);
+      const next = [newRecord, ...userRecords];
+      await withNetworkRetry(async () => {
+        await saveRecordsForUser(uid, next);
+        await setOpenRecordForUser(uid, null);
+        persistOpenRecordClientBackup(uid, null);
+        await refresh();
+      });
+      setPunchToast({ message: PUNCH_SAVED_TOAST, isError: false, prominent: true });
+      if (punchCompleteTimerRef.current) window.clearTimeout(punchCompleteTimerRef.current);
+      setPunchCompleteFlash(true);
+      punchCompleteTimerRef.current = window.setTimeout(() => {
+        setPunchCompleteFlash(false);
+        punchCompleteTimerRef.current = null;
+      }, 1000);
+      setPunchSubmitPhase("end_done");
+    } catch (e) {
+      try {
+        await refresh();
+      } catch {
+        /* ignore */
+      }
+      const msg = e instanceof Error ? e.message : "";
+      const knownPunchErr =
+        msg === JST_WEEKEND_WORK_REJECTED_MESSAGE ||
+        msg === PUNCH_OUTSIDE_WINDOW_MESSAGE ||
+        msg === PUNCH_DEADLINE_PASSED_MESSAGE;
+      setPunchToast({
+        message: knownPunchErr ? msg : PUNCH_SAVE_ERR_TOAST,
+        isError: true,
+      });
+      setPunchSubmitPhase("idle");
+    } finally {
+      punchInFlightRef.current = false;
+    }
   };
 
-  const handleSaveShifts = async (newShifts: Shift[]) => {
-    if (!currentUserId) return;
+  const handleEndClick = () => {
+    if (!currentUserId || punchInFlightRef.current) return;
+    if (punchSubmitPhase !== "idle") return;
+    if (openRecord) {
+      void handleEnd();
+      return;
+    }
+    setPunchSubmitPhase("end_modal_open");
+    setManualStartTimeHhmm("09:00");
+    setShowEndWithoutStartModal(true);
+  };
+
+  const submitEndWithoutOpenRecord = async (mode: "now" | "manual") => {
+    if (!currentUserId || endModalSubmitting || punchInFlightRef.current) return;
+    if (punchSubmitPhase !== "end_modal_open") return;
+    punchInFlightRef.current = true;
+    setPunchSubmitPhase("end_sending");
+    setEndModalSubmitting(true);
+    const uid = currentUserId;
+    const workDate = getTodayJstDateString();
+    try {
+      if (isWeekendYmdJst(workDate)) {
+        setPunchToast({ message: JST_WEEKEND_WORK_REJECTED_MESSAGE, isError: true });
+        setPunchSubmitPhase("end_modal_open");
+        return;
+      }
+      const guardEarly = new Date();
+      if (!isWithinDailyPunchClockWindowJst(guardEarly)) {
+        setPunchToast({ message: PUNCH_OUTSIDE_WINDOW_MESSAGE, isError: true });
+        setPunchSubmitPhase("end_modal_open");
+        return;
+      }
+      const shiftEarly = canonicalShiftForUserDate(allShifts, uid, workDate);
+      if (isMemberEndPunchLockedByPlanAt(guardEarly, workDate, shiftEarly)) {
+        setPunchToast({ message: PUNCH_DEADLINE_PASSED_MESSAGE, isError: true });
+        setPunchSubmitPhase("end_modal_open");
+        return;
+      }
+      let startRaw: Date;
+      let startRoundedDate: Date;
+      if (mode === "now") {
+        startRaw = new Date();
+        startRoundedDate = roundUpTo15Minutes(startRaw);
+      } else {
+        const t = parseStartInstantJstOnWorkDate(workDate, manualStartTimeHhmm);
+        if (!t) {
+          setPunchToast({ message: "開始時刻を HH:mm（例 09:00）で入力してください。", isError: true });
+          setPunchSubmitPhase("end_modal_open");
+          return;
+        }
+        startRaw = t;
+        startRoundedDate = roundUpTo15Minutes(t);
+      }
+      const now = new Date();
+      const endRounded = roundDownTo15Minutes(now);
+      if (startRoundedDate.getTime() >= endRounded.getTime()) {
+        setPunchToast({ message: "開始時刻が終了時刻以前になるよう調整してください。", isError: true });
+        setPunchSubmitPhase("end_modal_open");
+        return;
+      }
+      const durationMinutes = calcDurationMinutes(startRoundedDate, endRounded);
+      if (durationMinutes <= 0) {
+        setPunchToast({ message: "稼働時間が0分以下になります。開始時刻を調整してください。", isError: true });
+        setPunchSubmitPhase("end_modal_open");
+        return;
+      }
+
+      const newRecord: WorkRecord = {
+        id: crypto.randomUUID(),
+        userId: uid,
+        startRaw: startRaw.toISOString(),
+        startRounded: startRoundedDate.toISOString(),
+        endRaw: now.toISOString(),
+        endRounded: endRounded.toISOString(),
+        durationMinutes,
+        date: workDate,
+      };
+      const userRecords = getRecordsForUser(allRecords, uid);
+      const next = [newRecord, ...userRecords];
+      await withNetworkRetry(async () => {
+        await saveRecordsForUser(uid, next);
+        await setOpenRecordForUser(uid, null);
+        persistOpenRecordClientBackup(uid, null);
+        await refresh();
+      });
+      setShowEndWithoutStartModal(false);
+      setPunchToast({ message: PUNCH_SAVED_TOAST, isError: false, prominent: true });
+      if (punchCompleteTimerRef.current) window.clearTimeout(punchCompleteTimerRef.current);
+      setPunchCompleteFlash(true);
+      punchCompleteTimerRef.current = window.setTimeout(() => {
+        setPunchCompleteFlash(false);
+        punchCompleteTimerRef.current = null;
+      }, 1000);
+      setPunchSubmitPhase("end_done");
+    } catch (e) {
+      try {
+        await refresh();
+      } catch {
+        /* ignore */
+      }
+      const msg = e instanceof Error ? e.message : "";
+      const knownPunchErr =
+        msg === JST_WEEKEND_WORK_REJECTED_MESSAGE ||
+        msg === PUNCH_OUTSIDE_WINDOW_MESSAGE ||
+        msg === PUNCH_DEADLINE_PASSED_MESSAGE;
+      setPunchToast({
+        message: knownPunchErr ? msg : PUNCH_SAVE_ERR_TOAST,
+        isError: true,
+      });
+      setPunchSubmitPhase("end_modal_open");
+    } finally {
+      punchInFlightRef.current = false;
+      setEndModalSubmitting(false);
+    }
+  };
+
+  const handleSaveShifts = async (newShifts: Shift[]): Promise<boolean> => {
+    if (!currentUserId) return false;
     const thisMon = getMondayOfCalendarWeekForYmd(getTodayJstDateString());
     const [subW1, subW2] = getSubmittableShiftWeekMondays(thisMon);
     const normalized = newShifts.map((s) => {
@@ -4058,21 +5351,61 @@ export default function DashboardPage() {
     for (const s of normalized) {
       if (s.userId !== currentUserId) continue;
       const wm = getMondayOfCalendarWeekForYmd(s.date);
+      if (wm === thisMon) continue;
       if (wm === subW1 || wm === subW2) {
-        if (!isWeekOpenForEntry(wm)) {
+        if (!isWeekOpenForEntry(wm, thisMon)) {
           alert("この週のシフト提出は締め切られています。保存できません。");
-          return;
+          return false;
         }
       }
     }
-    await saveShiftsForUser(currentUserId, normalized);
+    const res = await fetch("/api/schedule", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ shifts: normalized }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) {
+      alert(typeof data.error === "string" ? data.error : "稼働予定の保存に失敗しました");
+      return false;
+    }
     await refresh();
+    return true;
   };
 
-  const handleSaveKpi = async (newKpi: KpiRecord[]) => {
+  const handleSaveKpi = async (savedDay: KpiRecord, newKpi: KpiRecord[]) => {
     if (!currentUserId) return;
-    await saveKpiForUser(currentUserId, newKpi);
-    await refresh();
+    try {
+      await saveKpiForUser(currentUserId, newKpi);
+      const uid = currentUserId;
+      const mergedUser = dedupeKpiRecordsByUserDate(newKpi.map((k) => ({ ...k, userId: uid })));
+      setAllKpiRecords((prev) => [...prev.filter((k) => k.userId !== uid), ...mergedUser]);
+      await refresh();
+      setMemberDataToast({ message: "保存しました", isError: false });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setMemberDataToast({
+        message: msg.trim() !== "" ? msg : "保存に失敗しました。時間をおいて再度お試しください。",
+        isError: true,
+      });
+      try {
+        await refresh();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    const dateKey = savedDay.date;
+    void (async () => {
+      try {
+        const { runKpiProductivityAlertAfterSave } = await import("@/app/actions/kpi-productivity-alert");
+        const r = await runKpiProductivityAlertAfterSave({ date: dateKey });
+        if (!r.ok) console.warn("[KPI] productivity alert:", r.error);
+      } catch (e) {
+        console.warn("[KPI] productivity alert failed:", e);
+      }
+    })();
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -4244,6 +5577,103 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-100" style={{ minHeight: "100vh", backgroundColor: "#f1f5f9" }}>
+      {punchCompleteFlash && (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-emerald-950/92 px-6 text-center print:hidden"
+        >
+          <p className="text-balance text-2xl font-bold leading-snug text-white sm:text-3xl md:text-4xl">
+            お疲れ様でした！打刻を完了しました
+          </p>
+        </div>
+      )}
+      {punchToast && (
+        <div
+          role="status"
+          className={`fixed left-1/2 top-4 z-[100] max-w-[min(92vw,26rem)] -translate-x-1/2 text-center shadow-lg print:hidden ${
+            punchToast.isError
+              ? "rounded-lg bg-red-700 px-4 py-3 text-sm font-semibold text-white"
+              : punchToast.prominent
+                ? "rounded-xl bg-emerald-700 px-6 py-4 text-lg font-bold tracking-tight text-white ring-2 ring-emerald-400/60"
+                : "rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-medium text-white"
+          }`}
+        >
+          {punchToast.message}
+        </div>
+      )}
+      {memberDataToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed left-1/2 z-[99] max-w-[min(92vw,26rem)] -translate-x-1/2 text-center shadow-lg print:hidden ${
+            punchToast ? "top-[4.5rem]" : "top-4"
+          } ${memberDataToast.isError ? "rounded-lg bg-red-700 px-4 py-3 text-sm font-semibold text-white" : "rounded-lg bg-slate-800 px-4 py-3 text-sm font-semibold text-white"}`}
+        >
+          {memberDataToast.message}
+        </div>
+      )}
+      {showEndWithoutStartModal && (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 p-4 print:hidden"
+          onClick={() => {
+            if (!endModalSubmitting) {
+              setShowEndWithoutStartModal(false);
+              setPunchSubmitPhase("idle");
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-2 text-base font-semibold text-slate-800">開始時間の確認</h3>
+            <p className="mb-4 text-sm text-slate-600">
+              稼働開始の打刻がありません。開始時間を入力するか、現在の時刻を開始としてこのまま終了を記録できます。
+            </p>
+            <div className="mb-4 flex flex-col gap-2">
+              <label className="text-xs font-medium text-slate-600">開始時刻（本日・日本時間）</label>
+              <input
+                type="time"
+                value={manualStartTimeHhmm}
+                onChange={(e) => setManualStartTimeHhmm(e.target.value)}
+                disabled={endModalSubmitting}
+                className="rounded border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                step={60}
+              />
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <button
+                type="button"
+                disabled={endModalSubmitting}
+                onClick={() => void submitEndWithoutOpenRecord("manual")}
+                className="rounded-lg bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {endModalSubmitting ? "送信中..." : "入力した時刻で記録"}
+              </button>
+              <button
+                type="button"
+                disabled={endModalSubmitting}
+                onClick={() => void submitEndWithoutOpenRecord("now")}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                現在の時刻を開始とする
+              </button>
+              <button
+                type="button"
+                disabled={endModalSubmitting}
+                onClick={() => {
+                  setShowEndWithoutStartModal(false);
+                  setPunchSubmitPhase("idle");
+                }}
+                className="rounded-lg px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <header className="bg-slate-800 text-white shadow-md print:hidden" style={{ backgroundColor: "#1e293b" }}>
         <div className="mx-auto max-w-2xl px-4 py-4 sm:px-6">
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
@@ -4257,22 +5687,25 @@ export default function DashboardPage() {
           <div className="mx-auto flex max-w-2xl gap-0">
             <button
               type="button"
-              onClick={() => setTab("home")}
-              className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 ${tab === "home" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
+              disabled={punchFlowBusy}
+              onClick={() => !punchFlowBusy && setTab("home")}
+              className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 disabled:cursor-not-allowed disabled:opacity-40 ${tab === "home" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
             >
               活動記録
             </button>
             <button
               type="button"
-              onClick={() => setTab("shift")}
-              className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 ${tab === "shift" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
+              disabled={punchFlowBusy}
+              onClick={() => !punchFlowBusy && setTab("shift")}
+              className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 disabled:cursor-not-allowed disabled:opacity-40 ${tab === "shift" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
             >
               稼働予定
             </button>
             <button
               type="button"
-              onClick={() => setTab("kpi")}
-              className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 ${tab === "kpi" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
+              disabled={punchFlowBusy}
+              onClick={() => !punchFlowBusy && setTab("kpi")}
+              className={`flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 disabled:cursor-not-allowed disabled:opacity-40 ${tab === "kpi" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
             >
               KPI入力
             </button>
@@ -4292,8 +5725,10 @@ export default function DashboardPage() {
             members={members}
             setMembers={setMembers}
             onRefresh={refresh}
+            deepLinkMemberId={adminEditMemberFromUrl}
+            onAdminDeepLinkConsumed={clearAdminEditDeepLink}
             onSaveMemberRecords={async (memberId, records) => {
-              await saveRecordsForUser(memberId, records);
+              await saveRecordsForUser(memberId, records, { bypassPunchTimeRestrictions: true });
               await refresh();
             }}
             onSaveMemberShifts={async (memberId, shifts) => {
@@ -4307,7 +5742,17 @@ export default function DashboardPage() {
                   endPlanned2: undefined,
                 };
               });
-              await saveShiftsForUser(memberId, normalized);
+              const res = await fetch("/api/schedule", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ shifts: normalized, userId: memberId }),
+              });
+              const data = (await res.json().catch(() => ({}))) as { error?: string };
+              if (!res.ok) {
+                alert(typeof data.error === "string" ? data.error : "稼働予定の保存に失敗しました");
+                return;
+              }
               await refresh();
             }}
             deviationApprovedIds={deviationApprovedIds}
@@ -4325,8 +5770,9 @@ export default function DashboardPage() {
                 <p className="mb-4 text-sm text-amber-800">来週分は前週の日曜 23:59（日本時間）までに、稼働予定（エントリー）を登録してください。「稼働予定」タブから登録できます。</p>
                 <button
                   type="button"
-                  onClick={() => setTab("shift")}
-                  className="rounded bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700"
+                  disabled={punchFlowBusy}
+                  onClick={() => !punchFlowBusy && setTab("shift")}
+                  className="rounded bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   稼働予定を登録する
                 </button>
@@ -4373,27 +5819,121 @@ export default function DashboardPage() {
             </section>
 
             <section className="mb-6 sm:mb-8">
-              <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
+              <h2 className="mb-3 text-center text-sm font-semibold uppercase tracking-wide text-slate-500">打刻</h2>
+              {memberPunchContext && (
+                <div
+                  className={`mb-4 rounded-2xl border-2 px-4 py-4 text-center sm:py-5 ${
+                    openRecord
+                      ? "border-amber-500 bg-amber-300 text-slate-900 shadow-md"
+                      : "border-slate-300 bg-slate-200 text-slate-800 shadow-sm"
+                  }`}
+                >
+                  <p className="text-lg font-bold leading-snug sm:text-xl md:text-2xl">
+                    {openRecord ? (
+                      <>
+                        現在<span className="mx-1 text-red-700">【稼働中】</span>です
+                        <span className="mt-1 block text-base font-semibold sm:text-lg">
+                          （{formatTime(openRecord.startRounded)}に開始済み）
+                        </span>
+                      </>
+                    ) : (
+                      <>現在は<span className="mx-1">【未稼働】</span>です</>
+                    )}
+                  </p>
+                </div>
+              )}
+              <div className="flex w-full flex-col gap-4">
                 <button
                   type="button"
                   onClick={handleStart}
-                  disabled={!!openRecord}
-                  className="flex-1 rounded-xl bg-slate-700 px-6 py-4 text-base font-semibold text-white shadow-md transition hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50 sm:py-5 sm:text-lg"
+                  title={
+                    !memberPunchContext
+                      ? undefined
+                      : punchBlockedJstWeekend
+                        ? JST_WEEKEND_WORK_REJECTED_MESSAGE
+                        : !punchWindowOkJst
+                          ? PUNCH_OUTSIDE_WINDOW_MESSAGE
+                          : undefined
+                  }
+                  disabled={punchStartDisabled}
+                  className={`w-full min-h-[5.5rem] rounded-2xl px-4 py-7 text-xl font-bold shadow-xl transition active:scale-[0.99] sm:min-h-[6.5rem] sm:py-9 sm:text-2xl ${
+                    punchStartDisabled
+                      ? "cursor-not-allowed bg-slate-300 text-slate-500"
+                      : "bg-gradient-to-b from-sky-500 to-blue-700 text-white ring-4 ring-blue-400/40 hover:from-sky-400 hover:to-blue-600"
+                  }`}
                 >
-                  業務開始
+                  {punchSubmitPhase === "start_sending"
+                    ? "送信中…"
+                    : punchSubmitPhase === "start_done"
+                      ? "打刻完了"
+                      : punchSubmitPhase === "end_sending" ||
+                          punchSubmitPhase === "end_done" ||
+                          punchSubmitPhase === "end_modal_open"
+                        ? "処理中…"
+                        : "業務開始"}
                 </button>
                 <button
                   type="button"
-                  onClick={handleEnd}
-                  disabled={!openRecord}
-                  className="flex-1 rounded-xl bg-slate-600 px-6 py-4 text-base font-semibold text-white shadow-md transition hover:bg-slate-500 disabled:cursor-not-allowed disabled:opacity-50 sm:py-5 sm:text-lg"
+                  onClick={handleEndClick}
+                  title={
+                    !memberPunchContext
+                      ? undefined
+                      : openRecord && isWeekendYmdJst(openRecord.date)
+                        ? JST_WEEKEND_WORK_REJECTED_MESSAGE
+                        : !punchWindowOkJst && !!openRecord
+                          ? PUNCH_OUTSIDE_WINDOW_MESSAGE
+                          : openRecord && endPunchLockedPastPlan
+                            ? PUNCH_DEADLINE_PASSED_MESSAGE
+                            : undefined
+                  }
+                  disabled={punchEndDisabled}
+                  className={`w-full min-h-[5.5rem] rounded-2xl px-4 py-6 text-center font-bold shadow-xl transition active:scale-[0.99] sm:min-h-[6.5rem] sm:py-8 ${
+                    punchEndDisabled
+                      ? "cursor-not-allowed bg-slate-300 text-slate-500"
+                      : openRecord
+                        ? "bg-gradient-to-b from-orange-500 to-red-600 text-white ring-4 ring-orange-400/45 hover:from-orange-400 hover:to-red-500"
+                        : "bg-gradient-to-b from-slate-600 to-slate-800 text-white ring-4 ring-slate-400/30 hover:from-slate-500 hover:to-slate-700"
+                  }`}
                 >
-                  業務終了
+                  {punchSubmitPhase === "end_sending" ? (
+                    <span className="text-xl sm:text-2xl">送信中…</span>
+                  ) : punchSubmitPhase === "end_done" ? (
+                    <span className="text-xl sm:text-2xl">打刻完了</span>
+                  ) : punchSubmitPhase === "start_sending" || punchSubmitPhase === "start_done" ? (
+                    <span className="text-xl sm:text-2xl">処理中…</span>
+                  ) : punchSubmitPhase === "end_modal_open" ? (
+                    <span className="flex flex-col items-center gap-2 px-1">
+                      <span className="text-xl leading-tight sm:text-2xl">処理中…</span>
+                      <span className="max-w-md text-balance text-sm font-semibold leading-snug text-amber-100 sm:text-base">
+                        入力画面を表示しています
+                      </span>
+                    </span>
+                  ) : openRecord ? (
+                    <span className="text-xl sm:text-2xl">業務終了</span>
+                  ) : (
+                    <span className="flex flex-col items-center gap-2 px-1">
+                      <span className="text-xl leading-tight sm:text-2xl">業務終了</span>
+                      <span className="max-w-md text-balance text-base font-semibold leading-snug text-amber-100 sm:text-lg">
+                        開始時間を入力して終了報告へ
+                      </span>
+                    </span>
+                  )}
                 </button>
               </div>
-              {openRecord && (
-                <p className="mt-3 text-center text-sm text-slate-600">活動中（開始: {formatTime(openRecord.startRounded)}）</p>
+              {punchBlockedJstWeekend && (
+                <p className="mt-3 text-center text-sm font-medium text-amber-800">{JST_WEEKEND_WORK_REJECTED_MESSAGE}</p>
               )}
+              {memberPunchContext && !punchBlockedJstWeekend && !punchWindowOkJst && (
+                <p className="mt-3 text-center text-sm font-medium text-amber-800">{PUNCH_OUTSIDE_WINDOW_MESSAGE}</p>
+              )}
+              {memberPunchContext &&
+                openRecord &&
+                !isWeekendYmdJst(openRecord.date) &&
+                punchWindowOkJst &&
+                endPunchLockedPastPlan && (
+                  <p className="mt-3 text-center text-sm font-medium text-amber-800">{PUNCH_DEADLINE_PASSED_MESSAGE}</p>
+                )}
+              <p className="mt-3 text-center text-xs text-slate-500">KPI入力は「KPI入力」タブからいつでも行えます</p>
             </section>
 
             <HistorySection
@@ -4409,11 +5949,10 @@ export default function DashboardPage() {
             userId={currentUserId}
             shifts={shifts}
             onSave={handleSaveShifts}
-            onRefresh={refresh}
             todayJstYmd={getTodayJstDateString()}
           />
         ) : (
-          <KpiTab userId={currentUserId} kpiRecords={kpiRecords} currentYearMonth={currentYearMonth} onSave={handleSaveKpi} onRefresh={refresh} />
+          <KpiTab userId={currentUserId} kpiRecords={kpiRecords} currentYearMonth={currentYearMonth} onSave={handleSaveKpi} />
         )}
       </main>
 

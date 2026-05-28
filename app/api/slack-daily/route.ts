@@ -1,8 +1,8 @@
 /**
- * 毎朝の Slack 通知（本日の業務委託の稼働予定者）。
+ * 毎日の Slack 通知（当日の業務委託の稼働予定者・日次の締め前）。
  * - データ: Supabase `shifts`（当日・日本時間）＋有効ユーザー `users`
  * - 認証: `Authorization` が `Bearer ${CRON_SECRET}` と完全一致する場合のみ実行
- * - Cron: vercel.json で 0 0 * * *（UTC 0:00 = JST 9:00）に GET 本エンドポイント
+ * - Cron: vercel.json で 0 23 * * *（UTC 23:00 ＝日本時間 翌日 8:00）に GET 本エンドポイント
  * - 土曜・日曜（JST の対象日）は既定で Webhook 送信しない（200 + skipped）
  * - GET ?test=true または POST body `{ "test": true }` のときは土日でも送信する（手動検証用・Cron では付けない）
  * - Webhook: SLACK_WEBHOOK_DAILY_URL があれば優先、なければ SLACK_WEBHOOK_URL

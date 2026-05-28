@@ -20,15 +20,7 @@ import {
 } from "@/lib/roi-analysis";
 import { postSlackIncomingWebhook, resolveSlackWebhookUrl, slackWebhookMissingMessage } from "@/lib/slack-webhook";
 
-/** 日本時間の「今日」YYYY-MM-DD */
-export function getTodayJstDateString(): string {
-  const now = new Date();
-  const jst = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
-  const y = jst.getFullYear();
-  const mo = String(jst.getMonth() + 1).padStart(2, "0");
-  const d = String(jst.getDate()).padStart(2, "0");
-  return `${y}-${mo}-${d}`;
-}
+export { getTodayJstDateString } from "@/lib/export-schedule";
 
 function formatRangeLabelJa(start: string, end: string): string {
   const [ys, ms, ds] = start.split("-").map(Number);
@@ -148,6 +140,8 @@ export type MemberRankingEntry = {
   costYen: number;
   valueYen: number;
   apoUnitYen: number | null;
+  /** 消費コスト ÷ 決裁者アポ数 */
+  decisionMakerApoUnitYen: number | null;
 };
 
 function toMemberLite(r: {
@@ -228,6 +222,8 @@ export function buildMemberRankingEntries(
     const apoFromKcRate = safeRatePercent(totals.totalApo, totals.kcCount);
     const apoUnitYen =
       totals.totalApo > 0 && Number.isFinite(costYen) ? costYen / totals.totalApo : null;
+    const decisionMakerApoUnitYen =
+      totals.decisionMakerApo > 0 && Number.isFinite(costYen) ? costYen / totals.decisionMakerApo : null;
 
     return {
       rank: 0,
@@ -251,6 +247,7 @@ export function buildMemberRankingEntries(
       costYen,
       valueYen,
       apoUnitYen,
+      decisionMakerApoUnitYen,
     };
   });
 
@@ -298,6 +295,10 @@ export function formatSlackMemberRankingDetails(entries: MemberRankingEntry[]): 
     const decisionApoRate = safeRatePercent(e.decisionMakerApo, e.totalCalls);
     const apoUnitStr =
       e.apoUnitYen != null && Number.isFinite(e.apoUnitYen) ? yenDisplay(e.apoUnitYen) : "—";
+    const decisionApoUnitStr =
+      e.decisionMakerApoUnitYen != null && Number.isFinite(e.decisionMakerApoUnitYen)
+        ? yenDisplay(e.decisionMakerApoUnitYen)
+        : "—";
 
     lines.push(headline);
     lines.push("");
@@ -309,7 +310,9 @@ export function formatSlackMemberRankingDetails(entries: MemberRankingEntry[]): 
     lines.push("");
     lines.push(`総コール: ${e.totalCalls}件 (有効率: ${pct(e.validCallRate)})`);
     lines.push(`決アポ数: ${e.decisionMakerApo}件 (決アポ率: ${pct(decisionApoRate)})`);
-    lines.push(`アポ単価: ${apoUnitStr}`);
+    lines.push("💰 【アポ単価詳細】");
+    lines.push(`・通常アポ単価：${apoUnitStr}`);
+    lines.push(`・決済者アポ単価：${decisionApoUnitStr}`);
     lines.push("");
     lines.push(
       `📝 詳細: [KC: ${e.kcCount} / 追いかけ: ${e.followUpCreated} / 非決アポ: ${e.nonDecisionMakerApo}]`

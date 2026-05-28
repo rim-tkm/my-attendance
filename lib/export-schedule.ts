@@ -2,14 +2,66 @@ import type { Member, Shift } from "@/lib/attendance";
 import { SHIFT_ENTRY_NONE, getDateStringsInclusive } from "@/lib/attendance";
 import { addCalendarDays } from "@/lib/roi-analysis";
 
-/** 日本時間で「今日」の YYYY-MM-DD（クライアント・サーバー共通） */
-export function getTodayJstDateString(): string {
-  const now = new Date();
-  const jst = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
-  const y = jst.getFullYear();
-  const m = String(jst.getMonth() + 1).padStart(2, "0");
-  const d = String(jst.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+/** 土日判定エラー・UI 共通メッセージ（日本の暦で土曜・日曜） */
+export const JST_WEEKEND_WORK_REJECTED_MESSAGE = "土日は稼働対象外です";
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * YYYY-MM-DD を日本（Asia/Tokyo）の暦日として解釈し、土曜・日曜かどうかを返す。
+ * サーバーの TZ が UTC でも、日付文字列に対する曜日がずれないようにする。
+ */
+export function isWeekendYmdJst(ymd: string): boolean {
+  const t = ymd.trim();
+  if (!YMD_RE.test(t)) return false;
+  const anchor = new Date(`${t}T12:00:00+09:00`);
+  if (Number.isNaN(anchor.getTime())) return false;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+  }).formatToParts(anchor);
+  const y = parts.find((p) => p.type === "year")?.value;
+  const m = parts.find((p) => p.type === "month")?.value;
+  const d = parts.find((p) => p.type === "day")?.value;
+  const w = parts.find((p) => p.type === "weekday")?.value ?? "";
+  if (!y || !m || !d || `${y}-${m}-${d}` !== t) return false;
+  return w === "Saturday" || w === "Sunday";
+}
+
+/** 日本時間で「今日」の YYYY-MM-DD（クライアント・サーバー共通。Intl で JST を直接解釈） */
+export function getTodayJstDateString(now: Date = new Date()): string {
+  const dtf = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = dtf.formatToParts(now);
+  const y = parts.find((p) => p.type === "year")?.value;
+  const m = parts.find((p) => p.type === "month")?.value;
+  const d = parts.find((p) => p.type === "day")?.value;
+  if (y && m && d) return `${y}-${m}-${d}`;
+  const fallback = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
+  const yy = fallback.getFullYear();
+  const mm = String(fallback.getMonth() + 1).padStart(2, "0");
+  const dd = String(fallback.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+/** 日本時間での「その瞬間」の時・分のみ（0 時からの経過分）。ダッシュボードの予実判定などで使用 */
+export function getJstClockMinutesSinceMidnight(now: Date = new Date()): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Tokyo",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const h = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
+  const m = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
 }
 
 /** 暦上、その日を含む週の月曜日（YYYY-MM-DD） */

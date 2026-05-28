@@ -1,0 +1,18 @@
+---
+description: 保存処理では有効データの空上書き禁止と重要データの変更履歴
+alwaysApply: true
+---
+
+# データ保存・履歴
+
+## 空値・「なし」での上書き禁止
+
+- **新規の保存処理（API・Server Action・バッチ）を書くときは、DB やマージ結果にすでにある「有効な値」を、空文字・null・未送信・「なし」・ゼロのみのペイロードなどで消さないこと。**
+- 日付単位・ユーザー単位でマージする場合は、`mergeUserShiftsPreserveExistingByDate` / `mergeUserKpiPreserveExistingByDate`（`lib/attendance.ts`）と同様の方針に合わせる。シフトは枠ごと（予定1・予定2）に「片方だけ埋まっている既存」を維持できるようにする。
+- フル置換の `upsert` を書く前に、必ず「部分更新・マージ・COALESCE」で意図を満たせるか検討する。
+
+## 重要データの変更履歴
+
+- **稼働予定（`shifts`）と KPI（`kpis`）は重要データとみなす。** 永続化は `lib/supabase-data.ts` の `saveShifts` / `saveKpi` を経由し、可能なら `changeSource` を渡す（例: `api/schedule`）。
+- 参照用テーブルは `data_change_history`（マイグレーション: `supabase-migration-data-change-history.sql`）。過去状態は `loadEntityChangeHistory`（`lib/data-change-history.ts`）または SQL で `entity_type` + `entity_id` ごとに取得する。
+- 一括インポート等で履歴が不要な場合のみ `skipChangeHistory: true`（`SaveDataOptions`）を付与する。

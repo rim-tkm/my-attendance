@@ -1,27 +1,30 @@
-import { isWeekendYmd } from "@/lib/attendance";
+import { buildPlannedShiftListForDate, isWeekendYmd, type Shift } from "@/lib/attendance";
 import { getSupabase } from "@/lib/supabase";
 import { postSlackIncomingWebhook, resolveSlackWebhookUrl, slackWebhookMissingMessage } from "@/lib/slack-webhook";
 
-const SLACK_ENTRY_NONE = "なし";
+type DbShiftRow = {
+  id: string;
+  user_id: string;
+  date: string;
+  start_planned: string | null;
+  end_planned: string | null;
+  start_planned2: string | null;
+  end_planned2: string | null;
+};
 
-/** 日本時間で「今日」の YYYY-MM-DD を返す */
-export function getTodayJstDateString(): string {
-  const now = new Date();
-  const jst = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Tokyo" }));
-  const y = jst.getFullYear();
-  const m = String(jst.getMonth() + 1).padStart(2, "0");
-  const d = String(jst.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+function dbRowToShift(r: DbShiftRow): Shift {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    date: r.date,
+    startPlanned: (r.start_planned ?? "").trim(),
+    endPlanned: (r.end_planned ?? "").trim(),
+    startPlanned2: r.start_planned2 != null && String(r.start_planned2).trim() !== "" ? String(r.start_planned2).trim() : undefined,
+    endPlanned2: r.end_planned2 != null && String(r.end_planned2).trim() !== "" ? String(r.end_planned2).trim() : undefined,
+  };
 }
 
-function hasRealSchedule(
-  startPlanned: string | null | undefined,
-  endPlanned: string | null | undefined
-): boolean {
-  const s = (startPlanned ?? "").trim();
-  const e = (endPlanned ?? "").trim();
-  return s !== "" && s !== SLACK_ENTRY_NONE && e !== "" && e !== SLACK_ENTRY_NONE;
-}
+export { getTodayJstDateString } from "@/lib/export-schedule";
 
 export type SlackDailyResult =
   | { ok: true; date: string; sent: true }
@@ -35,6 +38,7 @@ export type SendSlackDailyOptions = {
 
 /**
  * Supabase の shifts（稼働予定）から指定日に実際の予定があるユーザーを抽出し、Slack に送信する。
+ * 本番 Cron は日本時間 朝 8:00 前後（その日の稼働予定を朝に共有する想定）を想定。
  * 土日（対象日の暦）では既定では送信しない（稼働がない前提）。`bypassWeekendSkip` で回避可。
  */
 export async function sendSlackDailyForDate(dateStr: string, options?: SendSlackDailyOptions): Promise<SlackDailyResult> {
@@ -59,33 +63,49 @@ export async function sendSlackDailyForDate(dateStr: string, options?: SendSlack
 
   const { data: userRows } = await supabase
     .from("users")
-    .select("id, name, is_active")
+    .select("id, name, is_active, is_intern")
     .eq("is_active", true);
 
-  const users = new Map((userRows ?? []).map((u) => [u.id, u]));
-  const shifts = (shiftRows ?? []).filter(
-    (s) =>
-      hasRealSchedule(s.start_planned, s.end_planned) ||
-      hasRealSchedule(s.start_planned2, s.end_planned2)
-  );
+  const memberPick = (userRows ?? [])
+    .filter((u) => u.is_active === true)
+    .map((u) => ({
+      id: u.id as string,
+      name: (u.name as string | null) ?? "",
+      isActive: true as const,
+      isIntern: (u as { is_intern?: boolean | null }).is_intern === true,
+    }));
 
-  const nameSet = new Set<string>();
-  for (const s of shifts) {
-    const u = users.get(s.user_id);
-    if (!u?.name?.trim()) continue;
-    if (
-      hasRealSchedule(s.start_planned, s.end_planned) ||
-      hasRealSchedule(s.start_planned2, s.end_planned2)
-    ) {
-      nameSet.add(u.name.trim());
+  const shifts: Shift[] = (shiftRows ?? []).map((r) => dbRowToShift(r as DbShiftRow));
+  const plannedList = buildPlannedShiftListForDate(shifts, dateStr, memberPick);
+
+  const generalRows = plannedList.filter((r) => r.isIntern !== true);
+  const internRows = plannedList.filter((r) => r.isIntern === true);
+  const totalCount = plannedList.length;
+
+  const header = "お疲れ様です。";
+  const summaryLine = `👥 本日（${dateStr}）の稼働予定：合計 ${totalCount}名（一般 ${generalRows.length}名 / インターン ${internRows.length}名）`;
+
+  const formatRow = (row: { name: string; plannedLabel: string; isIntern?: boolean }) => [
+    `・${row.name} さん${row.isIntern ? "【インターン】" : ""}`,
+    `　予定：${row.plannedLabel}`,
+    "",
+  ];
+
+  let bodyLines: string[];
+  if (totalCount === 0) {
+    bodyLines = ["", summaryLine, "", "本日の業務委託の稼働予定者はいません。"];
+  } else {
+    bodyLines = ["", summaryLine, ""];
+    if (generalRows.length > 0) {
+      bodyLines.push(`🔹 一般メンバー（${generalRows.length}名）`, "");
+      bodyLines.push(...generalRows.flatMap(formatRow));
+    }
+    if (internRows.length > 0) {
+      bodyLines.push(`🔸 インターン生（${internRows.length}名）`, "");
+      bodyLines.push(...internRows.flatMap(formatRow));
     }
   }
-
-  const names = Array.from(nameSet).sort((a, b) => a.localeCompare(b, "ja"));
-  const text =
-    names.length === 0
-      ? "おはようございます！本日の業務委託の稼働予定者はいません。"
-      : `おはようございます！本日の業務委託の稼働予定者は ${names.map((n) => `${n}さん`).join("、")} です。`;
+  const text = [header, ...bodyLines].join("\n").trimEnd();
 
   const posted = await postSlackIncomingWebhook(webhookUrl, { text });
   if (!posted.ok) {
