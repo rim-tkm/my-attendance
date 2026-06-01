@@ -8244,13 +8244,16 @@ export default function DashboardPage() {
     !isWeekendYmdJst(openRecord.date) &&
     isMemberEndPunchLockedByPlanAt(punchNow, openRecord.date, openShiftForPunch);
   const punchFlowBusy = punchSubmitPhase !== "idle";
+  const hasWorkedTodayAlready = allRecords.some(
+    (r) => r.userId === (currentUserId ?? "") && r.date === formatYmdJst(punchNow)
+  );
   const punchStartDisabled =
     !memberPunchContext ||
     !!openRecord ||
     punchFlowBusy ||
     punchBlockedJstWeekend ||
     !punchWindowOkJst ||
-    !punchStartAllowedByPlan;
+    (!hasWorkedTodayAlready && !punchStartAllowedByPlan);
   const punchEndDisabledWithOpen =
     !memberPunchContext ||
     !openRecord ||
