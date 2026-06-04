@@ -8469,7 +8469,7 @@ export default function DashboardPage() {
       const userRecords = getRecordsForUser(allRecords, uid).filter((r) => r.id !== openSnap.id);
       const next = [newRecord, ...userRecords];
       await withNetworkRetry(async () => {
-        await saveRecordsForUser(uid, next);
+        await saveRecordsForUser(uid, next, { bypassPunchTimeRestrictions: true });
         await setOpenRecordForUser(uid, null);
         persistOpenRecordClientBackup(uid, null);
         await refresh();
@@ -8629,7 +8629,7 @@ export default function DashboardPage() {
       const userRecords = getRecordsForUser(allRecords, uid).filter((r) => r.id !== newRecord.id);
       const next = [newRecord, ...userRecords];
       await withNetworkRetry(async () => {
-        await saveRecordsForUser(uid, next);
+        await saveRecordsForUser(uid, next, { bypassPunchTimeRestrictions: true });
         await setOpenRecordForUser(uid, null);
         persistOpenRecordClientBackup(uid, null);
         await refresh();
