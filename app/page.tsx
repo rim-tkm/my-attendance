@@ -689,7 +689,8 @@ type AdminSection =
   | "planActualGap"
   | "settings"
   | "roi"
-  | "productivityExport";
+  | "productivityExport"
+  | "invoiceBatchExport";
 
 function RoiTrendChart({ points }: { points: DailyRoiPoint[] }) {
   const vw = 640;
@@ -1362,6 +1363,16 @@ function AdminDashboard(props: {
   const [invoiceZipSelectedIds, setInvoiceZipSelectedIds] = useState<string[]>([]);
   const [invoiceZipBusy, setInvoiceZipBusy] = useState(false);
   const [invoiceBulkSectionOpen, setInvoiceBulkSectionOpen] = useState(false);
+  const [invoiceBatchExportMonth, setInvoiceBatchExportMonth] = useState(() => getLastMonthString());
+  const [invoiceBatchExportBusy, setInvoiceBatchExportBusy] = useState(false);
+  const [invoiceBatchExportResult, setInvoiceBatchExportResult] = useState<{
+    ok: boolean;
+    yearMonth: string;
+    count?: number;
+    errors?: { memberId: string; memberName: string; message: string }[];
+    gasError?: string;
+    message?: string;
+  } | null>(null);
   const [adminKpiModalTarget, setAdminKpiModalTarget] = useState<AdminKpiModalTarget | null>(null);
   const [hourlyRateRowBusyId, setHourlyRateRowBusyId] = useState<string | null>(null);
   const [internRateRowBusyKey, setInternRateRowBusyKey] = useState<string | null>(null);
@@ -3021,6 +3032,7 @@ function AdminDashboard(props: {
       ? ([
           { id: "roi" as const, label: "生産性分析（ROI）" },
           { id: "productivityExport" as const, label: "生産性CSV" },
+          { id: "invoiceBatchExport" as const, label: "請求書一括記帳" },
         ] as const)
       : []),
     { id: "settings", label: "管理設定" },
@@ -3028,7 +3040,10 @@ function AdminDashboard(props: {
   const invoiceMissingNavCount = membersWithMissingInvoiceNumber.length;
 
   useEffect(() => {
-    if (!isAdminUser && (adminSection === "roi" || adminSection === "productivityExport")) {
+    if (
+      !isAdminUser &&
+      (adminSection === "roi" || adminSection === "productivityExport" || adminSection === "invoiceBatchExport")
+    ) {
       setAdminSection("dashboard");
     }
   }, [isAdminUser, adminSection]);
@@ -3227,6 +3242,71 @@ function AdminDashboard(props: {
       setSlackManualReportSending(false);
     }
   };
+
+  const handleInvoiceBatchExport = useCallback(async () => {
+    const yearMonth = invoiceBatchExportMonth.trim();
+    if (!/^\d{4}-\d{2}$/.test(yearMonth)) {
+      setInvoiceBatchExportResult({
+        ok: false,
+        yearMonth,
+        message: "対象月が不正です。",
+      });
+      return;
+    }
+    if (
+      !window.confirm(
+        `${yearMonth} の全メンバーの請求書を生成して記帳します。よろしいですか？\n（Drive 保存・スプレッドシート記帳は GAS 側で実行されます）`
+      )
+    ) {
+      return;
+    }
+
+    setInvoiceBatchExportBusy(true);
+    setInvoiceBatchExportResult(null);
+    try {
+      const res = await fetch("/api/admin/invoice-batch-export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ yearMonth }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        count?: number;
+        errors?: { memberId: string; memberName: string; message: string }[];
+        gasError?: string;
+        error?: string;
+      };
+
+      if (!res.ok) {
+        setInvoiceBatchExportResult({
+          ok: false,
+          yearMonth,
+          count: data.count,
+          errors: data.errors,
+          gasError: data.gasError,
+          message: data.error ?? data.gasError ?? `HTTP ${res.status}`,
+        });
+        return;
+      }
+
+      setInvoiceBatchExportResult({
+        ok: data.ok !== false,
+        yearMonth,
+        count: data.count ?? 0,
+        errors: data.errors,
+        gasError: data.gasError,
+        message: data.error,
+      });
+    } catch (e) {
+      setInvoiceBatchExportResult({
+        ok: false,
+        yearMonth,
+        message: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setInvoiceBatchExportBusy(false);
+    }
+  }, [invoiceBatchExportMonth]);
 
   return (
     <>
@@ -5872,6 +5952,86 @@ function AdminDashboard(props: {
               </button>
             </div>
           </div>
+        </section>
+      )}
+
+      {adminSection === "invoiceBatchExport" && isAdminUser && (
+        <section className="space-y-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div>
+            <h2 className="text-sm font-medium text-slate-800">請求書を一括出力＆記帳</h2>
+            <p className="mt-1 max-w-3xl text-xs text-slate-500">
+              対象月の全アクティブメンバーについて、請求書 PDF を生成し GAS Webhook へ送信します。Drive への保存とスプレッドシート記帳は GAS 側で実行されます。請求は前月分を月末締めで発行する運用のため、初期値は先月です。
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-4 rounded-lg border border-slate-200 bg-slate-50/80 p-4">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-slate-600">対象月</span>
+              <input
+                type="month"
+                value={invoiceBatchExportMonth}
+                onChange={(e) => setInvoiceBatchExportMonth(e.target.value)}
+                disabled={invoiceBatchExportBusy}
+                className="rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void handleInvoiceBatchExport()}
+              disabled={invoiceBatchExportBusy || !invoiceBatchExportMonth}
+              className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {invoiceBatchExportBusy ? "処理中…" : "請求書を一括出力＆記帳"}
+            </button>
+          </div>
+
+          {invoiceBatchExportResult ? (
+            <div
+              className={`rounded-lg border p-4 text-sm ${
+                invoiceBatchExportResult.ok
+                  ? "border-emerald-200 bg-emerald-50/80 text-emerald-950"
+                  : "border-red-200 bg-red-50/80 text-red-950"
+              }`}
+              role="status"
+            >
+              {invoiceBatchExportResult.ok ? (
+                <p className="font-medium">
+                  {invoiceBatchExportResult.count ?? 0}件を記帳しました（フォルダ: {invoiceBatchExportResult.yearMonth}）
+                </p>
+              ) : (
+                <p className="font-medium">
+                  一括記帳に失敗しました
+                  {invoiceBatchExportResult.message ? `：${invoiceBatchExportResult.message}` : ""}
+                  {invoiceBatchExportResult.gasError ? `（GAS: ${invoiceBatchExportResult.gasError}）` : ""}
+                </p>
+              )}
+              {invoiceBatchExportResult.errors && invoiceBatchExportResult.errors.length > 0 ? (
+                <div className="mt-3">
+                  <p className="mb-2 text-xs font-medium opacity-90">
+                    スキップ・失敗したメンバー（{invoiceBatchExportResult.errors.length}件）
+                  </p>
+                  <ul className="max-h-64 space-y-1.5 overflow-y-auto text-xs">
+                    {invoiceBatchExportResult.errors.map((err) => (
+                      <li
+                        key={`${err.memberId}-${err.message}`}
+                        className="rounded border border-current/15 bg-white/60 px-3 py-2"
+                      >
+                        <span className="font-medium">{err.memberName}</span>
+                        <span className="opacity-80"> — {err.message}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {!invoiceBatchExportResult.ok &&
+              invoiceBatchExportResult.count != null &&
+              invoiceBatchExportResult.count > 0 ? (
+                <p className="mt-2 text-xs opacity-90">
+                  PDF 生成までは {invoiceBatchExportResult.count} 件成功しましたが、GAS への送信でエラーになりました。
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </section>
       )}
 
