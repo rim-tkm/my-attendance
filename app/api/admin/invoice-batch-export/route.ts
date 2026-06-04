@@ -21,6 +21,7 @@ const CHUNK_SIZE = 5;
 const GAS_POST_TIMEOUT_MS = 25_000;
 
 const LOG_PREFIX = "[invoice-batch-export]";
+const DEBUG_PREFIX = "[invoice-debug]";
 
 /** このルートで必須の環境変数 */
 const INVOICE_GAS_WEBHOOK_URL = process.env.INVOICE_GAS_WEBHOOK_URL?.trim();
@@ -163,6 +164,101 @@ function memberHasMonthActivity(
   return userRecords.length > 0 || userKpi.length > 0;
 }
 
+/** 請求対象0件の原因切り分け用（ロジック変更なし・診断ログのみ） */
+function logInvoiceDebugDiagnostics(
+  yearMonth: string,
+  monthStart: string,
+  monthEnd: string,
+  members: Member[],
+  allRecords: Awaited<ReturnType<typeof loadRecords>>,
+  allKpiRecords: Awaited<ReturnType<typeof loadKpiInDateRange>>
+): void {
+  console.log(`${DEBUG_PREFIX} loadRecords 件数: ${allRecords.length}`);
+  console.log(`${DEBUG_PREFIX} yearMonth=${yearMonth}（getRecordsForMonth / getKpiForMonth の比較に使用）`);
+  console.log(`${DEBUG_PREFIX} loadKpiInDateRange 引数: monthStart=${monthStart} monthEnd=${monthEnd}`);
+  console.log(`${DEBUG_PREFIX} loadKpiInDateRange 件数: ${allKpiRecords.length}`);
+
+  if (allRecords.length > 0) {
+    console.log(`${DEBUG_PREFIX} WorkRecord サンプル(先頭1件):`, JSON.stringify(allRecords[0]));
+    const dateSamples = Array.from(new Set(allRecords.slice(0, 30).map((r) => r.date)));
+    console.log(`${DEBUG_PREFIX} WorkRecord.date サンプル(先頭30件から重複除去): ${JSON.stringify(dateSamples)}`);
+  } else {
+    console.log(`${DEBUG_PREFIX} WorkRecord サンプル: 0件（loadRecords が空。Supabase 未接続 or attendance テーブル空の可能性）`);
+  }
+
+  const monthRecordsAllUsers = getRecordsForMonth(allRecords, yearMonth);
+  console.log(
+    `${DEBUG_PREFIX} getRecordsForMonth(allRecords, "${yearMonth}") 件数: ${monthRecordsAllUsers.length}（全ユーザー合計・date.startsWith("${yearMonth}") 一致）`
+  );
+  if (allRecords.length > 0 && monthRecordsAllUsers.length === 0) {
+    const foreignDates = Array.from(new Set(allRecords.map((r) => r.date))).slice(0, 10);
+    console.log(
+      `${DEBUG_PREFIX} ⚠ yearMonth "${yearMonth}" に一致する date が0件。DB上の date 値サンプル(最大10種): ${JSON.stringify(foreignDates)}`
+    );
+    console.log(
+      `${DEBUG_PREFIX} ⚠ getRecordsForMonth は r.date.startsWith("${yearMonth}") のみ。形式が "2026/5/1" 等だと全件不一致になります`
+    );
+  }
+
+  if (allKpiRecords.length > 0) {
+    console.log(`${DEBUG_PREFIX} KPI サンプル(先頭1件):`, JSON.stringify(allKpiRecords[0]));
+    const kpiDateSamples = Array.from(new Set(allKpiRecords.slice(0, 10).map((k) => k.date)));
+    console.log(`${DEBUG_PREFIX} KPI.date サンプル: ${JSON.stringify(kpiDateSamples)}`);
+  }
+
+  const activeMembers = members.filter((m) => m.isActive !== false);
+  console.log(`${DEBUG_PREFIX} アクティブメンバー数: ${activeMembers.length} / 全${members.length}`);
+
+  const debugTarget =
+    activeMembers.find((m) => getRecordsForUser(allRecords, m.id).length > 0) ?? activeMembers[0] ?? members[0];
+  if (debugTarget) {
+    const userAllRecords = getRecordsForUser(allRecords, debugTarget.id);
+    const userMonthRecords = getRecordsForMonth(userAllRecords, yearMonth);
+    const userMonthKpi = getKpiForMonth(getKpiForUser(allKpiRecords, debugTarget.id), yearMonth);
+    const model = buildInvoicePdfModelForMember(debugTarget, yearMonth, allRecords, allKpiRecords);
+    const hasActivity = memberHasMonthActivity(debugTarget, yearMonth, allRecords, allKpiRecords);
+    console.log(
+      `${DEBUG_PREFIX} メンバー詳細(代表1名): name="${debugTarget.name}" id=${debugTarget.id} isActive=${debugTarget.isActive !== false}`
+    );
+    console.log(
+      `${DEBUG_PREFIX}   全期間 records=${userAllRecords.length} / 当月 records=${userMonthRecords.length} / 当月 kpi=${userMonthKpi.length}`
+    );
+    if (userAllRecords.length > 0) {
+      console.log(
+        `${DEBUG_PREFIX}   代表メンバーの date サンプル: ${JSON.stringify(userAllRecords.slice(0, 5).map((r) => r.date))}`
+      );
+    }
+    console.log(
+      `${DEBUG_PREFIX}   totalMinutes=${model.totalMinutes} hourlyRateTaxInclusive=${model.hourlyRateTaxInclusive} totalWithTax=${model.totalWithTax} isIntern=${model.isIntern}`
+    );
+    console.log(
+      `${DEBUG_PREFIX}   memberHasMonthActivity=${hasActivity} → isBillableMember=${hasActivity && model.totalWithTax > 0}`
+    );
+    if (hasActivity && model.totalWithTax === 0) {
+      console.log(`${DEBUG_PREFIX}   ⚠ 実績はあるが請求額0（稼働0分 or インターン確定0 or 時給0の可能性）`);
+    }
+    if (!hasActivity && userAllRecords.length > 0) {
+      console.log(`${DEBUG_PREFIX}   ⚠ 全期間に records ありだが当月フィルタで0件 → date 形式 or yearMonth 不一致の可能性`);
+    }
+  }
+
+  console.log(`${DEBUG_PREFIX} --- 全アクティブメンバー判定一覧 ---`);
+  for (const m of activeMembers) {
+    const userMonthRecords = getRecordsForMonth(getRecordsForUser(allRecords, m.id), yearMonth);
+    const userMonthKpi = getKpiForMonth(getKpiForUser(allKpiRecords, m.id), yearMonth);
+    const hasActivity = userMonthRecords.length > 0 || userMonthKpi.length > 0;
+    const model = buildInvoicePdfModelForMember(m, yearMonth, allRecords, allKpiRecords);
+    let skipReason = "請求対象";
+    if (!hasActivity) skipReason = "skip:当月実績なし";
+    else if (model.totalWithTax === 0) {
+      skipReason = `skip:請求額0 (minutes=${model.totalMinutes}, rate=${model.hourlyRateTaxInclusive})`;
+    }
+    console.log(
+      `${DEBUG_PREFIX} ${m.name}: ${skipReason} | monthRecords=${userMonthRecords.length} monthKpi=${userMonthKpi.length} totalWithTax=${model.totalWithTax}`
+    );
+  }
+}
+
 /**
  * チャンク内メンバー分だけ PDF 生成→base64→rows を作り GAS へ POST。
  * 関数スコープを抜けると blob/buffer/base64/rows は GC 対象になる。
@@ -274,6 +370,8 @@ export async function POST(req: Request) {
     loadRecords(),
     loadKpiInDateRange(monthStart, monthEnd),
   ]);
+
+  logInvoiceDebugDiagnostics(yearMonth, monthStart, monthEnd, members, allRecords, allKpiRecords);
 
   const activeMembers = members.filter((m) => m.isActive !== false);
   const billableMembers = activeMembers.filter((m) => isBillableMember(m, yearMonth, allRecords, allKpiRecords));
