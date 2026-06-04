@@ -12,10 +12,15 @@ import { buildInvoicePdfModelForMember } from "@/lib/invoice-html";
 import { renderInvoicePdfBlobFromModel } from "@/lib/invoice-pdf-pdflib";
 import { loadKpiInDateRange, loadMembers, loadRecords } from "@/lib/supabase-data";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
-/** 1回の GAS POST に含めるメンバー数（メモリピーク抑制のため小さく保つ） */
+/** 1回の GAS POST に含めるメンバー数（メモリピーク抑制のため小さく保つ）。人数が多くタイムアウトする場合はここを小さくする。 */
 const CHUNK_SIZE = 5;
+
+/** GAS Webhook への POST 待ち時間上限（ms） */
+const GAS_POST_TIMEOUT_MS = 25_000;
+
+const LOG_PREFIX = "[invoice-batch-export]";
 
 /** このルートで必須の環境変数 */
 const INVOICE_GAS_WEBHOOK_URL = process.env.INVOICE_GAS_WEBHOOK_URL?.trim();
@@ -93,24 +98,58 @@ function gasInsertedCount(gasResult: unknown): number {
   return 0;
 }
 
+function isBillableMember(
+  member: Member,
+  yearMonth: string,
+  allRecords: Awaited<ReturnType<typeof loadRecords>>,
+  allKpiRecords: Awaited<ReturnType<typeof loadKpiInDateRange>>
+): boolean {
+  if (!memberHasMonthActivity(member, yearMonth, allRecords, allKpiRecords)) {
+    return false;
+  }
+  const model = buildInvoicePdfModelForMember(member, yearMonth, allRecords, allKpiRecords);
+  return model.totalWithTax > 0;
+}
+
 /** 行データを GAS Webhook へ POST（Drive アップロードは GAS 側で実施） */
 async function postToGas(yearMonth: string, rows: InvoiceBatchExportRow[]): Promise<unknown> {
-  const res = await fetch(INVOICE_GAS_WEBHOOK_URL!, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: INVOICE_GAS_TOKEN, yearMonth, rows }),
-  });
-  const text = await res.text();
-  let json: unknown;
+  console.log(`${LOG_PREFIX} GASへPOST開始: yearMonth=${yearMonth} rows=${rows.length}`);
+  const started = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GAS_POST_TIMEOUT_MS);
+
   try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error(`GAS レスポンスが JSON ではありません (${res.status}): ${text.slice(0, 500)}`);
+    const res = await fetch(INVOICE_GAS_WEBHOOK_URL!, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: INVOICE_GAS_TOKEN, yearMonth, rows }),
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    const elapsed = Date.now() - started;
+    console.log(`${LOG_PREFIX} GAS応答: status=${res.status} 所要${elapsed}ms`);
+
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error(`GAS レスポンスが JSON ではありません (${res.status}): ${text.slice(0, 500)}`);
+    }
+    if (!res.ok) {
+      throw new Error(`GAS Webhook エラー (${res.status}): ${text.slice(0, 500)}`);
+    }
+    return json;
+  } catch (err) {
+    const elapsed = Date.now() - started;
+    if (err instanceof Error && err.name === "AbortError") {
+      console.log(`${LOG_PREFIX} GAS応答: タイムアウト(${GAS_POST_TIMEOUT_MS}ms) 所要${elapsed}ms`);
+      throw new Error(`GAS POST が ${GAS_POST_TIMEOUT_MS / 1000} 秒以内に応答しませんでした`);
+    }
+    console.log(`${LOG_PREFIX} GAS応答: エラー 所要${elapsed}ms`, err);
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  if (!res.ok) {
-    throw new Error(`GAS Webhook エラー (${res.status}): ${text.slice(0, 500)}`);
-  }
-  return json;
 }
 
 function memberHasMonthActivity(
@@ -149,7 +188,11 @@ async function processMemberChunk(
         continue;
       }
 
+      console.log(`${LOG_PREFIX} PDF生成開始: ${member.name}`);
+      const pdfStarted = Date.now();
       const pdfBlob = await renderInvoicePdfBlobFromModel(model);
+      console.log(`${LOG_PREFIX} PDF生成完了: ${member.name} (${Date.now() - pdfStarted}ms)`);
+
       const buf = Buffer.from(await pdfBlob.arrayBuffer());
       const pdfBase64 = buf.toString("base64");
       const fileName = `請求書_${member.name}_${yearMonth}.pdf`;
@@ -225,22 +268,39 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "メンバー一覧の取得に失敗しました" }, { status: 500 });
   }
 
+  console.log(`${LOG_PREFIX} 開始: 全メンバー数=${members.length} 対象月=${yearMonth}`);
+
   const [allRecords, allKpiRecords] = await Promise.all([
     loadRecords(),
     loadKpiInDateRange(monthStart, monthEnd),
   ]);
 
   const activeMembers = members.filter((m) => m.isActive !== false);
+  const billableMembers = activeMembers.filter((m) => isBillableMember(m, yearMonth, allRecords, allKpiRecords));
+  console.log(
+    `${LOG_PREFIX} 請求対象メンバー数: ${billableMembers.length}（${billableMembers.map((m) => m.name).join("、") || "なし"}）`
+  );
+
   const memberChunks = chunkMembers(activeMembers, CHUNK_SIZE);
+  const totalChunks = memberChunks.length;
 
   let totalInserted = 0;
   const errors: BatchError[] = [];
 
-  for (const chunk of memberChunks) {
+  for (let i = 0; i < memberChunks.length; i++) {
+    const chunk = memberChunks[i];
+    console.log(
+      `${LOG_PREFIX} chunk ${i + 1}/${totalChunks} 開始（${chunk.map((m) => m.name).join("、")}）`
+    );
     const result = await processMemberChunk(chunk, yearMonth, allRecords, allKpiRecords);
     totalInserted += result.inserted;
     errors.push(...result.errors);
+    console.log(
+      `${LOG_PREFIX} chunk ${i + 1}/${totalChunks} 完了: inserted=${result.inserted} errors=${result.errors.length}`
+    );
   }
+
+  console.log(`${LOG_PREFIX} 完了: count=${totalInserted} errors=${errors.length}`);
 
   return NextResponse.json({
     ok: true,
