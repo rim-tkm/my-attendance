@@ -1364,11 +1364,20 @@ function AdminDashboard(props: {
   const [invoiceZipBusy, setInvoiceZipBusy] = useState(false);
   const [invoiceBulkSectionOpen, setInvoiceBulkSectionOpen] = useState(false);
   const [invoiceBatchExportMonth, setInvoiceBatchExportMonth] = useState(() => getLastMonthString());
+  const [invoiceBatchExportStartIndex, setInvoiceBatchExportStartIndex] = useState(1);
+  const [invoiceBatchExportEndIndex, setInvoiceBatchExportEndIndex] = useState(20);
   const [invoiceBatchExportBusy, setInvoiceBatchExportBusy] = useState(false);
   const [invoiceBatchExportResult, setInvoiceBatchExportResult] = useState<{
     ok: boolean;
     yearMonth: string;
     count?: number;
+    totalMembers?: number;
+    startIndex?: number;
+    endIndex?: number;
+    rangeProcessed?: number;
+    inserted?: number;
+    skipped?: { noActivity: number; zeroAmount: number; total: number };
+    failed?: number;
     errors?: { memberId: string; memberName: string; message: string }[];
     gasError?: string;
     message?: string;
@@ -3245,6 +3254,8 @@ function AdminDashboard(props: {
 
   const handleInvoiceBatchExport = useCallback(async () => {
     const yearMonth = invoiceBatchExportMonth.trim();
+    const startIndex = invoiceBatchExportStartIndex;
+    const endIndex = invoiceBatchExportEndIndex;
     if (!/^\d{4}-\d{2}$/.test(yearMonth)) {
       setInvoiceBatchExportResult({
         ok: false,
@@ -3253,9 +3264,25 @@ function AdminDashboard(props: {
       });
       return;
     }
+    if (!Number.isInteger(startIndex) || startIndex < 1 || !Number.isInteger(endIndex) || endIndex < 1) {
+      setInvoiceBatchExportResult({
+        ok: false,
+        yearMonth,
+        message: "開始位置・終了位置は 1 以上の整数で指定してください。",
+      });
+      return;
+    }
+    if (startIndex > endIndex) {
+      setInvoiceBatchExportResult({
+        ok: false,
+        yearMonth,
+        message: "開始位置は終了位置以下にしてください。",
+      });
+      return;
+    }
     if (
       !window.confirm(
-        `${yearMonth} の全メンバーの請求書を生成して記帳します。よろしいですか？\n（Drive 保存・スプレッドシート記帳は GAS 側で実行されます）`
+        `${yearMonth} の請求書を、名前順 ${startIndex} 人目〜${endIndex} 人目の範囲で生成して記帳します。よろしいですか？\n（Drive 保存・スプレッドシート記帳は GAS 側で実行されます）`
       )
     ) {
       return;
@@ -3267,11 +3294,18 @@ function AdminDashboard(props: {
       const res = await fetch("/api/admin/invoice-batch-export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ yearMonth }),
+        body: JSON.stringify({ yearMonth, startIndex, endIndex }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
         count?: number;
+        totalMembers?: number;
+        startIndex?: number;
+        endIndex?: number;
+        rangeProcessed?: number;
+        inserted?: number;
+        skipped?: { noActivity: number; zeroAmount: number; total: number };
+        failed?: number;
         errors?: { memberId: string; memberName: string; message: string }[];
         gasError?: string;
         error?: string;
@@ -3282,6 +3316,9 @@ function AdminDashboard(props: {
           ok: false,
           yearMonth,
           count: data.count,
+          totalMembers: data.totalMembers,
+          startIndex: data.startIndex ?? startIndex,
+          endIndex: data.endIndex ?? endIndex,
           errors: data.errors,
           gasError: data.gasError,
           message: data.error ?? data.gasError ?? `HTTP ${res.status}`,
@@ -3289,24 +3326,49 @@ function AdminDashboard(props: {
         return;
       }
 
+      const resultStart = data.startIndex ?? startIndex;
+      const resultEnd = data.endIndex ?? endIndex;
+      const totalMembers = data.totalMembers;
+
       setInvoiceBatchExportResult({
         ok: data.ok !== false,
         yearMonth,
-        count: data.count ?? 0,
+        count: data.count ?? data.inserted ?? 0,
+        totalMembers,
+        startIndex: resultStart,
+        endIndex: resultEnd,
+        rangeProcessed: data.rangeProcessed,
+        inserted: data.inserted ?? data.count ?? 0,
+        skipped: data.skipped,
+        failed: data.failed,
         errors: data.errors,
         gasError: data.gasError,
         message: data.error,
       });
+
+      if (
+        data.ok !== false &&
+        typeof totalMembers === "number" &&
+        totalMembers > 0 &&
+        resultEnd < totalMembers
+      ) {
+        const nextStart = resultEnd + 1;
+        const nextEnd = Math.min(resultEnd + 20, totalMembers);
+        setInvoiceBatchExportStartIndex(nextStart);
+        setInvoiceBatchExportEndIndex(nextEnd);
+      }
     } catch (e) {
       setInvoiceBatchExportResult({
         ok: false,
         yearMonth,
+        startIndex,
+        endIndex,
         message: e instanceof Error ? e.message : String(e),
       });
     } finally {
       setInvoiceBatchExportBusy(false);
     }
-  }, [invoiceBatchExportMonth]);
+  }, [invoiceBatchExportMonth, invoiceBatchExportStartIndex, invoiceBatchExportEndIndex]);
 
   return (
     <>
@@ -5960,7 +6022,13 @@ function AdminDashboard(props: {
           <div>
             <h2 className="text-sm font-medium text-slate-800">請求書を一括出力＆記帳</h2>
             <p className="mt-1 max-w-3xl text-xs text-slate-500">
-              対象月の全アクティブメンバーについて、請求書 PDF を生成し GAS Webhook へ送信します。Drive への保存とスプレッドシート記帳は GAS 側で実行されます。請求は前月分を月末締めで発行する運用のため、初期値は先月です。
+              対象月のアクティブメンバー（名前順）について、請求書 PDF を生成し GAS Webhook へ送信します。Drive への保存とスプレッドシート記帳は GAS 側で実行されます。請求は前月分を月末締めで発行する運用のため、初期値は先月です。
+            </p>
+            <p className="mt-2 max-w-3xl text-xs text-amber-900/90">
+              メンバーは名前順に並びます。一度に 20 人ずつなど範囲を区切って実行してください（例: 1〜20 → 次に 21〜40 …と繰り返す）。
+              {invoiceBatchExportResult?.totalMembers != null
+                ? ` 全 ${invoiceBatchExportResult.totalMembers} 人（アクティブ・名前順）。`
+                : " 実行後に全人数が表示されます。"}
             </p>
           </div>
 
@@ -5973,6 +6041,28 @@ function AdminDashboard(props: {
                 onChange={(e) => setInvoiceBatchExportMonth(e.target.value)}
                 disabled={invoiceBatchExportBusy}
                 className="rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-slate-600">開始位置（1始まり）</span>
+              <input
+                type="number"
+                min={1}
+                value={invoiceBatchExportStartIndex}
+                onChange={(e) => setInvoiceBatchExportStartIndex(Math.max(1, Number(e.target.value) || 1))}
+                disabled={invoiceBatchExportBusy}
+                className="w-24 rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-slate-600">終了位置（両端含む）</span>
+              <input
+                type="number"
+                min={1}
+                value={invoiceBatchExportEndIndex}
+                onChange={(e) => setInvoiceBatchExportEndIndex(Math.max(1, Number(e.target.value) || 1))}
+                disabled={invoiceBatchExportBusy}
+                className="w-24 rounded border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               />
             </label>
             <button
@@ -5995,9 +6085,37 @@ function AdminDashboard(props: {
               role="status"
             >
               {invoiceBatchExportResult.ok ? (
-                <p className="font-medium">
-                  {invoiceBatchExportResult.count ?? 0}件を記帳しました（フォルダ: {invoiceBatchExportResult.yearMonth}）
-                </p>
+                <div className="space-y-2">
+                  <p className="font-medium">
+                    全 {invoiceBatchExportResult.totalMembers ?? "—"} 人中、
+                    {invoiceBatchExportResult.startIndex ?? "—"}〜{invoiceBatchExportResult.endIndex ?? "—"} 人目を処理しました。
+                    {invoiceBatchExportResult.inserted ?? invoiceBatchExportResult.count ?? 0} 件記帳
+                    {invoiceBatchExportResult.skipped && invoiceBatchExportResult.skipped.total > 0
+                      ? `（スキップ ${invoiceBatchExportResult.skipped.total} 件）`
+                      : ""}
+                    {invoiceBatchExportResult.failed && invoiceBatchExportResult.failed > 0
+                      ? `（失敗 ${invoiceBatchExportResult.failed} 件）`
+                      : ""}
+                    。
+                  </p>
+                  {typeof invoiceBatchExportResult.totalMembers === "number" &&
+                  typeof invoiceBatchExportResult.endIndex === "number" &&
+                  invoiceBatchExportResult.endIndex < invoiceBatchExportResult.totalMembers ? (
+                    <p className="text-xs font-medium opacity-90">
+                      次は {invoiceBatchExportResult.endIndex + 1} 人目から実行してください（開始位置を{" "}
+                      {invoiceBatchExportResult.endIndex + 1}、終了位置は {Math.min(invoiceBatchExportResult.endIndex + 20, invoiceBatchExportResult.totalMembers)} など）。
+                      入力欄は次回用に自動更新済みです。
+                    </p>
+                  ) : invoiceBatchExportResult.ok ? (
+                    <p className="text-xs opacity-90">指定範囲の処理が完了しました（フォルダ: {invoiceBatchExportResult.yearMonth}）。</p>
+                  ) : null}
+                  {invoiceBatchExportResult.skipped && invoiceBatchExportResult.skipped.total > 0 ? (
+                    <p className="text-xs opacity-90">
+                      スキップ内訳: 当月実績なし {invoiceBatchExportResult.skipped.noActivity} 件 / 請求額0{" "}
+                      {invoiceBatchExportResult.skipped.zeroAmount} 件
+                    </p>
+                  ) : null}
+                </div>
               ) : (
                 <p className="font-medium">
                   一括記帳に失敗しました

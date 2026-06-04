@@ -95,6 +95,66 @@ function chunkMembers<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+/** 範囲指定の並び順を毎回同じにする（名前昇順 → id 昇順） */
+function sortMembersForBatchExport(members: Member[]): Member[] {
+  return [...members].sort((a, b) => {
+    const byName = a.name.localeCompare(b.name, "ja");
+    if (byName !== 0) return byName;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function parsePositiveInt(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 1) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    const n = Number(value.trim());
+    return Number.isInteger(n) && n >= 1 ? n : null;
+  }
+  return null;
+}
+
+/** startIndex/endIndex（1始まり・両端含む）。未指定なら全員 */
+function resolveMemberRange(
+  body: unknown,
+  totalCount: number
+):
+  | { ok: true; startIndex: number; endIndex: number; rangeSpecified: boolean }
+  | { ok: false; error: string } {
+  const raw = body as { startIndex?: unknown; endIndex?: unknown };
+  const hasStart = raw.startIndex !== undefined && raw.startIndex !== null;
+  const hasEnd = raw.endIndex !== undefined && raw.endIndex !== null;
+
+  if (!hasStart && !hasEnd) {
+    if (totalCount === 0) {
+      return { ok: true, startIndex: 1, endIndex: 0, rangeSpecified: false };
+    }
+    return { ok: true, startIndex: 1, endIndex: totalCount, rangeSpecified: false };
+  }
+
+  if (!hasStart || !hasEnd) {
+    return { ok: false, error: "startIndex と endIndex は両方指定するか、両方省略してください" };
+  }
+
+  const startIndex = parsePositiveInt(raw.startIndex);
+  const endIndex = parsePositiveInt(raw.endIndex);
+  if (startIndex == null || endIndex == null) {
+    return { ok: false, error: "startIndex と endIndex は 1 以上の整数で指定してください" };
+  }
+  if (startIndex > endIndex) {
+    return { ok: false, error: "startIndex は endIndex 以下にしてください" };
+  }
+  if (totalCount > 0 && startIndex > totalCount) {
+    return { ok: false, error: `startIndex が範囲外です（全 ${totalCount} 人）` };
+  }
+
+  return {
+    ok: true,
+    startIndex,
+    endIndex: Math.min(endIndex, totalCount),
+    rangeSpecified: true,
+  };
+}
+
 function gasInsertedCount(gasResult: unknown): number {
   if (gasResult && typeof gasResult === "object" && "inserted" in gasResult) {
     const n = Number((gasResult as { inserted: unknown }).inserted);
@@ -272,19 +332,28 @@ async function processMemberChunk(
   yearMonth: string,
   allRecords: Awaited<ReturnType<typeof loadRecords>>,
   allKpiRecords: Awaited<ReturnType<typeof loadKpiInDateRange>>
-): Promise<{ inserted: number; errors: BatchError[] }> {
+): Promise<{
+  inserted: number;
+  errors: BatchError[];
+  skipped: { noActivity: number; zeroAmount: number; total: number };
+}> {
   const rows: InvoiceBatchExportRow[] = [];
   const errors: BatchError[] = [];
   const rowMemberIds = new Map<string, string>();
+  const skipped = { noActivity: 0, zeroAmount: 0, total: 0 };
 
   for (const member of chunkMembers) {
     try {
       if (!memberHasMonthActivity(member, yearMonth, allRecords, allKpiRecords)) {
+        skipped.noActivity += 1;
+        skipped.total += 1;
         continue;
       }
 
       const model = buildInvoicePdfModelForMember(member, yearMonth, allRecords, allKpiRecords);
       if (model.totalWithTax === 0) {
+        skipped.zeroAmount += 1;
+        skipped.total += 1;
         continue;
       }
 
@@ -318,12 +387,12 @@ async function processMemberChunk(
   }
 
   if (rows.length === 0) {
-    return { inserted: 0, errors };
+    return { inserted: 0, errors, skipped };
   }
 
   try {
     const gasResult = await postToGas(yearMonth, rows);
-    return { inserted: gasInsertedCount(gasResult), errors };
+    return { inserted: gasInsertedCount(gasResult), errors, skipped };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     for (const row of rows) {
@@ -333,7 +402,7 @@ async function processMemberChunk(
         message: `GAS 送信失敗: ${message}`,
       });
     }
-    return { inserted: 0, errors };
+    return { inserted: 0, errors, skipped };
   }
 }
 
@@ -377,17 +446,33 @@ export async function POST(req: Request) {
 
   logInvoiceDebugDiagnostics(yearMonth, monthStart, monthEnd, members, allRecords, allKpiRecords);
 
-  const activeMembers = members.filter((m) => m.isActive !== false);
-  const billableMembers = activeMembers.filter((m) => isBillableMember(m, yearMonth, allRecords, allKpiRecords));
+  const sortedActiveMembers = sortMembersForBatchExport(members.filter((m) => m.isActive !== false));
+  const totalMembers = sortedActiveMembers.length;
+
+  const rangeResult = resolveMemberRange(body, totalMembers);
+  if (!rangeResult.ok) {
+    return NextResponse.json({ error: rangeResult.error }, { status: 400 });
+  }
+  const { startIndex, endIndex, rangeSpecified } = rangeResult;
+
+  const membersInRange =
+    totalMembers === 0 ? [] : sortedActiveMembers.slice(startIndex - 1, endIndex);
+
+  console.log(
+    `${LOG_PREFIX} 処理範囲: ${startIndex}〜${endIndex} / 全${totalMembers}人（名前順・今回${membersInRange.length}人）${rangeSpecified ? "" : " ※範囲未指定のため全員"}`
+  );
+
+  const billableMembers = sortedActiveMembers.filter((m) => isBillableMember(m, yearMonth, allRecords, allKpiRecords));
   console.log(
     `${LOG_PREFIX} 請求対象メンバー数: ${billableMembers.length}（${billableMembers.map((m) => m.name).join("、") || "なし"}）`
   );
 
-  const memberChunks = chunkMembers(activeMembers, CHUNK_SIZE);
+  const memberChunks = chunkMembers(membersInRange, CHUNK_SIZE);
   const totalChunks = memberChunks.length;
 
   let totalInserted = 0;
   const errors: BatchError[] = [];
+  const skippedTotals = { noActivity: 0, zeroAmount: 0, total: 0 };
 
   for (let i = 0; i < memberChunks.length; i++) {
     const chunk = memberChunks[i];
@@ -397,16 +482,28 @@ export async function POST(req: Request) {
     const result = await processMemberChunk(chunk, yearMonth, allRecords, allKpiRecords);
     totalInserted += result.inserted;
     errors.push(...result.errors);
+    skippedTotals.noActivity += result.skipped.noActivity;
+    skippedTotals.zeroAmount += result.skipped.zeroAmount;
+    skippedTotals.total += result.skipped.total;
     console.log(
-      `${LOG_PREFIX} chunk ${i + 1}/${totalChunks} 完了: inserted=${result.inserted} errors=${result.errors.length}`
+      `${LOG_PREFIX} chunk ${i + 1}/${totalChunks} 完了: inserted=${result.inserted} skipped=${result.skipped.total} errors=${result.errors.length}`
     );
   }
 
-  console.log(`${LOG_PREFIX} 完了: count=${totalInserted} errors=${errors.length}`);
+  console.log(
+    `${LOG_PREFIX} 完了: count=${totalInserted} skipped=${skippedTotals.total} errors=${errors.length} range=${startIndex}-${endIndex}/${totalMembers}`
+  );
 
   return NextResponse.json({
     ok: true,
     count: totalInserted,
+    totalMembers,
+    startIndex,
+    endIndex,
+    rangeProcessed: membersInRange.length,
+    inserted: totalInserted,
+    skipped: skippedTotals,
+    failed: errors.length,
     ...(errors.length > 0 ? { errors } : {}),
   });
 }
