@@ -12,6 +12,11 @@ import { buildInvoicePdfModelForMember } from "@/lib/invoice-html";
 import { renderInvoicePdfBlobFromModel } from "@/lib/invoice-pdf-pdflib";
 import { loadKpiInDateRange, loadMembers, loadRecords } from "@/lib/supabase-data";
 
+export const maxDuration = 60;
+
+/** 1回の GAS POST に含めるメンバー数（メモリピーク抑制のため小さく保つ） */
+const CHUNK_SIZE = 5;
+
 /** このルートで必須の環境変数 */
 const INVOICE_GAS_WEBHOOK_URL = process.env.INVOICE_GAS_WEBHOOK_URL?.trim();
 const INVOICE_GAS_TOKEN = process.env.INVOICE_GAS_TOKEN?.trim();
@@ -28,6 +33,8 @@ export type InvoiceBatchExportRow = {
   pdfBase64: string;
   fileName: string;
 };
+
+type BatchError = { memberId: string; memberName: string; message: string };
 
 function isAdmin(session: { user?: { loginId?: string } } | null): boolean {
   return (session?.user?.loginId ?? "").toLowerCase() === "admin";
@@ -70,6 +77,22 @@ function invoiceDateForYearMonth(yearMonth: string): string {
   return formatSlashDate(y, m, lastDay);
 }
 
+function chunkMembers<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function gasInsertedCount(gasResult: unknown): number {
+  if (gasResult && typeof gasResult === "object" && "inserted" in gasResult) {
+    const n = Number((gasResult as { inserted: unknown }).inserted);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
 /** 行データを GAS Webhook へ POST（Drive アップロードは GAS 側で実施） */
 async function postToGas(yearMonth: string, rows: InvoiceBatchExportRow[]): Promise<unknown> {
   const res = await fetch(INVOICE_GAS_WEBHOOK_URL!, {
@@ -99,6 +122,76 @@ function memberHasMonthActivity(
   const userRecords = getRecordsForMonth(getRecordsForUser(allRecords, member.id), yearMonth);
   const userKpi = getKpiForMonth(getKpiForUser(allKpiRecords, member.id), yearMonth);
   return userRecords.length > 0 || userKpi.length > 0;
+}
+
+/**
+ * チャンク内メンバー分だけ PDF 生成→base64→rows を作り GAS へ POST。
+ * 関数スコープを抜けると blob/buffer/base64/rows は GC 対象になる。
+ */
+async function processMemberChunk(
+  chunkMembers: Member[],
+  yearMonth: string,
+  allRecords: Awaited<ReturnType<typeof loadRecords>>,
+  allKpiRecords: Awaited<ReturnType<typeof loadKpiInDateRange>>
+): Promise<{ inserted: number; errors: BatchError[] }> {
+  const rows: InvoiceBatchExportRow[] = [];
+  const errors: BatchError[] = [];
+  const rowMemberIds = new Map<string, string>();
+
+  for (const member of chunkMembers) {
+    try {
+      if (!memberHasMonthActivity(member, yearMonth, allRecords, allKpiRecords)) {
+        continue;
+      }
+
+      const model = buildInvoicePdfModelForMember(member, yearMonth, allRecords, allKpiRecords);
+      if (model.totalWithTax === 0) {
+        continue;
+      }
+
+      const pdfBlob = await renderInvoicePdfBlobFromModel(model);
+      const buf = Buffer.from(await pdfBlob.arrayBuffer());
+      const pdfBase64 = buf.toString("base64");
+      const fileName = `請求書_${member.name}_${yearMonth}.pdf`;
+
+      rows.push({
+        clientName: member.name,
+        paymentDate: paymentDateForYearMonth(yearMonth),
+        country: "JAPAN",
+        invoiceNo: member.invoiceNumber ?? "",
+        invoiceDate: invoiceDateForYearMonth(yearMonth),
+        amount: model.totalWithTax,
+        pdfBase64,
+        fileName,
+      });
+      rowMemberIds.set(member.name, member.id);
+    } catch (err) {
+      errors.push({
+        memberId: member.id,
+        memberName: member.name,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (rows.length === 0) {
+    return { inserted: 0, errors };
+  }
+
+  try {
+    const gasResult = await postToGas(yearMonth, rows);
+    return { inserted: gasInsertedCount(gasResult), errors };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    for (const row of rows) {
+      errors.push({
+        memberId: rowMemberIds.get(row.clientName) ?? "",
+        memberName: row.clientName,
+        message: `GAS 送信失敗: ${message}`,
+      });
+    }
+    return { inserted: 0, errors };
+  }
 }
 
 export async function POST(req: Request) {
@@ -137,67 +230,21 @@ export async function POST(req: Request) {
     loadKpiInDateRange(monthStart, monthEnd),
   ]);
 
-  const rows: InvoiceBatchExportRow[] = [];
-  const errors: { memberId: string; memberName: string; message: string }[] = [];
+  const activeMembers = members.filter((m) => m.isActive !== false);
+  const memberChunks = chunkMembers(activeMembers, CHUNK_SIZE);
 
-  for (const member of members) {
-    if (member.isActive === false) continue;
+  let totalInserted = 0;
+  const errors: BatchError[] = [];
 
-    try {
-      if (!memberHasMonthActivity(member, yearMonth, allRecords, allKpiRecords)) {
-        continue;
-      }
-
-      const model = buildInvoicePdfModelForMember(member, yearMonth, allRecords, allKpiRecords);
-      if (model.totalWithTax === 0) {
-        continue;
-      }
-
-      const pdfBlob = await renderInvoicePdfBlobFromModel(model);
-      const buf = Buffer.from(await pdfBlob.arrayBuffer());
-      const pdfBase64 = buf.toString("base64");
-      const fileName = `請求書_${member.name}_${yearMonth}.pdf`;
-
-      rows.push({
-        clientName: member.name,
-        paymentDate: paymentDateForYearMonth(yearMonth),
-        country: "JAPAN",
-        invoiceNo: member.invoiceNumber ?? "",
-        invoiceDate: invoiceDateForYearMonth(yearMonth),
-        amount: model.totalWithTax,
-        pdfBase64,
-        fileName,
-      });
-    } catch (err) {
-      errors.push({
-        memberId: member.id,
-        memberName: member.name,
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  let gasResult: unknown = null;
-  if (rows.length > 0) {
-    try {
-      gasResult = await postToGas(yearMonth, rows);
-    } catch (err) {
-      return NextResponse.json(
-        {
-          ok: false,
-          count: rows.length,
-          errors,
-          gasError: err instanceof Error ? err.message : String(err),
-        },
-        { status: 502 }
-      );
-    }
+  for (const chunk of memberChunks) {
+    const result = await processMemberChunk(chunk, yearMonth, allRecords, allKpiRecords);
+    totalInserted += result.inserted;
+    errors.push(...result.errors);
   }
 
   return NextResponse.json({
     ok: true,
-    count: rows.length,
-    gasResult,
+    count: totalInserted,
     ...(errors.length > 0 ? { errors } : {}),
   });
 }
