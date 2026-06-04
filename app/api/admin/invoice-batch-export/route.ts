@@ -390,6 +390,23 @@ async function processMemberChunk(
     return { inserted: 0, errors, skipped };
   }
 
+  console.log(
+    `${DEBUG_PREFIX} GAS送信row:`,
+    JSON.stringify(
+      rows.map((r) => ({
+        keys: Object.keys(r),
+        clientName: r.clientName,
+        amount: r.amount,
+        invoiceNo: r.invoiceNo,
+        invoiceDate: r.invoiceDate,
+        paymentDate: r.paymentDate,
+        country: r.country,
+        fileName: r.fileName,
+        pdfBase64Length: r.pdfBase64 ? r.pdfBase64.length : 0,
+      }))
+    )
+  );
+
   try {
     const gasResult = await postToGas(yearMonth, rows);
     return { inserted: gasInsertedCount(gasResult), errors, skipped };
