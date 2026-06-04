@@ -370,7 +370,7 @@ async function processMemberChunk(
         clientName: member.name,
         paymentDate: paymentDateForYearMonth(yearMonth),
         country: "JAPAN",
-        invoiceNo: member.invoiceNumber ?? "",
+        invoiceNo: model.invoiceNo,
         invoiceDate: invoiceDateForYearMonth(yearMonth),
         amount: model.totalWithTax,
         pdfBase64,
