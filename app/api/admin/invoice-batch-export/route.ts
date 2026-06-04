@@ -14,11 +14,15 @@ import { loadKpiInDateRange, loadMembers, loadRecords } from "@/lib/supabase-dat
 
 export const maxDuration = 300;
 
-/** 1回の GAS POST に含めるメンバー数（メモリピーク抑制のため小さく保つ）。人数が多くタイムアウトする場合はここを小さくする。 */
-const CHUNK_SIZE = 5;
+/**
+ * 1回の GAS POST に含めるメンバー数。
+ * GAS 側の Drive 保存が重いため 1 人ずつ送信（1 = 1人1POST）。
+ * 人数が多いと maxDuration 内に全員終わらない場合があり、その場合は途中まで記帳済み・残りは再実行で続きから追記される（GAS は追記方式）。
+ */
+const CHUNK_SIZE = 1;
 
-/** GAS Webhook への POST 待ち時間上限（ms） */
-const GAS_POST_TIMEOUT_MS = 25_000;
+/** GAS Webhook への POST 待ち時間上限（ms）。Drive 保存に余裕を持たせる */
+const GAS_POST_TIMEOUT_MS = 60_000;
 
 const LOG_PREFIX = "[invoice-batch-export]";
 const DEBUG_PREFIX = "[invoice-debug]";
