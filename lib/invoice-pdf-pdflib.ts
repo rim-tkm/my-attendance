@@ -9,11 +9,8 @@ const NOTO_JP_REGULAR_OTF =
 const NOTO_JP_BOLD_OTF =
   "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/SubsetOTF/JP/NotoSansJP-Bold.otf";
 
-/**
- * 使用文字のみ埋め込む（subset: true）。false だと Regular/Bold 各 ~4MB が PDF に入り 1 枚 ~8MB になる。
- * 請求書 1 枚あたりの目安: 数十 KB〜300 KB 程度（本文・表の文字数に依存）。
- */
-const JP_FONT_EMBED_OPTIONS = { subset: true as const };
+/** Regular/Bold をフル埋め込み（subset: true だと Noto Sans JP のグリフマッピングが壊れ文字化けする） */
+const JP_FONT_EMBED_OPTIONS = { subset: false as const };
 
 let jpRegularBytesPromise: Promise<Uint8Array> | null = null;
 let jpBoldBytesPromise: Promise<Uint8Array> | null = null;
