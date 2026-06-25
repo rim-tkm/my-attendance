@@ -2316,6 +2316,38 @@ function AdminDashboard(props: {
     [isAdminAccountMember, onRefresh, setMembers]
   );
 
+  const [categoryRowBusyId, setCategoryRowBusyId] = useState<string | null>(null);
+
+  const handleRowMemberCategoryChange = useCallback(
+    async (mem: Member, next: MemberContractorCategory) => {
+      if (isAdminAccountMember(mem) || mem.isIntern === true) return;
+      setCategoryRowBusyId(mem.id);
+      setMemberDetailSaveError(null);
+      try {
+        const res = await fetch("/api/admin/member-update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            memberId: mem.id,
+            appBaseUrl: typeof window !== "undefined" ? window.location.origin : "",
+            updates: { memberCategory: next },
+          }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) throw new Error(data.error || "更新に失敗しました");
+        setMembers((prev) =>
+          prev.map((m) => (m.id === mem.id ? { ...m, memberCategory: next } : m))
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setMemberDetailSaveError(msg);
+      } finally {
+        setCategoryRowBusyId(null);
+      }
+    },
+    [isAdminAccountMember, setMembers]
+  );
 
   const handleAdminSaveConfirmedApps = useCallback(
     async (
@@ -6383,6 +6415,9 @@ function AdminDashboard(props: {
                       </span>
                     </button>
                   </th>
+                  <th className="sticky top-0 z-30 w-20 min-w-[5rem] border-b border-slate-200 bg-slate-50 px-1.5 py-2 text-center font-medium text-slate-600">
+                    区分
+                  </th>
                   <th className="sticky top-0 z-30 min-w-[6.5rem] border-b border-slate-200 bg-slate-50 px-2 py-2 text-left font-medium text-slate-600">
                     <button
                       type="button"
@@ -6565,6 +6600,29 @@ function AdminDashboard(props: {
                             }`}
                           />
                         </button>
+                      </td>
+                      <td className="px-1.5 py-1.5 text-center align-middle">
+                        {!isInternRow && !adminRow ? (
+                          <select
+                            value={mem.memberCategory ?? "general"}
+                            disabled={categoryRowBusyId === mem.id}
+                            onChange={(e) =>
+                              void handleRowMemberCategoryChange(
+                                mem,
+                                normalizeMemberContractorCategory(e.target.value)
+                              )
+                            }
+                            className="rounded border border-slate-300 px-1 py-0.5 text-xs text-slate-700 disabled:opacity-50"
+                          >
+                            {MEMBER_CONTRACTOR_CATEGORY_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="text-xs text-slate-400">—</span>
+                        )}
                       </td>
                       <td className="px-2 py-1.5 font-mono tabular-nums text-slate-600 whitespace-nowrap" title={invDisplay ?? ""}>
                         {invDisplay ?? "—"}
