@@ -120,6 +120,15 @@ import {
 } from "@/lib/admin-dashboard-metrics";
 import { isInternMember } from "@/lib/invoice-intern";
 import {
+  MEMBER_CONTRACTOR_CATEGORY_DEFAULT,
+  MEMBER_CONTRACTOR_CATEGORY_OPTIONS,
+  memberContractorCategoryBadgeClass,
+  memberContractorCategoryLabel,
+  memberContractorCategoryShortLabel,
+  normalizeMemberContractorCategory,
+  type MemberContractorCategory,
+} from "@/lib/member-category";
+import {
   adminTableSortIcon,
   cycleAdminTableSort,
   type AdminTableSortState,
@@ -1354,6 +1363,9 @@ function AdminDashboard(props: {
   const [editFirstWorkDate, setEditFirstWorkDate] = useState("");
   const [editInternRateDm, setEditInternRateDm] = useState(INTERN_RATE_DECISION_MAKER_APPS);
   const [editInternRateNdm, setEditInternRateNdm] = useState(INTERN_RATE_NON_DECISION_MAKER_APPS);
+  const [editMemberCategory, setEditMemberCategory] = useState<MemberContractorCategory>(
+    MEMBER_CONTRACTOR_CATEGORY_DEFAULT
+  );
   const [morningBulkSelectedIds, setMorningBulkSelectedIds] = useState<string[]>([]);
   const [morningBulkBusy, setMorningBulkBusy] = useState(false);
   const [morningRowBusyId, setMorningRowBusyId] = useState<string | null>(null);
@@ -1449,8 +1461,6 @@ function AdminDashboard(props: {
     message: string;
     variant: "success" | "error" | "info";
   } | null>(null);
-  const [slackManualReportSending, setSlackManualReportSending] = useState(false);
-  const [roiSlackToast, setRoiSlackToast] = useState<{ message: string; isError: boolean } | null>(null);
   const [gapApprovalBusy, setGapApprovalBusy] = useState(false);
   const [gapActionToast, setGapActionToast] = useState<{ message: string; isError: boolean } | null>(null);
   const [gapManualEditor, setGapManualEditor] = useState<null | {
@@ -2086,6 +2096,7 @@ function AdminDashboard(props: {
     const internRates = getInternUnitRates(member);
     setEditInternRateDm(internRates.decisionMaker);
     setEditInternRateNdm(internRates.nonDecisionMaker);
+    setEditMemberCategory(normalizeMemberContractorCategory(member.memberCategory));
   };
 
   const openReport = (member: Member) => {
@@ -2167,6 +2178,9 @@ function AdminDashboard(props: {
       internRateNonDecisionMakerApps:
         editInternRateNdm >= 0 ? editInternRateNdm : INTERN_RATE_NON_DECISION_MAKER_APPS,
     };
+    if (!detailIsIntern) {
+      updates.memberCategory = editMemberCategory;
+    }
     if (editPass !== "") updates.password = editPass;
     try {
       const res = await fetch("/api/admin/member-update", {
@@ -3194,63 +3208,10 @@ function AdminDashboard(props: {
   };
 
   useEffect(() => {
-    if (!roiSlackToast) return;
-    const t = setTimeout(() => setRoiSlackToast(null), 4000);
-    return () => clearTimeout(t);
-  }, [roiSlackToast]);
-
-  useEffect(() => {
     if (!gapActionToast) return;
     const t = setTimeout(() => setGapActionToast(null), 6000);
     return () => clearTimeout(t);
   }, [gapActionToast]);
-
-  const handleSlackManualRoiReport = async () => {
-    setRoiSlackToast(null);
-    setSlackManualReportSending(true);
-    try {
-      let loginId = slackAdminAuthMemory.current?.loginId ?? "";
-      let password = slackAdminAuthMemory.current?.password ?? "";
-      if (!loginId || !password) {
-        const fallbackId = adminLoginAccount.trim();
-        if (!fallbackId) {
-          alert("ログイン情報を確認できません。一度ログアウトして再ログインしてください。");
-          return;
-        }
-        const p = window.prompt("Slackに送信するため、管理者のパスワードを入力してください");
-        if (p == null || p === "") {
-          alert("送信をキャンセルしました。");
-          return;
-        }
-        loginId = fallbackId;
-        password = p;
-      }
-      const { slackManualReportAction } = await import("@/app/actions/slack-manual-report");
-      const data = await slackManualReportAction({
-        startDate: roiRange.start,
-        endDate: roiRange.end,
-        memberIds: roiSelectedMemberIds,
-        adminLoginId: loginId,
-        adminPassword: password,
-      });
-      if (!data.ok) {
-        const parts = [data.error, data.detail].filter(Boolean);
-        setRoiSlackToast({
-          message: parts.join(" — ") || "理由不明",
-          isError: true,
-        });
-        return;
-      }
-      setRoiSlackToast({ message: "Slack に送信し、成功応答を受け取りました。", isError: false });
-    } catch (e) {
-      setRoiSlackToast({
-        message: e instanceof Error ? e.message : String(e),
-        isError: true,
-      });
-    } finally {
-      setSlackManualReportSending(false);
-    }
-  };
 
   const handleInvoiceBatchExport = useCallback(async () => {
     const yearMonth = invoiceBatchExportMonth.trim();
@@ -4618,6 +4579,12 @@ function AdminDashboard(props: {
                           : "—"}
                       </div>
                     </div>
+                    <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
+                      <div className="text-xs font-medium text-slate-600">追いかけ数</div>
+                      <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
+                        {rangeTotals.followUpCreated} 件
+                      </div>
+                    </div>
                   </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <div className="rounded-lg bg-slate-800 p-4 text-white">
@@ -5757,14 +5724,6 @@ function AdminDashboard(props: {
               >
                 CSVをダウンロード
               </button>
-              <button
-                type="button"
-                onClick={() => void handleSlackManualRoiReport()}
-                disabled={slackManualReportSending}
-                className="rounded bg-[#611f69] px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-[#4a1548] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {slackManualReportSending ? "送信中..." : "Slackにレポートを送信"}
-              </button>
             </div>
             <table className="w-full min-w-[1100px] border-collapse text-sm">
               <thead>
@@ -6614,6 +6573,12 @@ function AdminDashboard(props: {
                         <div className="truncate">{mem.name}</div>
                         {mem.isIntern === true ? (
                           <span className="mt-0.5 inline-block rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-medium text-violet-800">インターン</span>
+                        ) : memberContractorCategoryShortLabel(mem.memberCategory) ? (
+                          <span
+                            className={`mt-0.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${memberContractorCategoryBadgeClass(mem.memberCategory)}`}
+                          >
+                            {memberContractorCategoryShortLabel(mem.memberCategory)}
+                          </span>
                         ) : null}
                         {isMemberMissingInvoiceNumber(mem) ? (
                           <div className="text-[10px] font-medium text-amber-700">請求番号未</div>
@@ -6732,7 +6697,13 @@ function AdminDashboard(props: {
                 </p>
               ) : (
                 <p className="mb-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-                  契約形態: <strong>時給制（一般）</strong> — 委託料単価（円/時間）で請求します。
+                  契約形態: <strong>時給制（業務委託）</strong> — 委託料単価（円/時間）で請求します。
+                  {editMemberCategory !== "general" ? (
+                    <>
+                      {" "}
+                      メンバー区分: <strong>{memberContractorCategoryLabel(editMemberCategory)}</strong>
+                    </>
+                  ) : null}
                 </p>
               )}
               <div className="grid gap-3 sm:grid-cols-2">
@@ -6769,6 +6740,24 @@ function AdminDashboard(props: {
                     />
                   )}
                 </div>
+                {!editingIsIntern ? (
+                  <div>
+                    <label className="mb-0.5 block text-xs text-slate-500">メンバー区分</label>
+                    <select
+                      value={editMemberCategory}
+                      onChange={(e) =>
+                        setEditMemberCategory(normalizeMemberContractorCategory(e.target.value))
+                      }
+                      className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      {MEMBER_CONTRACTOR_CATEGORY_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
                 {editingIsIntern ? (
                   <>
                     <div className="rounded-lg border-2 border-violet-300 bg-violet-50/60 p-3">
@@ -7174,17 +7163,6 @@ function AdminDashboard(props: {
           </div>
         </section>
       )}
-
-      {roiSlackToast ? (
-        <div
-          className={`fixed bottom-6 left-1/2 z-[60] max-w-[min(90vw,28rem)] -translate-x-1/2 rounded-lg px-5 py-2.5 text-sm font-medium shadow-lg ${
-            roiSlackToast.isError ? "bg-red-800 text-white" : "bg-slate-900 text-white"
-          }`}
-          role="status"
-        >
-          {roiSlackToast.isError ? `Slack送信失敗：${roiSlackToast.message}` : roiSlackToast.message}
-        </div>
-      ) : null}
 
       {gapActionToast ? (
         <div

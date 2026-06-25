@@ -6,6 +6,7 @@ import { getSupabase } from "@/lib/supabase";
 import { updateMemberOrThrow, type MemberUpdatePayload } from "@/lib/supabase-data";
 import { resolveAppBaseUrlFromEnv } from "@/lib/app-base-url";
 import { notifyFirstWorkDateSetSlack } from "@/lib/slack-first-work-date";
+import { normalizeMemberContractorCategory } from "@/lib/member-category";
 
 function isAdmin(session: { user?: { loginId?: string } } | null): boolean {
   return (session?.user?.loginId ?? "").toLowerCase() === "admin";
@@ -44,6 +45,9 @@ function coerceMemberUpdates(raw: Record<string, unknown>): MemberUpdatePayload 
   }
   if (typeof raw.internRateNonDecisionMakerApps === "number" && Number.isFinite(raw.internRateNonDecisionMakerApps)) {
     out.internRateNonDecisionMakerApps = raw.internRateNonDecisionMakerApps;
+  }
+  if (typeof raw.memberCategory === "string") {
+    out.memberCategory = normalizeMemberContractorCategory(raw.memberCategory);
   }
   return out;
 }

@@ -1,4 +1,8 @@
 import { formatYmdJst, parseStartInstantJstOnWorkDate } from "@/lib/punch-jst-time";
+import {
+  normalizeMemberContractorCategory,
+  type MemberContractorCategory,
+} from "@/lib/member-category";
 
 /** メンバー（表示名・ログイン・委託料単価・振込先付き） */
 export interface Member {
@@ -46,6 +50,11 @@ export interface Member {
   internRateDecisionMakerApps?: number;
   /** インターン：非決裁者商談確定の単価（円/件・税込）。未設定時は 500 */
   internRateNonDecisionMakerApps?: number;
+  /**
+   * 業務委託（時給制）の組織区分。インターン（isIntern）とは別。
+   * general=一般 / sv=SV / fulltime_candidate=正社員候補
+   */
+  memberCategory?: MemberContractorCategory;
 }
 
 /** 請求管理番号が未入力か。有効メンバーかつ管理者アカウント以外のみ判定対象 */
@@ -1420,6 +1429,7 @@ function ensureMemberDefaults(m: Member): Member {
     password: m.password ?? "",
     hourlyRate: typeof m.hourlyRate === "number" && m.hourlyRate >= 0 ? m.hourlyRate : DEFAULT_HOURLY_RATE,
     isIntern: m.isIntern === true,
+    memberCategory: normalizeMemberContractorCategory(m.memberCategory),
   };
 }
 

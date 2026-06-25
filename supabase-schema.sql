@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS public.users (
   can_work_morning BOOLEAN NOT NULL DEFAULT false,
   is_intern BOOLEAN NOT NULL DEFAULT false,
   intern_rate_decision_maker_apps INTEGER NOT NULL DEFAULT 2000,
-  intern_rate_non_decision_maker_apps INTEGER NOT NULL DEFAULT 500
+  intern_rate_non_decision_maker_apps INTEGER NOT NULL DEFAULT 500,
+  member_category TEXT NOT NULL DEFAULT 'general'
 );
 
 -- 2. attendance（活動記録・完了した業務開始〜終了）

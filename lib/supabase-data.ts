@@ -22,6 +22,10 @@ import {
   logShiftUpsertHistory,
   type KpiSlot,
 } from "@/lib/data-change-history";
+import {
+  MEMBER_CONTRACTOR_CATEGORY_DEFAULT,
+  normalizeMemberContractorCategory,
+} from "@/lib/member-category";
 import { shiftHasPlannedWorkHours } from "@/lib/shift-planned-work";
 import { getSupabase } from "@/lib/supabase";
 import { isWeekendYmdJst, JST_WEEKEND_WORK_REJECTED_MESSAGE } from "@/lib/export-schedule";
@@ -84,6 +88,7 @@ type DbUser = {
   is_intern?: boolean | null;
   intern_rate_decision_maker_apps?: number | null;
   intern_rate_non_decision_maker_apps?: number | null;
+  member_category?: string | null;
 };
 
 type DbAttendance = {
@@ -191,6 +196,7 @@ function toMember(r: DbUser): Member {
       typeof r.intern_rate_non_decision_maker_apps === "number" && r.intern_rate_non_decision_maker_apps >= 0
         ? r.intern_rate_non_decision_maker_apps
         : undefined,
+    memberCategory: normalizeMemberContractorCategory(r.member_category),
   };
 }
 
@@ -371,6 +377,7 @@ function usersUpsertRowFromMember(m: Member): Record<string, unknown> {
       typeof m.internRateNonDecisionMakerApps === "number" && m.internRateNonDecisionMakerApps >= 0
         ? Math.floor(m.internRateNonDecisionMakerApps)
         : 500,
+    member_category: normalizeMemberContractorCategory(m.memberCategory),
   };
 }
 
@@ -446,6 +453,7 @@ export async function addMember(
     phoneNumber: "",
     isActive: true,
     canWorkMorning: DEFAULT_CAN_WORK_MORNING_FOR_NEW_MEMBER,
+    memberCategory: MEMBER_CONTRACTOR_CATEGORY_DEFAULT,
   };
   const supabase = getSupabase();
   if (!supabase) {
@@ -486,6 +494,7 @@ export async function addMember(
     is_active: true,
     first_work_date: null,
     can_work_morning: DEFAULT_CAN_WORK_MORNING_FOR_NEW_MEMBER,
+    member_category: MEMBER_CONTRACTOR_CATEGORY_DEFAULT,
   };
 
   const { error } = await supabase.from("users").insert(insertRow);
@@ -533,6 +542,7 @@ export type MemberUpdatePayload = Partial<
     | "isIntern"
     | "internRateDecisionMakerApps"
     | "internRateNonDecisionMakerApps"
+    | "memberCategory"
   >
 >;
 
@@ -650,6 +660,9 @@ export async function updateMemberOrThrow(
       updates.internRateNonDecisionMakerApps >= 0
         ? Math.floor(updates.internRateNonDecisionMakerApps)
         : 500;
+  }
+  if (updates.memberCategory !== undefined) {
+    body.member_category = normalizeMemberContractorCategory(updates.memberCategory);
   }
   if (Object.keys(body).length === 0) return;
   if (updates.invoiceNumber !== undefined) {
