@@ -4554,9 +4554,11 @@ function AdminDashboard(props: {
             {(() => {
               const { totals: rangeTotals, totalMinutes: summaryTotalMinutes, aposPerHour } =
                 kpiGeneralRangeMetrics;
-              const rangeValidRate = safeRatePercent(rangeTotals.validCalls, rangeTotals.totalCalls);
-              const rangeKcRate = safeRatePercent(rangeTotals.kcCount, rangeTotals.validCalls);
-              const rangeApoRate = safeRatePercent(rangeTotals.decisionMakerApo, rangeTotals.validCalls);
+              const ratePercent2 = (num: number, denom: number): number | null =>
+                denom === 0 || !Number.isFinite(denom) ? null : Math.round((num / denom) * 10000) / 100;
+              const rangeValidRate = ratePercent2(rangeTotals.validCalls, rangeTotals.totalCalls);
+              const rangeKcRate = ratePercent2(rangeTotals.kcCount, rangeTotals.validCalls);
+              const rangeApoRate = ratePercent2(rangeTotals.decisionMakerApo, rangeTotals.validCalls);
               const summaryTotalPay = dashboardMemberSplit.general.reduce((s, mem) => {
                 const mins = getTotalMinutesForUserInDateRange(
                   allRecords,
@@ -4633,15 +4635,15 @@ function AdminDashboard(props: {
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
                     <div className="text-xs text-slate-300">有効率</div>
-                    <div className="text-2xl font-bold">{rangeValidRate != null ? `${rangeValidRate}%` : "—"}</div>
+                    <div className="text-2xl font-bold">{rangeValidRate != null ? `${rangeValidRate.toFixed(2)}%` : "—"}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
                     <div className="text-xs text-slate-300">有効コールからのKC率（目標 16%）</div>
-                    <div className="text-2xl font-bold">{rangeKcRate != null ? `${rangeKcRate.toFixed(1)}%` : "—"}</div>
+                    <div className="text-2xl font-bold">{rangeKcRate != null ? `${rangeKcRate.toFixed(2)}%` : "—"}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
                     <div className="text-xs text-slate-300">有効コールからのアポ率（目標 1%）</div>
-                    <div className="text-2xl font-bold">{rangeApoRate != null ? `${rangeApoRate.toFixed(1)}%` : "—"}</div>
+                    <div className="text-2xl font-bold">{rangeApoRate != null ? `${rangeApoRate.toFixed(2)}%` : "—"}</div>
                   </div>
                 </div>
                 </>
