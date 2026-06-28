@@ -1,6 +1,7 @@
 import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, PageSizes, PDFFont, PDFPage, rgb } from "pdf-lib";
 
+import { resolveAppBaseUrlFromEnv } from "@/lib/app-base-url";
 import type { InvoicePdfModel } from "@/lib/invoice-html";
 
 const JP_FONT_FILES = {
@@ -20,33 +21,88 @@ const JP_FONT_EMBED_OPTIONS = { subset: true as const };
 let jpRegularBytesPromise: Promise<Uint8Array> | null = null;
 let jpBoldBytesPromise: Promise<Uint8Array> | null = null;
 
-async function fetchFontBytes(urls: string[]): Promise<Uint8Array> {
-  for (const url of urls) {
-    const res = await fetch(url);
-    if (res.ok) return new Uint8Array(await res.arrayBuffer());
+/** HTML エラーページ等をフォントとして embed しない */
+function looksLikeSfntFont(bytes: Uint8Array): boolean {
+  if (bytes.length < 10_000) return false;
+  const sig = String.fromCharCode(bytes[0] ?? 0, bytes[1] ?? 0, bytes[2] ?? 0, bytes[3] ?? 0);
+  if (sig === "true" || sig === "OTTO" || sig === "wOFF" || sig === "wOF2") return true;
+  return bytes[0] === 0 && bytes[1] === 1 && bytes[2] === 0 && bytes[3] === 0;
+}
+
+async function tryLoadFontBytes(
+  label: string,
+  loader: () => Promise<Uint8Array | null>
+): Promise<Uint8Array | null> {
+  try {
+    const bytes = await loader();
+    if (bytes && looksLikeSfntFont(bytes)) return bytes;
+    if (bytes) {
+      console.warn(`[invoice-pdf-font] ${label}: invalid font payload (${bytes.length} bytes)`);
+    }
+  } catch (e) {
+    console.warn(
+      `[invoice-pdf-font] ${label} failed:`,
+      e instanceof Error ? e.message : String(e)
+    );
   }
-  throw new Error("フォントを取得できませんでした");
+  return null;
 }
 
 async function loadJpFontBytes(kind: keyof typeof JP_FONT_FILES): Promise<Uint8Array> {
   const fileName = JP_FONT_FILES[kind];
+  const attempts: { label: string; loader: () => Promise<Uint8Array | null> }[] = [];
+
   if (typeof window === "undefined") {
-    try {
-      const [{ readFile }, pathMod] = await Promise.all([import("fs/promises"), import("path")]);
-      const filePath = pathMod.join(process.cwd(), "public", "fonts", fileName);
-      return new Uint8Array(await readFile(filePath));
-    } catch {
-      /* fall through */
+    attempts.push({
+      label: "fs:public/fonts",
+      loader: async () => {
+        const [{ readFile }, pathMod] = await Promise.all([import("fs/promises"), import("path")]);
+        const filePath = pathMod.join(process.cwd(), "public", "fonts", fileName);
+        return new Uint8Array(await readFile(filePath));
+      },
+    });
+    const appBase = resolveAppBaseUrlFromEnv();
+    if (appBase) {
+      attempts.push({
+        label: `fetch:${appBase}/fonts/${fileName}`,
+        loader: async () => {
+          const res = await fetch(`${appBase}/fonts/${fileName}`);
+          if (!res.ok) return null;
+          return new Uint8Array(await res.arrayBuffer());
+        },
+      });
     }
   } else {
-    try {
-      const local = await fetch(`/fonts/${fileName}`);
-      if (local.ok) return new Uint8Array(await local.arrayBuffer());
-    } catch {
-      /* fall through */
+    attempts.push({
+      label: "fetch:/fonts",
+      loader: async () => {
+        const res = await fetch(`/fonts/${fileName}`);
+        if (!res.ok) return null;
+        return new Uint8Array(await res.arrayBuffer());
+      },
+    });
+  }
+
+  attempts.push({
+    label: `cdn:${JP_FONT_CDN[kind]}`,
+    loader: async () => {
+      const res = await fetch(JP_FONT_CDN[kind]);
+      if (!res.ok) return null;
+      return new Uint8Array(await res.arrayBuffer());
+    },
+  });
+
+  for (const { label, loader } of attempts) {
+    const bytes = await tryLoadFontBytes(label, loader);
+    if (bytes) {
+      if (typeof window === "undefined") {
+        console.log(`[invoice-pdf-font] loaded ${fileName} via ${label} (${bytes.length} bytes)`);
+      }
+      return bytes;
     }
   }
-  return fetchFontBytes([JP_FONT_CDN[kind]]);
+
+  throw new Error(`フォントを取得できませんでした: ${fileName}`);
 }
 
 async function loadJpRegularFontBytes(): Promise<Uint8Array> {

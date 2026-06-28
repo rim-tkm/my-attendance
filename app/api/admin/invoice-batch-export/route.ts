@@ -9,7 +9,7 @@ import {
   type Member,
 } from "@/lib/attendance";
 import { buildInvoicePdfModelForMember } from "@/lib/invoice-html";
-import { renderInvoicePdfBlobFromModel } from "@/lib/invoice-pdf-pdflib";
+import { preloadJpFontsForPdf, renderInvoicePdfBlobFromModel } from "@/lib/invoice-pdf-pdflib";
 import { loadKpiInDateRange, loadMembers, loadRecords } from "@/lib/supabase-data";
 
 export const maxDuration = 300;
@@ -455,6 +455,14 @@ export async function POST(req: Request) {
   }
 
   console.log(`${LOG_PREFIX} 開始: 全メンバー数=${members.length} 対象月=${yearMonth}`);
+
+  try {
+    await preloadJpFontsForPdf();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`${LOG_PREFIX} フォント読み込み失敗:`, msg);
+    return NextResponse.json({ error: `PDF用フォントの読み込みに失敗しました: ${msg}` }, { status: 500 });
+  }
 
   const [allRecords, allKpiRecords] = await Promise.all([
     loadRecords(),
