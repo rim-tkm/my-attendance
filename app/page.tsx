@@ -237,7 +237,6 @@ import {
   sanitizeInvoiceRegistrationInput,
   validateQualifiedInvoiceRegistrationNumber,
 } from "@/lib/invoice-registration-number";
-import JSZip from "jszip";
 
 /** シフト保存 API 用: isManualDelete を is_manual_delete にし、DB 非カラムを送らない */
 function shiftsToScheduleApiJson(shifts: Shift[]): unknown[] {
@@ -2539,17 +2538,18 @@ function AdminDashboard(props: {
     setInvoiceZipBusy(true);
     setMemberDetailSaveError(null);
     try {
-      await preloadJpFontsForPdf();
-      const zip = new JSZip();
-      for (const id of invoiceZipSelectedIds) {
-        const mem = members.find((m) => m.id === id);
-        if (!mem) continue;
-        const blob = await renderMemberCombinedPdfBlob(mem, invoiceBulkMonth, allRecords, allKpiRecords);
-        const fname = buildInvoiceCombinedPdfFileName(mem, invoiceBulkMonth);
-        zip.file(fname, blob);
+      const res = await fetch("/api/admin/invoice-bulk-zip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ yearMonth: invoiceBulkMonth, memberIds: invoiceZipSelectedIds }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? `HTTP ${res.status}`);
       }
-      const out = await zip.generateAsync({ type: "blob" });
-      const url = URL.createObjectURL(out);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = buildInvoiceBulkZipFileName(invoiceBulkMonth);
@@ -2561,7 +2561,7 @@ function AdminDashboard(props: {
     } finally {
       setInvoiceZipBusy(false);
     }
-  }, [invoiceZipSelectedIds, invoiceBulkMonth, members, allRecords, allKpiRecords]);
+  }, [invoiceZipSelectedIds, invoiceBulkMonth]);
 
   const handleHourlyRateBlur = useCallback(
     async (mem: Member, raw: string) => {
@@ -7091,7 +7091,7 @@ function AdminDashboard(props: {
                 >
                   <p className="mb-3 text-xs text-slate-600">
                     メンバーがダウンロードする「請求書＋実績報告」と同一のPDFをZIPにまとめます（時給・実稼働・KPI
-                    を反映）。PDF のファイル名は{" "}
+                    を反映）。PDF はサーバー側で生成するため日本語フォントが安定します。ファイル名は{" "}
                     <code className="rounded bg-slate-200 px-1 text-[11px] whitespace-pre-wrap">
                       【請求書】氏名_YYYY年MM月分_請求書No.pdf
                     </code>{" "}
