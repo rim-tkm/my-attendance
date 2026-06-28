@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
 import { buildInvoiceBulkZipFileName, buildInvoiceCombinedPdfFileName } from "@/lib/invoice-html";
 import { renderMemberCombinedPdfBlob } from "@/lib/member-combined-pdf";
-import { preloadJpFontsForPdf } from "@/lib/invoice-pdf-pdflib";
+import { preloadJpFontsForPdf, getLastJpFontLoadLabel } from "@/lib/invoice-pdf-pdflib";
 import { loadKpiInDateRange, loadMembers, loadRecords } from "@/lib/supabase-data";
 
 export const maxDuration = 300;
@@ -107,6 +107,8 @@ export async function POST(req: Request) {
     "Content-Type": "application/zip",
     "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(zipName)}`,
   });
+  const fontLabel = getLastJpFontLoadLabel();
+  if (fontLabel) headers.set("X-Invoice-Pdf-Font", fontLabel);
   if (errors.length > 0) {
     headers.set("X-Invoice-Zip-Warnings", JSON.stringify(errors));
   }

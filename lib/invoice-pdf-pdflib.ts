@@ -9,17 +9,35 @@ const JP_FONT_FILES = {
   bold: "NotoSansJP-Bold.ttf",
 } as const;
 
-/** 同梱フォント未取得時の CDN（Subset OTF は Adobe/freee/Windows で文字化けするため TTF のみ） */
+/** Lambda 同梱用（outputFileTracingIncludes で lib/pdf-fonts を含める） */
+const JP_FONT_LIB_DIR = "lib/pdf-fonts";
+
+/** 同梱フォント未取得時の CDN */
 const JP_FONT_CDN = {
   regular: "https://cdn.jsdelivr.net/fontsource/fonts/noto-sans-jp@5.0.0/japanese-400-normal.ttf",
   bold: "https://cdn.jsdelivr.net/fontsource/fonts/noto-sans-jp@5.0.0/japanese-700-normal.ttf",
 } as const;
 
-/** Noto Sans JP TTF を subset 埋め込み（一括ZIP・ブラウザ生成で安定。Drive は GAS 修正 or 直アップロードで対応） */
-const JP_FONT_EMBED_OPTIONS = { subset: true as const };
+/** サーバー: フル埋め込み（TTF を再度 subset すると欠字が出るため）。クライアント: subset */
+const JP_FONT_EMBED_SERVER = {
+  subset: false as const,
+  customName: "NotoSansJP-Regular-Embed",
+};
+const JP_FONT_EMBED_SERVER_BOLD = {
+  subset: false as const,
+  customName: "NotoSansJP-Bold-Embed",
+};
+const JP_FONT_EMBED_CLIENT = { subset: true as const, customName: "NotoSansJP-Regular-Sub" };
+const JP_FONT_EMBED_CLIENT_BOLD = { subset: true as const, customName: "NotoSansJP-Bold-Sub" };
 
 let jpRegularBytesPromise: Promise<Uint8Array> | null = null;
 let jpBoldBytesPromise: Promise<Uint8Array> | null = null;
+let lastJpFontLoadLabel: string | null = null;
+
+/** 診断用: 直近のフォント読込経路 */
+export function getLastJpFontLoadLabel(): string | null {
+  return lastJpFontLoadLabel;
+}
 
 /** HTML エラーページ等をフォントとして embed しない */
 function looksLikeSfntFont(bytes: Uint8Array): boolean {
@@ -53,6 +71,14 @@ async function loadJpFontBytes(kind: keyof typeof JP_FONT_FILES): Promise<Uint8A
   const attempts: { label: string; loader: () => Promise<Uint8Array | null> }[] = [];
 
   if (typeof window === "undefined") {
+    attempts.push({
+      label: "fs:lib/pdf-fonts",
+      loader: async () => {
+        const [{ readFile }, pathMod] = await Promise.all([import("fs/promises"), import("path")]);
+        const filePath = pathMod.join(process.cwd(), JP_FONT_LIB_DIR, fileName);
+        return new Uint8Array(await readFile(filePath));
+      },
+    });
     attempts.push({
       label: "fs:public/fonts",
       loader: async () => {
@@ -95,6 +121,7 @@ async function loadJpFontBytes(kind: keyof typeof JP_FONT_FILES): Promise<Uint8A
   for (const { label, loader } of attempts) {
     const bytes = await tryLoadFontBytes(label, loader);
     if (bytes) {
+      lastJpFontLoadLabel = `${fileName}@${label}`;
       if (typeof window === "undefined") {
         console.log(`[invoice-pdf-font] loaded ${fileName} via ${label} (${bytes.length} bytes)`);
       }
@@ -130,9 +157,12 @@ export async function preloadJpFontsForPdf(): Promise<void> {
 export async function embedJpFontsForPdfDocument(pdfDoc: PDFDocument): Promise<JpPdfFonts> {
   pdfDoc.registerFontkit(fontkit);
   const [regularBytes, boldBytes] = await Promise.all([loadJpRegularFontBytes(), loadJpBoldFontBytes()]);
+  const onServer = typeof window === "undefined";
+  const regOpts = onServer ? JP_FONT_EMBED_SERVER : JP_FONT_EMBED_CLIENT;
+  const bldOpts = onServer ? JP_FONT_EMBED_SERVER_BOLD : JP_FONT_EMBED_CLIENT_BOLD;
   const [regular, bold] = await Promise.all([
-    pdfDoc.embedFont(regularBytes, JP_FONT_EMBED_OPTIONS),
-    pdfDoc.embedFont(boldBytes, JP_FONT_EMBED_OPTIONS),
+    pdfDoc.embedFont(regularBytes, regOpts),
+    pdfDoc.embedFont(boldBytes, bldOpts),
   ]);
   return { regular, bold };
 }
