@@ -8,9 +8,22 @@ import {
   getRecordsForUser,
   type Member,
 } from "@/lib/attendance";
+import {
+  coerceInvoiceBatchExportRows,
+  INVOICE_BATCH_YEAR_MONTH_RE,
+  invoiceBatchExportFileName,
+  invoiceDateForYearMonth,
+  memberHasMonthActivity,
+  paymentDateForYearMonth,
+  resolveMemberRange,
+  sortMembersForBatchExport,
+  type InvoiceBatchExportRow,
+} from "@/lib/invoice-batch-export-shared";
 import { buildInvoicePdfModelForMember } from "@/lib/invoice-html";
 import { preloadJpFontsForPdf, renderInvoicePdfBlobFromModel } from "@/lib/invoice-pdf-pdflib";
 import { loadKpiInDateRange, loadMembers, loadRecords } from "@/lib/supabase-data";
+
+export type { InvoiceBatchExportRow };
 
 export const maxDuration = 300;
 
@@ -30,19 +43,6 @@ const DEBUG_PREFIX = "[invoice-debug]";
 /** このルートで必須の環境変数 */
 const INVOICE_GAS_WEBHOOK_URL = process.env.INVOICE_GAS_WEBHOOK_URL?.trim();
 const INVOICE_GAS_TOKEN = process.env.INVOICE_GAS_TOKEN?.trim();
-
-const YEAR_MONTH_RE = /^\d{4}-\d{2}$/;
-
-export type InvoiceBatchExportRow = {
-  clientName: string;
-  paymentDate: string;
-  country: "JAPAN";
-  invoiceNo: string;
-  invoiceDate: string;
-  amount: number;
-  pdfBase64: string;
-  fileName: string;
-};
 
 type BatchError = { memberId: string; memberName: string; message: string };
 
@@ -69,90 +69,12 @@ function monthRangeFromYearMonth(yearMonth: string): { monthStart: string; month
   return { monthStart, monthEnd };
 }
 
-/** YYYY/M/D（月・日はゼロ埋めしない） */
-function formatSlashDate(y: number, month: number, day: number): string {
-  return `${y}/${month}/${day}`;
-}
-
-function paymentDateForYearMonth(yearMonth: string): string {
-  const [yStr, mStr] = yearMonth.split("-");
-  return formatSlashDate(Number(yStr), Number(mStr), 15);
-}
-
-function invoiceDateForYearMonth(yearMonth: string): string {
-  const [yStr, mStr] = yearMonth.split("-");
-  const y = Number(yStr);
-  const m = Number(mStr);
-  const lastDay = new Date(y, m, 0).getDate();
-  return formatSlashDate(y, m, lastDay);
-}
-
 function chunkMembers<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
     chunks.push(items.slice(i, i + size));
   }
   return chunks;
-}
-
-/** 範囲指定の並び順を毎回同じにする（名前昇順 → id 昇順） */
-function sortMembersForBatchExport(members: Member[]): Member[] {
-  return [...members].sort((a, b) => {
-    const byName = a.name.localeCompare(b.name, "ja");
-    if (byName !== 0) return byName;
-    return a.id.localeCompare(b.id);
-  });
-}
-
-function parsePositiveInt(value: unknown): number | null {
-  if (typeof value === "number" && Number.isInteger(value) && value >= 1) return value;
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    const n = Number(value.trim());
-    return Number.isInteger(n) && n >= 1 ? n : null;
-  }
-  return null;
-}
-
-/** startIndex/endIndex（1始まり・両端含む）。未指定なら全員 */
-function resolveMemberRange(
-  body: unknown,
-  totalCount: number
-):
-  | { ok: true; startIndex: number; endIndex: number; rangeSpecified: boolean }
-  | { ok: false; error: string } {
-  const raw = body as { startIndex?: unknown; endIndex?: unknown };
-  const hasStart = raw.startIndex !== undefined && raw.startIndex !== null;
-  const hasEnd = raw.endIndex !== undefined && raw.endIndex !== null;
-
-  if (!hasStart && !hasEnd) {
-    if (totalCount === 0) {
-      return { ok: true, startIndex: 1, endIndex: 0, rangeSpecified: false };
-    }
-    return { ok: true, startIndex: 1, endIndex: totalCount, rangeSpecified: false };
-  }
-
-  if (!hasStart || !hasEnd) {
-    return { ok: false, error: "startIndex と endIndex は両方指定するか、両方省略してください" };
-  }
-
-  const startIndex = parsePositiveInt(raw.startIndex);
-  const endIndex = parsePositiveInt(raw.endIndex);
-  if (startIndex == null || endIndex == null) {
-    return { ok: false, error: "startIndex と endIndex は 1 以上の整数で指定してください" };
-  }
-  if (startIndex > endIndex) {
-    return { ok: false, error: "startIndex は endIndex 以下にしてください" };
-  }
-  if (totalCount > 0 && startIndex > totalCount) {
-    return { ok: false, error: `startIndex が範囲外です（全 ${totalCount} 人）` };
-  }
-
-  return {
-    ok: true,
-    startIndex,
-    endIndex: Math.min(endIndex, totalCount),
-    rangeSpecified: true,
-  };
 }
 
 function gasInsertedCount(gasResult: unknown): number {
@@ -215,17 +137,6 @@ async function postToGas(yearMonth: string, rows: InvoiceBatchExportRow[]): Prom
   } finally {
     clearTimeout(timer);
   }
-}
-
-function memberHasMonthActivity(
-  member: Member,
-  yearMonth: string,
-  allRecords: Awaited<ReturnType<typeof loadRecords>>,
-  allKpiRecords: Awaited<ReturnType<typeof loadKpiInDateRange>>
-): boolean {
-  const userRecords = getRecordsForMonth(getRecordsForUser(allRecords, member.id), yearMonth);
-  const userKpi = getKpiForMonth(getKpiForUser(allKpiRecords, member.id), yearMonth);
-  return userRecords.length > 0 || userKpi.length > 0;
 }
 
 /** 請求対象0件の原因切り分け用（ロジック変更なし・診断ログのみ） */
@@ -364,7 +275,7 @@ async function processMemberChunk(
 
       const buf = Buffer.from(await pdfBlob.arrayBuffer());
       const pdfBase64 = buf.toString("base64");
-      const fileName = `請求書_${member.name}_${yearMonth}.pdf`;
+      const fileName = invoiceBatchExportFileName(member.name, yearMonth);
 
       rows.push({
         clientName: member.name,
@@ -443,8 +354,39 @@ export async function POST(req: Request) {
     typeof (body as { yearMonth?: unknown }).yearMonth === "string"
       ? (body as { yearMonth: string }).yearMonth.trim()
       : "";
-  if (!YEAR_MONTH_RE.test(yearMonth)) {
+  if (!INVOICE_BATCH_YEAR_MONTH_RE.test(yearMonth)) {
     return NextResponse.json({ error: "yearMonth は YYYY-MM 形式で指定してください" }, { status: 400 });
+  }
+
+  const clientRows = coerceInvoiceBatchExportRows((body as { rows?: unknown }).rows);
+  if (clientRows) {
+    console.log(`${LOG_PREFIX} クライアント生成PDFをGAS転送: rows=${clientRows.length}`);
+    try {
+      const gasResult = await postToGas(yearMonth, clientRows);
+      const inserted = gasInsertedCount(gasResult);
+      return NextResponse.json({
+        ok: true,
+        count: inserted,
+        inserted,
+        gasOnly: true,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return NextResponse.json(
+        {
+          ok: false,
+          error: msg,
+          gasError: msg,
+          failed: clientRows.length,
+          errors: clientRows.map((r) => ({
+            memberId: "",
+            memberName: r.clientName,
+            message: `GAS 送信失敗: ${msg}`,
+          })),
+        },
+        { status: 502 }
+      );
+    }
   }
 
   const { monthStart, monthEnd } = monthRangeFromYearMonth(yearMonth);

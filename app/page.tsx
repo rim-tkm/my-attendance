@@ -225,6 +225,15 @@ import {
 import { renderMemberCombinedPdfBlob } from "@/lib/member-combined-pdf";
 import { preloadJpFontsForPdf } from "@/lib/invoice-pdf-pdflib";
 import {
+  blobToBase64,
+  buildInvoiceBatchExportRow,
+  memberHasMonthActivity,
+  resolveMemberRange,
+  sortMembersForBatchExport,
+} from "@/lib/invoice-batch-export-shared";
+import { buildInvoicePdfModelForMember } from "@/lib/invoice-html";
+import { renderMemberInvoicePdfBlob } from "@/lib/member-invoice-pdf";
+import {
   sanitizeInvoiceRegistrationInput,
   validateQualifiedInvoiceRegistrationNumber,
 } from "@/lib/invoice-registration-number";
@@ -3284,64 +3293,92 @@ function AdminDashboard(props: {
     setInvoiceBatchExportBusy(true);
     setInvoiceBatchExportResult(null);
     try {
-      const res = await fetch("/api/admin/invoice-batch-export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ yearMonth, startIndex, endIndex }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        count?: number;
-        totalMembers?: number;
-        startIndex?: number;
-        endIndex?: number;
-        rangeProcessed?: number;
-        inserted?: number;
-        skipped?: { noActivity: number; zeroAmount: number; total: number };
-        failed?: number;
-        errors?: { memberId: string; memberName: string; message: string }[];
-        gasError?: string;
-        error?: string;
-      };
+      await preloadJpFontsForPdf();
 
-      if (!res.ok) {
+      const sortedActive = sortMembersForBatchExport(members.filter((m) => m.isActive !== false));
+      const totalMembers = sortedActive.length;
+      const rangeResult = resolveMemberRange({ startIndex, endIndex }, totalMembers);
+      if (!rangeResult.ok) {
         setInvoiceBatchExportResult({
           ok: false,
           yearMonth,
-          count: data.count,
-          totalMembers: data.totalMembers,
-          startIndex: data.startIndex ?? startIndex,
-          endIndex: data.endIndex ?? endIndex,
-          errors: data.errors,
-          gasError: data.gasError,
-          message: data.error ?? data.gasError ?? `HTTP ${res.status}`,
+          message: rangeResult.error,
         });
         return;
       }
+      const resultStart = rangeResult.startIndex;
+      const resultEnd = rangeResult.endIndex;
+      const membersInRange = sortedActive.slice(resultStart - 1, resultEnd);
 
-      const resultStart = data.startIndex ?? startIndex;
-      const resultEnd = data.endIndex ?? endIndex;
-      const totalMembers = data.totalMembers;
+      let totalInserted = 0;
+      const errors: { memberId: string; memberName: string; message: string }[] = [];
+      const skipped = { noActivity: 0, zeroAmount: 0, total: 0 };
+
+      for (const member of membersInRange) {
+        try {
+          if (!memberHasMonthActivity(member, yearMonth, allRecords, allKpiRecords)) {
+            skipped.noActivity += 1;
+            skipped.total += 1;
+            continue;
+          }
+          const model = buildInvoicePdfModelForMember(member, yearMonth, allRecords, allKpiRecords);
+          if (model.totalWithTax === 0) {
+            skipped.zeroAmount += 1;
+            skipped.total += 1;
+            continue;
+          }
+
+          const blob = await renderMemberInvoicePdfBlob(member, yearMonth, allRecords, allKpiRecords);
+          const pdfBase64 = await blobToBase64(blob);
+          const row = buildInvoiceBatchExportRow(member, yearMonth, allRecords, allKpiRecords, pdfBase64);
+
+          const res = await fetch("/api/admin/invoice-batch-export", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ yearMonth, rows: [row] }),
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            inserted?: number;
+            count?: number;
+            error?: string;
+            gasError?: string;
+          };
+
+          if (!res.ok) {
+            errors.push({
+              memberId: member.id,
+              memberName: member.name,
+              message: data.error ?? data.gasError ?? `HTTP ${res.status}`,
+            });
+            continue;
+          }
+          totalInserted += data.inserted ?? data.count ?? 0;
+        } catch (e) {
+          errors.push({
+            memberId: member.id,
+            memberName: member.name,
+            message: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
 
       setInvoiceBatchExportResult({
-        ok: data.ok !== false,
+        ok: errors.length === 0 || totalInserted > 0,
         yearMonth,
-        count: data.count ?? data.inserted ?? 0,
+        count: totalInserted,
         totalMembers,
         startIndex: resultStart,
         endIndex: resultEnd,
-        rangeProcessed: data.rangeProcessed,
-        inserted: data.inserted ?? data.count ?? 0,
-        skipped: data.skipped,
-        failed: data.failed,
-        errors: data.errors,
-        gasError: data.gasError,
-        message: data.error,
+        rangeProcessed: membersInRange.length,
+        inserted: totalInserted,
+        skipped,
+        failed: errors.length,
+        errors: errors.length > 0 ? errors : undefined,
       });
 
       if (
-        data.ok !== false &&
-        typeof totalMembers === "number" &&
+        errors.length === 0 &&
         totalMembers > 0 &&
         resultEnd < totalMembers
       ) {
@@ -3361,7 +3398,14 @@ function AdminDashboard(props: {
     } finally {
       setInvoiceBatchExportBusy(false);
     }
-  }, [invoiceBatchExportMonth, invoiceBatchExportStartIndex, invoiceBatchExportEndIndex]);
+  }, [
+    invoiceBatchExportMonth,
+    invoiceBatchExportStartIndex,
+    invoiceBatchExportEndIndex,
+    members,
+    allRecords,
+    allKpiRecords,
+  ]);
 
   return (
     <>
@@ -6015,7 +6059,7 @@ function AdminDashboard(props: {
           <div>
             <h2 className="text-sm font-medium text-slate-800">請求書を一括出力＆記帳</h2>
             <p className="mt-1 max-w-3xl text-xs text-slate-500">
-              対象月のアクティブメンバー（名前順）について、請求書 PDF を生成し GAS Webhook へ送信します。Drive への保存とスプレッドシート記帳は GAS 側で実行されます。請求は前月分を月末締めで発行する運用のため、初期値は先月です。
+              対象月のアクティブメンバー（名前順）について、<strong>このブラウザで</strong>請求書 PDF を生成し GAS Webhook へ送信します（一括 ZIP ダウンロードと同じ生成方式）。Drive への保存とスプレッドシート記帳は GAS 側で実行されます。
             </p>
             <p className="mt-2 max-w-3xl text-xs text-amber-900/90">
               メンバーは名前順に並びます。一度に 20 人ずつなど範囲を区切って実行してください（例: 1〜20 → 次に 21〜40 …と繰り返す）。
