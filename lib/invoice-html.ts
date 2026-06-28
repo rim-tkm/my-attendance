@@ -98,7 +98,7 @@ export function buildInvoicePdfModelForMember(
   const [y, m] = yearMonth.split("-");
   const monthLabel = `${y}年${m}月`;
   const lastDay = new Date(Number(y), Number(m), 0).getDate();
-  const periodLabel = `${y}年${m}月1日 ～ ${y}年${m}月${lastDay}日`;
+  const periodLabel = `${y}年${m}月1日 - ${y}年${m}月${lastDay}日`;
   const intern = isInternMember(member);
   const invoiceRegistrationLine =
     formatInvoiceRegistrationDisplayLine(member.invoiceRegistrationNumber) ?? undefined;
@@ -235,7 +235,7 @@ export function buildInvoiceBody(
   const [y, m] = yearMonth.split("-");
   const monthLabel = `${y}年${m}月`;
   const lastDay = new Date(Number(y), Number(m), 0).getDate();
-  const periodLabel = `${y}年${m}月1日 ～ ${y}年${m}月${lastDay}日`;
+  const periodLabel = `${y}年${m}月1日 - ${y}年${m}月${lastDay}日`;
   const hoursLabel = formatHoursForInvoice(totalMinutes);
   return `
   <div class="invoice-sheet">

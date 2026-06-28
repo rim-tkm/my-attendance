@@ -96,7 +96,7 @@ export function buildReportPdfModelForMember(
   const dailyRows: ReportPdfDailyRow[] = sortedDates.map((date) => {
     const dayRecords = userRecords.filter((r) => r.date === date);
     const timeRanges = dayRecords.map(
-      (r) => `${formatTimeForReport(r.startRounded)}～${formatTimeForReport(r.endRounded)}`
+      (r) => `${formatTimeForReport(r.startRounded)}-${formatTimeForReport(r.endRounded)}`
     );
     const k = dateToKpi.get(date);
     const apoCount = k ? k.decisionMakerApo + k.nonDecisionMakerApo : 0;
