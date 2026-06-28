@@ -3,14 +3,19 @@ import { PDFDocument, PageSizes, PDFFont, PDFPage, rgb } from "pdf-lib";
 
 import type { InvoicePdfModel } from "@/lib/invoice-html";
 
-/** Noto Sans JP（Regular / Bold）Subset OTF — notofonts/noto-cjk（字形欠けが起きにくい静的ウェイト） */
-const NOTO_JP_REGULAR_OTF =
-  "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf";
-const NOTO_JP_BOLD_OTF =
-  "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/SubsetOTF/JP/NotoSansJP-Bold.otf";
+const JP_FONT_FILES = {
+  regular: "NotoSansJP-Regular.ttf",
+  bold: "NotoSansJP-Bold.ttf",
+} as const;
 
-/** Regular/Bold をフル埋め込み（subset: true だと Noto Sans JP のグリフマッピングが壊れ文字化けする） */
-const JP_FONT_EMBED_OPTIONS = { subset: false as const };
+/** 同梱フォント未取得時の CDN（Subset OTF は Adobe/freee/Windows で文字化けするため TTF のみ） */
+const JP_FONT_CDN = {
+  regular: "https://cdn.jsdelivr.net/fontsource/fonts/noto-sans-jp@5.0.0/japanese-400-normal.ttf",
+  bold: "https://cdn.jsdelivr.net/fontsource/fonts/noto-sans-jp@5.0.0/japanese-700-normal.ttf",
+} as const;
+
+/** Noto Sans JP TTF を subset 埋め込み（使用グリフのみ・ToUnicode も正しく生成される） */
+const JP_FONT_EMBED_OPTIONS = { subset: true as const };
 
 let jpRegularBytesPromise: Promise<Uint8Array> | null = null;
 let jpBoldBytesPromise: Promise<Uint8Array> | null = null;
@@ -23,44 +28,37 @@ async function fetchFontBytes(urls: string[]): Promise<Uint8Array> {
   throw new Error("フォントを取得できませんでした");
 }
 
+async function loadJpFontBytes(kind: keyof typeof JP_FONT_FILES): Promise<Uint8Array> {
+  const fileName = JP_FONT_FILES[kind];
+  if (typeof window === "undefined") {
+    try {
+      const [{ readFile }, pathMod] = await Promise.all([import("fs/promises"), import("path")]);
+      const filePath = pathMod.join(process.cwd(), "public", "fonts", fileName);
+      return new Uint8Array(await readFile(filePath));
+    } catch {
+      /* fall through */
+    }
+  } else {
+    try {
+      const local = await fetch(`/fonts/${fileName}`);
+      if (local.ok) return new Uint8Array(await local.arrayBuffer());
+    } catch {
+      /* fall through */
+    }
+  }
+  return fetchFontBytes([JP_FONT_CDN[kind]]);
+}
+
 async function loadJpRegularFontBytes(): Promise<Uint8Array> {
   if (!jpRegularBytesPromise) {
-    jpRegularBytesPromise = (async () => {
-      try {
-        const local = await fetch("/fonts/NotoSansJP-Regular.otf");
-        if (local.ok) return new Uint8Array(await local.arrayBuffer());
-      } catch {
-        /* fall through */
-      }
-      try {
-        const localTtf = await fetch("/fonts/NotoSansJP-Regular.ttf");
-        if (localTtf.ok) return new Uint8Array(await localTtf.arrayBuffer());
-      } catch {
-        /* fall through */
-      }
-      return fetchFontBytes([NOTO_JP_REGULAR_OTF]);
-    })();
+    jpRegularBytesPromise = loadJpFontBytes("regular");
   }
   return jpRegularBytesPromise;
 }
 
 async function loadJpBoldFontBytes(): Promise<Uint8Array> {
   if (!jpBoldBytesPromise) {
-    jpBoldBytesPromise = (async () => {
-      try {
-        const local = await fetch("/fonts/NotoSansJP-Bold.otf");
-        if (local.ok) return new Uint8Array(await local.arrayBuffer());
-      } catch {
-        /* fall through */
-      }
-      try {
-        const localTtf = await fetch("/fonts/NotoSansJP-Bold.ttf");
-        if (localTtf.ok) return new Uint8Array(await localTtf.arrayBuffer());
-      } catch {
-        /* fall through */
-      }
-      return fetchFontBytes([NOTO_JP_BOLD_OTF]);
-    })();
+    jpBoldBytesPromise = loadJpFontBytes("bold");
   }
   return jpBoldBytesPromise;
 }
