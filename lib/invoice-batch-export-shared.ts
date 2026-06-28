@@ -16,8 +16,14 @@ export type InvoiceBatchExportRow = {
   invoiceNo: string;
   invoiceDate: string;
   amount: number;
-  pdfBase64: string;
   fileName: string;
+  /** Drive 直アップロード時は省略（GAS は driveFileId を参照） */
+  pdfBase64?: string;
+  /** アプリ側 Drive 直アップロード済み（推奨） */
+  driveFileId?: string;
+  driveViewUrl?: string;
+  /** GAS 側検証用（任意） */
+  pdfByteLength?: number;
 };
 
 export const INVOICE_BATCH_YEAR_MONTH_RE = /^\d{4}-\d{2}$/;
@@ -178,8 +184,10 @@ export function coerceInvoiceBatchExportRows(raw: unknown): InvoiceBatchExportRo
     if (typeof o.invoiceNo !== "string") return null;
     if (typeof o.invoiceDate !== "string") return null;
     if (typeof o.amount !== "number" || !Number.isFinite(o.amount)) return null;
-    if (typeof o.pdfBase64 !== "string" || !isValidPdfBase64(o.pdfBase64)) return null;
     if (typeof o.fileName !== "string" || o.fileName.trim() === "") return null;
+    const pdfBase64 = typeof o.pdfBase64 === "string" ? o.pdfBase64 : undefined;
+    const driveFileId = typeof o.driveFileId === "string" ? o.driveFileId : undefined;
+    if (!driveFileId && (!pdfBase64 || !isValidPdfBase64(pdfBase64))) return null;
     out.push({
       clientName: o.clientName,
       paymentDate: o.paymentDate,
@@ -187,8 +195,11 @@ export function coerceInvoiceBatchExportRows(raw: unknown): InvoiceBatchExportRo
       invoiceNo: o.invoiceNo,
       invoiceDate: o.invoiceDate,
       amount: o.amount,
-      pdfBase64: o.pdfBase64,
       fileName: o.fileName,
+      ...(pdfBase64 ? { pdfBase64 } : {}),
+      ...(driveFileId ? { driveFileId } : {}),
+      ...(typeof o.driveViewUrl === "string" ? { driveViewUrl: o.driveViewUrl } : {}),
+      ...(typeof o.pdfByteLength === "number" ? { pdfByteLength: o.pdfByteLength } : {}),
     });
   }
   return out;

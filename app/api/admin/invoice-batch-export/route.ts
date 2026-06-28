@@ -20,6 +20,10 @@ import {
   type InvoiceBatchExportRow,
 } from "@/lib/invoice-batch-export-shared";
 import { buildInvoicePdfModelForMember } from "@/lib/invoice-html";
+import {
+  isInvoiceDriveUploadConfigured,
+  uploadInvoicePdfToDrive,
+} from "@/lib/invoice-google-drive-upload";
 import { preloadJpFontsForPdf, renderInvoicePdfBlobFromModel } from "@/lib/invoice-pdf-pdflib";
 import { loadKpiInDateRange, loadMembers, loadRecords } from "@/lib/supabase-data";
 
@@ -98,9 +102,55 @@ function isBillableMember(
   return model.totalWithTax > 0;
 }
 
-/** 行データを GAS Webhook へ POST（Drive アップロードは GAS 側で実施） */
+/** Drive 直アップロードが有効なら pdfBase64 を除去し driveFileId のみ GAS へ送る */
+async function prepareRowsForGas(
+  yearMonth: string,
+  rows: InvoiceBatchExportRow[]
+): Promise<InvoiceBatchExportRow[]> {
+  if (!isInvoiceDriveUploadConfigured()) {
+    return rows;
+  }
+
+  const prepared: InvoiceBatchExportRow[] = [];
+  for (const row of rows) {
+    if (row.driveFileId) {
+      prepared.push(row);
+      continue;
+    }
+    if (!row.pdfBase64) {
+      throw new Error(`${row.clientName}: PDF データがありません`);
+    }
+    const pdfBytes = new Uint8Array(Buffer.from(row.pdfBase64, "base64"));
+    const uploaded = await uploadInvoicePdfToDrive({
+      yearMonth,
+      fileName: row.fileName,
+      pdfBytes,
+    });
+    console.log(
+      `${LOG_PREFIX} Drive直アップロード: ${row.clientName} fileId=${uploaded.fileId} bytes=${pdfBytes.length}`
+    );
+    prepared.push({
+      clientName: row.clientName,
+      paymentDate: row.paymentDate,
+      country: row.country,
+      invoiceNo: row.invoiceNo,
+      invoiceDate: row.invoiceDate,
+      amount: row.amount,
+      fileName: row.fileName,
+      driveFileId: uploaded.fileId,
+      driveViewUrl: uploaded.webViewLink,
+      pdfByteLength: pdfBytes.length,
+    });
+  }
+  return prepared;
+}
+
+/** 行データを GAS Webhook へ POST */
 async function postToGas(yearMonth: string, rows: InvoiceBatchExportRow[]): Promise<unknown> {
-  console.log(`${LOG_PREFIX} GASへPOST開始: yearMonth=${yearMonth} rows=${rows.length}`);
+  const gasRows = await prepareRowsForGas(yearMonth, rows);
+  console.log(
+    `${LOG_PREFIX} GASへPOST開始: yearMonth=${yearMonth} rows=${gasRows.length} driveDirect=${isInvoiceDriveUploadConfigured()}`
+  );
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), GAS_POST_TIMEOUT_MS);
@@ -109,7 +159,7 @@ async function postToGas(yearMonth: string, rows: InvoiceBatchExportRow[]): Prom
     const res = await fetch(INVOICE_GAS_WEBHOOK_URL!, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: INVOICE_GAS_TOKEN, yearMonth, rows }),
+      body: JSON.stringify({ token: INVOICE_GAS_TOKEN, yearMonth, rows: gasRows }),
       signal: controller.signal,
     });
     const text = await res.text();
@@ -314,6 +364,8 @@ async function processMemberChunk(
         country: r.country,
         fileName: r.fileName,
         pdfBase64Length: r.pdfBase64 ? r.pdfBase64.length : 0,
+        driveFileId: r.driveFileId ?? null,
+        pdfByteLength: r.pdfByteLength ?? null,
       }))
     )
   );

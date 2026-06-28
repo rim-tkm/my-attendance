@@ -15,7 +15,7 @@ const JP_FONT_CDN = {
   bold: "https://cdn.jsdelivr.net/fontsource/fonts/noto-sans-jp@5.0.0/japanese-700-normal.ttf",
 } as const;
 
-/** Noto Sans JP TTF を subset 埋め込み（使用グリフのみ・ToUnicode も正しく生成される） */
+/** Noto Sans JP TTF を subset 埋め込み（一括ZIP・ブラウザ生成で安定。Drive は GAS 修正 or 直アップロードで対応） */
 const JP_FONT_EMBED_OPTIONS = { subset: true as const };
 
 let jpRegularBytesPromise: Promise<Uint8Array> | null = null;
