@@ -307,6 +307,53 @@ export function calcDurationMinutes(startRounded: Date, endRounded: Date): numbe
   return Math.max(0, Math.floor((endRounded.getTime() - startRounded.getTime()) / (1000 * 60)));
 }
 
+/** attendance.date を YYYY-MM-DD に正規化（2026/5/7 等の旧形式も月次集計に含める） */
+export function normalizeWorkDateYmd(raw: string): string | null {
+  const s = String(raw ?? "").trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+  if (!m) return null;
+  return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+}
+
+/**
+ * 請求・PDF 用の稼働分。DB の duration_minutes が古い/0 のときは
+ * startRounded〜endRounded から再計算（日別明細の時刻と合計を一致させる）。
+ */
+export function billableMinutesFromWorkRecord(r: WorkRecord): number {
+  const stored = Number(r.durationMinutes);
+  let fromSpan = 0;
+  try {
+    const start = new Date(r.startRounded);
+    const end = new Date(r.endRounded);
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+      fromSpan = calcDurationMinutes(start, end);
+    }
+  } catch {
+    fromSpan = 0;
+  }
+  if (fromSpan > 0) {
+    if (!Number.isFinite(stored) || stored <= 0 || Math.abs(stored - fromSpan) > 1) {
+      return fromSpan;
+    }
+    return stored;
+  }
+  return Number.isFinite(stored) && stored > 0 ? stored : 0;
+}
+
+/** 指定ユーザーの対象月の請求対象稼働分（日付正規化・明細時刻ベース） */
+export function sumBillableMinutesForUserMonth(
+  records: WorkRecord[],
+  userId: string,
+  yearMonth: string
+): number {
+  return getRecordsForMonth(getRecordsForUser(records, userId), yearMonth).reduce(
+    (s, r) => s + billableMinutesFromWorkRecord(r),
+    0
+  );
+}
+
 /** 1 日あたり保存可能な最大連続稼働（分）。超える記録は無効 */
 export const WORK_DURATION_HARD_MAX_MINUTES = 24 * 60;
 /** 超えたら本人・管理者 UI で確認ダイアログ（分） */
@@ -706,9 +753,15 @@ export function aggregateUserWorkDaySpan(
   return { totalWorkMinutes, earliestStartIso: minStart, latestEndIso: maxEnd, breakOrGapMinutes };
 }
 
-/** 指定月の記録 */
+/** 指定月の記録（date は YYYY-MM-DD に正規化してから月フィルタ） */
 export function getRecordsForMonth(records: WorkRecord[], yearMonth: string): WorkRecord[] {
-  return dedupeWorkRecordsByUserDateStart(records.filter((r) => r.date.startsWith(yearMonth)));
+  const normalized: WorkRecord[] = [];
+  for (const r of records) {
+    const date = normalizeWorkDateYmd(r.date);
+    if (!date || !date.startsWith(yearMonth)) continue;
+    normalized.push(date === r.date ? r : { ...r, date });
+  }
+  return dedupeWorkRecordsByUserDateStart(normalized);
 }
 
 /** 指定月の合計稼働分数 */

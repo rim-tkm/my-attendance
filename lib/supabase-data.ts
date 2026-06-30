@@ -739,11 +739,37 @@ export async function deleteMember(memberId: string): Promise<void> {
   }
 }
 
+const SUPABASE_SELECT_PAGE_SIZE = 1000;
+
+async function loadAllAttendanceRows(
+  supabase: NonNullable<ReturnType<typeof getSupabase>>
+): Promise<DbAttendance[]> {
+  const out: DbAttendance[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await supabase
+      .from("attendance")
+      .select("*")
+      .order("date", { ascending: false })
+      .range(from, from + SUPABASE_SELECT_PAGE_SIZE - 1);
+    if (error) {
+      console.warn("loadRecords pagination error:", error);
+      return out.length > 0 ? out : [];
+    }
+    const chunk = data ?? [];
+    if (chunk.length === 0) break;
+    out.push(...chunk);
+    if (chunk.length < SUPABASE_SELECT_PAGE_SIZE) break;
+    from += SUPABASE_SELECT_PAGE_SIZE;
+  }
+  return out;
+}
+
 export async function loadRecords(): Promise<WorkRecord[]> {
   const supabase = getSupabase();
   if (!supabase) return [];
   try {
-    const rows = await safeQuery<DbAttendance>(supabase.from("attendance").select("*").order("date", { ascending: false }));
+    const rows = await loadAllAttendanceRows(supabase);
     return dedupeWorkRecordsByUserDateStart(rows.map(toWorkRecord));
   } catch {
     return [];
@@ -830,8 +856,6 @@ export async function saveOpenRecords(records: OpenRecord[]): Promise<void> {
   const { error: insErr } = await supabase.from("open_records").insert(rows);
   if (insErr) throw new Error(insErr.message);
 }
-
-const SUPABASE_SELECT_PAGE_SIZE = 1000;
 
 /** PostgREST の 1 リクエスト行上限を超えないようページングして全件取得 */
 async function loadAllShiftRows(supabase: NonNullable<ReturnType<typeof getSupabase>>): Promise<DbShift[]> {

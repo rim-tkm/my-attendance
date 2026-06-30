@@ -1,5 +1,5 @@
 import type { KpiRecord, Member, WorkRecord } from "@/lib/attendance";
-import { DEFAULT_HOURLY_RATE, getRecordsForMonth, getRecordsForUser } from "@/lib/attendance";
+import { DEFAULT_HOURLY_RATE, sumBillableMinutesForUserMonth } from "@/lib/attendance";
 import {
   calcInternInvoiceAmounts,
   getInternUnitRates,
@@ -41,8 +41,11 @@ export function calcInvoiceAmounts(
 }
 
 export function formatHoursForInvoice(totalMinutes: number): string {
+  if (totalMinutes <= 0) return "0";
   const h = totalMinutes / 60;
-  return h % 1 === 0 ? String(h) : h.toFixed(1);
+  if (Math.abs(h - Math.round(h)) < 1e-9) return String(Math.round(h));
+  const fixed = h.toFixed(2).replace(/\.?0+$/, "");
+  return fixed === "" ? "0" : fixed;
 }
 
 /** 請求書 PDF／HTML 共通の確定データ（計算結果・表示用文字列） */
@@ -91,8 +94,7 @@ export function buildInvoicePdfModelForMember(
   allRecords: WorkRecord[],
   allKpiRecords: KpiRecord[] = []
 ): InvoicePdfModel {
-  const userRecords = getRecordsForMonth(getRecordsForUser(allRecords, member.id), yearMonth);
-  const totalMinutes = userRecords.reduce((s, r) => s + r.durationMinutes, 0);
+  const totalMinutes = sumBillableMinutesForUserMonth(allRecords, member.id, yearMonth);
   const invoiceNo = getInvoiceNumber(yearMonth, member.invoiceNumber);
   const paymentDueDate = getPaymentDueDate(yearMonth);
   const [y, m] = yearMonth.split("-");

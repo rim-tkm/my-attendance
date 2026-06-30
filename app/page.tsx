@@ -46,6 +46,7 @@ import {
   safeRatePercent,
   getTotalMinutesForMonthByUser,
   getTotalMinutesForUserInDateRange,
+  normalizeWorkDateYmd,
   calcMonthlyPay,
   getActiveMembersMissingInvoiceNumber,
   isMemberMissingInvoiceNumber,
@@ -7039,8 +7040,8 @@ function AdminDashboard(props: {
                   className="border-t border-emerald-100 bg-emerald-50/30 px-4 pb-5 pt-4 sm:px-5"
                 >
                   <p className="mb-3 text-xs text-slate-600">
-                    メンバーがダウンロードする「請求書＋実績報告」と同一のPDFをZIPにまとめます（時給・実稼働・KPI
-                    を反映）。PDF はサーバー側で生成するため日本語フォントが安定します。ファイル名は{" "}
+                    下表の稼働日数・稼働時間・税込請求額は、ZIP に含まれる請求書 PDF と同じ計算です。全員分をここで確認してから ZIP
+                    ダウンロードや一括記帳を行ってください。PDF はサーバー側で生成するため日本語フォントが安定します。ファイル名は{" "}
                     <code className="rounded bg-slate-200 px-1 text-[11px] whitespace-pre-wrap">
                       【請求書】氏名_YYYY年MM月分_請求書No.pdf
                     </code>{" "}
@@ -7093,21 +7094,32 @@ function AdminDashboard(props: {
                             />
                           </th>
                           <th className="px-2 py-1.5 text-left font-medium text-slate-600">名前</th>
-                          <th className="w-[14%] px-2 py-1.5 text-right font-medium text-slate-600">稼働時間</th>
-                          <th className="w-[16%] px-2 py-1.5 text-right font-medium text-slate-600">税込請求額（参考）</th>
+                          <th className="w-[10%] px-2 py-1.5 text-right font-medium text-slate-600">稼働日数</th>
+                          <th className="w-[12%] px-2 py-1.5 text-right font-medium text-slate-600">稼働時間</th>
+                          <th className="w-[14%] px-2 py-1.5 text-right font-medium text-slate-600">税込請求額</th>
                         </tr>
                       </thead>
                       <tbody>
                         {invoiceZipPanelMembers.map((mem) => {
                           const ym = invoiceBulkMonth;
-                          const mins = getTotalMinutesForMonthByUser(allRecords, mem.id, ym);
-                          const taxIncl = calcMemberMonthlyPayYen(
+                          const invoiceModel = buildInvoicePdfModelForMember(
                             mem,
-                            mins,
-                            allKpiRecords,
                             ym,
-                            DEFAULT_HOURLY_RATE
+                            allRecords,
+                            allKpiRecords
                           );
+                          const userMonthRecords = getRecordsForMonth(
+                            getRecordsForUser(allRecords, mem.id),
+                            ym
+                          );
+                          const workDays =
+                            mem.isIntern === true
+                              ? null
+                              : new Set(
+                                  userMonthRecords
+                                    .map((r) => normalizeWorkDateYmd(r.date))
+                                    .filter((d): d is string => d != null)
+                                ).size;
                           return (
                             <tr key={mem.id} className="border-b border-slate-100">
                               <td className="px-1 py-1.5 text-center">
@@ -7129,10 +7141,13 @@ function AdminDashboard(props: {
                                 ) : null}
                               </td>
                               <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">
-                                {mem.isIntern === true ? "—" : formatDuration(mins)}
+                                {workDays == null ? "—" : `${workDays}日`}
+                              </td>
+                              <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">
+                                {mem.isIntern === true ? "—" : formatDuration(invoiceModel.totalMinutes)}
                               </td>
                               <td className="px-2 py-1.5 text-right tabular-nums font-medium text-slate-800">
-                                ¥{taxIncl.toLocaleString()}
+                                ¥{invoiceModel.totalWithTax.toLocaleString()}
                               </td>
                             </tr>
                           );

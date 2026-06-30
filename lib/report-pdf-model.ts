@@ -8,7 +8,9 @@ import {
   getRecordsForMonth,
   getRecordsForUser,
   safeRatePercent,
+  sumBillableMinutesForUserMonth,
 } from "@/lib/attendance";
+import { calcInvoiceAmounts } from "@/lib/invoice-html";
 import { calcMemberMonthlyPayYen, getInternUnitRates, isInternMember, sumInternConfirmedAppsForMonth } from "@/lib/invoice-intern";
 
 /** 印刷レポートの日付表示（app/page.tsx の formatDisplayDate と同じ） */
@@ -73,17 +75,13 @@ export function buildReportPdfModelForMember(
   const userId = member.id;
   const userRecords = getRecordsForMonth(getRecordsForUser(allRecords, userId), yearMonth);
   const userKpi = getKpiForMonth(getKpiForUser(allKpiRecords, userId), yearMonth);
-  const totalMinutes = userRecords.reduce((s, r) => s + r.durationMinutes, 0);
+  const totalMinutes = sumBillableMinutesForUserMonth(allRecords, userId, yearMonth);
   const workDays = new Set(userRecords.map((r) => r.date)).size;
   const intern = isInternMember(member);
   const hourlyRate = intern ? 0 : member.hourlyRate != null ? member.hourlyRate : DEFAULT_HOURLY_RATE;
-  const grossPayTaxInclusive = calcMemberMonthlyPayYen(
-    member,
-    totalMinutes,
-    allKpiRecords,
-    yearMonth,
-    DEFAULT_HOURLY_RATE
-  );
+  const grossPayTaxInclusive = intern
+    ? calcMemberMonthlyPayYen(member, totalMinutes, allKpiRecords, yearMonth, DEFAULT_HOURLY_RATE)
+    : calcInvoiceAmounts(totalMinutes, hourlyRate).totalWithTax;
   const internTotals = intern ? sumInternConfirmedAppsForMonth(allKpiRecords, userId, yearMonth) : null;
   const internRates = intern ? getInternUnitRates(member) : null;
   const kpiTotals = getKpiTotalsFromRecords(userKpi);
