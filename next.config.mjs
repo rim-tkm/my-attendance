@@ -5,6 +5,7 @@ const nextConfig = {
     outputFileTracingIncludes: {
       "/api/admin/invoice-batch-export": ["./lib/pdf-fonts/**/*", "./public/fonts/**/*"],
       "/api/admin/invoice-bulk-zip": ["./lib/pdf-fonts/**/*", "./public/fonts/**/*"],
+      "/api/member/combined-pdf": ["./lib/pdf-fonts/**/*", "./public/fonts/**/*"],
     },
   },
 };

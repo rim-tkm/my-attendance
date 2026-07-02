@@ -51,6 +51,19 @@ export function getTodayJstDateString(now: Date = new Date()): string {
   return `${yy}-${mm}-${dd}`;
 }
 
+/** 日本時間で「前月」の YYYY-MM（メンバー請求 PDF の選択上限） */
+export function getLastMonthYearMonthJst(now: Date = new Date()): string {
+  const today = getTodayJstDateString(now);
+  const [y, m] = today.slice(0, 7).split("-").map(Number);
+  let lm = m - 1;
+  let ly = y;
+  if (lm < 1) {
+    lm = 12;
+    ly -= 1;
+  }
+  return `${ly}-${String(lm).padStart(2, "0")}`;
+}
+
 /** 日本時間での「その瞬間」の時・分のみ（0 時からの経過分）。ダッシュボードの予実判定などで使用 */
 export function getJstClockMinutesSinceMidnight(now: Date = new Date()): number {
   const parts = new Intl.DateTimeFormat("en-US", {

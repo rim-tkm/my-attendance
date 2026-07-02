@@ -211,7 +211,6 @@ import { applyPlanActualGapManualOverride, applyPlanActualGapResolve } from "@/l
 import { readKpiMissingAfterPunchGraceMinutes } from "@/lib/kpi-missing-after-punch-reminder";
 import {
   buildInvoiceBulkZipFileName,
-  buildInvoiceCombinedPdfFileName,
   buildInvoiceHtmlForMember,
   calcInvoiceAmounts,
 } from "@/lib/invoice-html";
@@ -223,7 +222,7 @@ import {
   getInternUnitRates,
   sumInternConfirmedAppsForMonth,
 } from "@/lib/invoice-intern";
-import { renderMemberCombinedPdfBlob } from "@/lib/member-combined-pdf";
+import { fetchMemberCombinedPdfFromServer, triggerBlobDownload } from "@/lib/download-member-combined-pdf";
 import { buildInvoicePdfModelForMember } from "@/lib/invoice-html";
 import {
   sanitizeInvoiceRegistrationInput,
@@ -2111,13 +2110,10 @@ function AdminDashboard(props: {
     const effectiveMonth = reportMonth > adminPdfSelectableMonthMax ? adminPdfSelectableMonthMax : reportMonth;
     setMemberDetailSaveError(null);
     try {
-      const blob = await renderMemberCombinedPdfBlob(reportMember, effectiveMonth, allRecords, allKpiRecords);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = buildInvoiceCombinedPdfFileName(reportMember, effectiveMonth);
-      a.click();
-      URL.revokeObjectURL(url);
+      const { blob, fileName } = await fetchMemberCombinedPdfFromServer(effectiveMonth, {
+        memberId: reportMember.id,
+      });
+      triggerBlobDownload(blob, fileName);
       setReportMember(null);
     } catch (e) {
       setMemberDetailSaveError(e instanceof Error ? e.message : String(e));
@@ -9984,18 +9980,8 @@ export default function DashboardPage() {
                   void (async () => {
                     setMemberDataToast(null);
                     try {
-                      const blob = await renderMemberCombinedPdfBlob(
-                        currentMember,
-                        effectiveMemberMonth,
-                        allRecords,
-                        allKpiRecords
-                      );
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement("a");
-                      a.href = url;
-                      a.download = buildInvoiceCombinedPdfFileName(currentMember, effectiveMemberMonth);
-                      a.click();
-                      URL.revokeObjectURL(url);
+                      const { blob, fileName } = await fetchMemberCombinedPdfFromServer(effectiveMemberMonth);
+                      triggerBlobDownload(blob, fileName);
                       setShowMemberReportModal(false);
                     } catch (e) {
                       setMemberDataToast({
