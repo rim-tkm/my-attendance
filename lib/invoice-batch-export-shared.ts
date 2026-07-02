@@ -33,9 +33,13 @@ export function formatSlashDate(y: number, month: number, day: number): string {
   return `${y}/${month}/${day}`;
 }
 
+/** 一括記帳スプレッドシート「入金日」: 請求対象月の翌月15日（例: 2026-06 → 2026/7/15） */
 export function paymentDateForYearMonth(yearMonth: string): string {
   const [yStr, mStr] = yearMonth.split("-");
-  return formatSlashDate(Number(yStr), Number(mStr), 15);
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const next = new Date(y, m, 15);
+  return formatSlashDate(next.getFullYear(), next.getMonth() + 1, next.getDate());
 }
 
 export function invoiceDateForYearMonth(yearMonth: string): string {
