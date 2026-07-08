@@ -1681,7 +1681,18 @@ function AdminDashboard(props: {
       }
     }
     dormant.sort((a, b) => a.lastWorkDate.localeCompare(b.lastWorkDate));
-    neverWorked.sort((a, b) => a.member.name.localeCompare(b.member.name, "ja"));
+    // 未稼働は「登録が新しい順」＝管理番号（invoice_number）の大きい順で並べる。
+    // 管理番号は登録時に連番で採番されるため、大きい人ほど最近の登録＝新人の可能性が高い。
+    const mgmtNo = (m: Member): number => {
+      const raw = String(m.invoiceNumber ?? "").replace(/\D/g, "");
+      const n = raw === "" ? NaN : parseInt(raw, 10);
+      return Number.isFinite(n) ? n : -1;
+    };
+    neverWorked.sort((a, b) => {
+      const diff = mgmtNo(b.member) - mgmtNo(a.member);
+      if (diff !== 0) return diff;
+      return a.member.name.localeCompare(b.member.name, "ja");
+    });
     return { dormant, neverWorked, threshold };
   }, [activeMembers, allRecords, todayStr]);
   /** メンバー数サマリー：総登録（退会含む）・稼働（直近30日打刻）・在籍/退会/一般/インターンの内訳 */
@@ -6769,7 +6780,7 @@ function AdminDashboard(props: {
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-900">未稼働メンバー（一度も打刻なし）</h2>
           <p className="mt-1 text-xs leading-relaxed text-slate-600">
-            在籍中の時給制メンバーのうち、これまで一度も活動記録（打刻）がない人です。<span className="font-medium text-slate-800">新規加入直後でこれから稼働する人を含む</span>ため、休眠とは分けています。該当{" "}
+            在籍中の時給制メンバーのうち、これまで一度も活動記録（打刻）がない人です。<span className="font-medium text-slate-800">新規加入直後でこれから稼働する人を含む</span>ため、休眠とは分けています。<span className="font-medium text-slate-800">管理番号が大きい＝最近登録された可能性が高い順（登録が新しい順）</span>に並べています。該当{" "}
             <span className="font-semibold text-slate-800">{dormantMembers.neverWorked.length}</span> 名。
           </p>
           {dormantMembers.neverWorked.length === 0 ? (
