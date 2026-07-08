@@ -1471,6 +1471,9 @@ function AdminDashboard(props: {
   /** 休眠メンバーの一括無効化：選択中のID・処理中フラグ */
   const [dormantSelectedIds, setDormantSelectedIds] = useState<Set<string>>(new Set());
   const [dormantBulkBusy, setDormantBulkBusy] = useState(false);
+  /** 未稼働メンバーの一括無効化：選択中のID・処理中フラグ */
+  const [neverWorkedSelectedIds, setNeverWorkedSelectedIds] = useState<Set<string>>(new Set());
+  const [neverWorkedBulkBusy, setNeverWorkedBulkBusy] = useState(false);
   const [newMemberName, setNewMemberName] = useState("");
   const [newMemberLogin, setNewMemberLogin] = useState("");
   const [newMemberPassword, setNewMemberPassword] = useState("12345");
@@ -1753,6 +1756,59 @@ function AdminDashboard(props: {
       alert(e instanceof Error ? e.message : String(e));
     } finally {
       setDormantBulkBusy(false);
+    }
+  };
+  const neverWorkedAllSelected =
+    dormantMembers.neverWorked.length > 0 &&
+    dormantMembers.neverWorked.every((r) => neverWorkedSelectedIds.has(r.member.id));
+  const toggleNeverWorkedSelected = (id: string) => {
+    setNeverWorkedSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleNeverWorkedSelectAll = () => {
+    setNeverWorkedSelectedIds((prev) => {
+      if (
+        dormantMembers.neverWorked.length > 0 &&
+        dormantMembers.neverWorked.every((r) => prev.has(r.member.id))
+      ) {
+        return new Set();
+      }
+      return new Set(dormantMembers.neverWorked.map((r) => r.member.id));
+    });
+  };
+  /** 選択した未稼働メンバーを一括で無効化。新規加入直後を含みうるため確認文言を強めにする。 */
+  const handleBulkDeactivateNeverWorked = async () => {
+    const idSet = new Set(dormantMembers.neverWorked.map((r) => r.member.id));
+    const ids = Array.from(neverWorkedSelectedIds).filter((id) => idSet.has(id));
+    if (ids.length === 0 || neverWorkedBulkBusy) return;
+    const names = dormantMembers.neverWorked
+      .filter((r) => ids.includes(r.member.id))
+      .map((r) => r.member.name)
+      .join("、");
+    if (
+      !window.confirm(
+        `【注意】未稼働メンバーには新規加入直後の人が含まれる場合があります。\n新人を誤って無効化しないか、氏名を必ず確認してください。\n\n選択した ${ids.length} 名を無効化します。\n\n${names}\n\n一覧から非表示になり、ログインできなくなります（データは残り、アーカイブ一覧から復元できます）。実行しますか？`
+      )
+    )
+      return;
+    setNeverWorkedBulkBusy(true);
+    try {
+      for (const id of ids) {
+        await updateMember(id, { isActive: false });
+      }
+      const mems = await loadMembers();
+      setMembers(mems ?? []);
+      setNeverWorkedSelectedIds(new Set());
+      onRefresh();
+      alert(`${ids.length} 名を無効化しました。`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setNeverWorkedBulkBusy(false);
     }
   };
   const [adminMemberTableSort, setAdminMemberTableSort] = useState<{
@@ -6721,26 +6777,75 @@ function AdminDashboard(props: {
               未稼働（打刻ゼロ）のメンバーはいません。
             </p>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
-              <table className="w-full min-w-[360px] border-collapse text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50">
-                    <th className="px-3 py-2.5 font-medium text-slate-600">氏名</th>
-                    <th className="px-3 py-2.5 font-medium text-slate-600">管理番号</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dormantMembers.neverWorked.map(({ member }) => (
-                    <tr key={member.id} className="border-b border-slate-100 last:border-b-0">
-                      <td className="px-3 py-2.5 font-medium text-slate-800">{member.name}</td>
-                      <td className="px-3 py-2.5 tabular-nums text-slate-500">
-                        {formatMemberInvoiceNumberThreeDigits(member.invoiceNumber) ?? "—"}
-                      </td>
+            <>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void handleBulkDeactivateNeverWorked()}
+                  disabled={neverWorkedSelectedIds.size === 0 || neverWorkedBulkBusy}
+                  className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {neverWorkedBulkBusy ? "無効化中…" : `選択した ${neverWorkedSelectedIds.size} 名を無効化`}
+                </button>
+                {neverWorkedSelectedIds.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setNeverWorkedSelectedIds(new Set())}
+                    disabled={neverWorkedBulkBusy}
+                    className="text-xs font-medium text-slate-500 underline hover:text-slate-700 disabled:opacity-40"
+                  >
+                    選択をクリア
+                  </button>
+                )}
+                <span className="text-xs font-medium text-red-700">
+                  ※新規加入直後の人が含まれることがあります。無効化前に氏名を必ず確認してください。
+                </span>
+              </div>
+              <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full min-w-[420px] border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50">
+                      <th className="w-10 px-3 py-2.5">
+                        <input
+                          type="checkbox"
+                          aria-label="全選択"
+                          checked={neverWorkedAllSelected}
+                          onChange={toggleNeverWorkedSelectAll}
+                          className="h-4 w-4 cursor-pointer accent-amber-600"
+                        />
+                      </th>
+                      <th className="px-3 py-2.5 font-medium text-slate-600">氏名</th>
+                      <th className="px-3 py-2.5 font-medium text-slate-600">管理番号</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {dormantMembers.neverWorked.map(({ member }) => {
+                      const checked = neverWorkedSelectedIds.has(member.id);
+                      return (
+                        <tr
+                          key={member.id}
+                          className={`border-b border-slate-100 last:border-b-0 ${checked ? "bg-amber-50/60" : ""}`}
+                        >
+                          <td className="px-3 py-2.5">
+                            <input
+                              type="checkbox"
+                              aria-label={`${member.name} を選択`}
+                              checked={checked}
+                              onChange={() => toggleNeverWorkedSelected(member.id)}
+                              className="h-4 w-4 cursor-pointer accent-amber-600"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 font-medium text-slate-800">{member.name}</td>
+                          <td className="px-3 py-2.5 tabular-nums text-slate-500">
+                            {formatMemberInvoiceNumberThreeDigits(member.invoiceNumber) ?? "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
         </div>
