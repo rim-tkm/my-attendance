@@ -3801,7 +3801,7 @@ function AdminDashboard(props: {
                   <div className="flex aspect-square max-h-44 flex-col items-center justify-center rounded-2xl border border-slate-100 bg-slate-50 p-5 text-center sm:max-h-none">
                     <p className="text-xs font-medium text-slate-500">有効コールからのKC率</p>
                     <p className="mt-3 text-3xl font-bold tabular-nums leading-none tracking-tight text-slate-900 sm:text-4xl">
-                      {dashboardGeneralMetrics.kcRate != null ? dashboardGeneralMetrics.kcRate.toFixed(1) : "—"}
+                      {dashboardGeneralMetrics.kcRate != null ? dashboardGeneralMetrics.kcRate.toFixed(2) : "—"}
                     </p>
                     {dashboardGeneralMetrics.kcRate != null ? (
                       <p className="mt-2 text-sm font-medium text-slate-500">%（目標 16%）</p>
@@ -3817,7 +3817,7 @@ function AdminDashboard(props: {
                   <div className="flex aspect-square max-h-44 flex-col items-center justify-center rounded-2xl border border-slate-100 bg-slate-50 p-5 text-center sm:max-h-none">
                     <p className="text-xs font-medium text-slate-500">有効コールからのアポ率</p>
                     <p className="mt-3 text-3xl font-bold tabular-nums leading-none tracking-tight text-slate-900 sm:text-4xl">
-                      {dashboardGeneralMetrics.apoRate != null ? dashboardGeneralMetrics.apoRate.toFixed(1) : "—"}
+                      {dashboardGeneralMetrics.apoRate != null ? dashboardGeneralMetrics.apoRate.toFixed(2) : "—"}
                     </p>
                     {dashboardGeneralMetrics.apoRate != null ? (
                       <p className="mt-2 text-sm font-medium text-slate-500">%（目標 1%）</p>
@@ -9428,7 +9428,8 @@ export default function DashboardPage() {
       });
       setCurrentUserId(user.id);
       setLoginPassword("");
-      if ((user.loginAccount ?? "").toLowerCase() !== "admin") setIsAdminMode(false);
+      // 管理者アカウントは最初から管理者画面で開く（毎回トグルする手間をなくす）
+      setIsAdminMode((user.loginAccount ?? "").toLowerCase() === "admin");
       if (na?.error) {
         console.warn("NextAuth セッション作成に失敗（Slack送信などAPIで401になる可能性）:", na.error);
       }

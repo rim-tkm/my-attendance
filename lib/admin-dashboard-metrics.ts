@@ -9,6 +9,11 @@ import {
 } from "@/lib/invoice-intern";
 import { addCalendarDays } from "@/lib/roi-analysis";
 
+/** safeRatePercent は小数第1位で丸めるため、ダッシュボード表示用に小数第2位精度で率(%)を返す。 */
+function ratePercent2(num: number, denom: number): number | null {
+  return denom === 0 || !Number.isFinite(denom) ? null : Math.round((num / denom) * 10000) / 100;
+}
+
 export type DashboardMemberSplit = {
   general: Member[];
   intern: Member[];
@@ -53,8 +58,8 @@ export function computeGeneralDashboardMetrics(
     .reduce((s, r) => s + r.durationMinutes, 0);
   const hours = totalMinutes / 60;
   const aposPerHour = hours > 0 ? totals.totalApo / hours : null;
-  const kcRate = safeRatePercent(totals.kcCount, totals.validCalls);
-  const apoRate = safeRatePercent(totals.decisionMakerApo, totals.validCalls);
+  const kcRate = ratePercent2(totals.kcCount, totals.validCalls);
+  const apoRate = ratePercent2(totals.decisionMakerApo, totals.validCalls);
   return {
     totalMinutes,
     totalApo: totals.totalApo,
