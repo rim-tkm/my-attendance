@@ -1076,6 +1076,41 @@ function AdminSortableTh(props: {
 
 type AdminKpiModalTarget = { userId: string; dateYmd: string; memberName: string; isIntern: boolean };
 
+/** KPI 6項目（一般メンバー用）から upsert 用の rec と保存後配列 next を組み立てる共通処理。
+ *  既存モーダル（AdminKpiProxyModal）と同じ規則で id・startTime・通知記録・確定商談数を引き継ぐ。 */
+function buildGeneralKpiUpsert(
+  allKpiRecords: KpiRecord[],
+  userId: string,
+  dateYmd: string,
+  fields: Record<KpiFormFieldKey, number>
+): { rec: KpiRecord; next: KpiRecord[] } {
+  const userKpi = getKpiForUser(allKpiRecords, userId);
+  const existingRec = getKpiForDate(userKpi, dateYmd);
+  const slotStart = normalizeKpiStartTime(existingRec ?? { startTime: KPI_DAY_DEFAULT_START_TIME });
+  const preservedNotify = existingRec ? coerceKpiTimestamptzField(existingRec.kpiMissingSlackNotifiedAt) : undefined;
+  const rec: KpiRecord = {
+    id: existingRec ? existingRec.id : crypto.randomUUID(),
+    userId,
+    date: dateYmd,
+    startTime: slotStart,
+    totalCalls: fields.totalCalls,
+    validCalls: fields.validCalls,
+    kcCount: fields.kcCount,
+    followUpCreated: fields.followUpCreated,
+    decisionMakerApo: fields.decisionMakerApo,
+    nonDecisionMakerApo: fields.nonDecisionMakerApo,
+    confirmedDecisionMakerApps: existingRec?.confirmedDecisionMakerApps ?? 0,
+    confirmedNonDecisionMakerApps: existingRec?.confirmedNonDecisionMakerApps ?? 0,
+    ...(preservedNotify ? { kpiMissingSlackNotifiedAt: preservedNotify } : {}),
+  };
+  const next = existingRec
+    ? userKpi.map((r) =>
+        r.date === dateYmd && normalizeKpiStartTime(r) === normalizeKpiStartTime(existingRec) ? rec : r
+      )
+    : [rec, ...userKpi.filter((r) => !(r.date === rec.date && normalizeKpiStartTime(r) === normalizeKpiStartTime(rec)))];
+  return { rec, next };
+}
+
 /** 管理者が任意メンバー・任意日の KPI を代理入力・修正（メンバー画面の KPI タブと同項目・同注釈） */
 function AdminKpiProxyModal(props: {
   target: AdminKpiModalTarget | null;
@@ -1404,6 +1439,8 @@ function AdminDashboard(props: {
   const [backupExpanded, setBackupExpanded] = useState(false);
   const [rangeStart, setRangeStart] = useState(() => getThisWeekMondayDateString());
   const [rangeEnd, setRangeEnd] = useState(() => getTodayJstDateString());
+  /** 予実乖離テーブルのインライン KPI 入力：保存中の行キー（userId-date） */
+  const [gapInlineKpiSavingKey, setGapInlineKpiSavingKey] = useState<string | null>(null);
   const [dailyActualStart, setDailyActualStart] = useState(() => {
     const t = getTodayJstDateString();
     return getMonthDateRange(t.slice(0, 7), t).start;
@@ -1764,6 +1801,31 @@ function AdminDashboard(props: {
       end: normalizeTimeInputValue(end),
       breakMin: "0",
     });
+  };
+
+  /** 予実乖離テーブルのインライン KPI 入力を保存（日別実績画面と同じ upsert 経路を使用） */
+  const handleInlineGapKpiSave = async (
+    userId: string,
+    dateYmd: string,
+    fields: Record<KpiFormFieldKey, number>
+  ) => {
+    if (gapInlineKpiSavingKey) return;
+    if (isWeekendYmdJst(dateYmd)) {
+      setGapActionToast({ message: JST_WEEKEND_WORK_REJECTED_MESSAGE, isError: true });
+      return;
+    }
+    const key = planActualGapApprovalKey(userId, dateYmd);
+    setGapInlineKpiSavingKey(key);
+    setGapActionToast(null);
+    try {
+      const { rec, next } = buildGeneralKpiUpsert(allKpiRecords, userId, dateYmd, fields);
+      await onSaveMemberKpi(userId, rec, next);
+      setGapActionToast({ message: "KPIを保存しました。", isError: false });
+    } catch {
+      setGapActionToast({ message: "KPIの保存に失敗しました。もう一度お試しください。", isError: true });
+    } finally {
+      setGapInlineKpiSavingKey(null);
+    }
   };
 
   const handleGapManualSave = async () => {
@@ -5277,7 +5339,7 @@ function AdminDashboard(props: {
             </p>
           ) : (
             <div className="overflow-x-auto rounded-lg border border-slate-200">
-              <table className="w-full min-w-[1180px] border-collapse text-left text-xs sm:text-sm">
+              <table className="w-full min-w-[1420px] border-collapse text-left text-xs sm:text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50">
                     <th className="px-3 py-2.5 font-medium text-slate-600">日付</th>
@@ -5288,6 +5350,7 @@ function AdminDashboard(props: {
                     <th className="px-3 py-2.5 font-medium text-slate-600">KPI</th>
                     <th className="px-3 py-2.5 font-medium text-slate-600">予定枠</th>
                     <th className="px-3 py-2.5 font-medium text-slate-600">予実調整</th>
+                    <th className="px-3 py-2.5 font-medium text-slate-600">KPI入力</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -5297,6 +5360,10 @@ function AdminDashboard(props: {
                     const gapApproveKey = planActualGapApprovalKey(r.userId, r.date);
                     const isGapApproved = planActualGapApprovedKeys.has(gapApproveKey);
                     const gapResolution = planActualGapResolutionByKey.get(gapApproveKey) ?? null;
+                    const rowMember = members.find((m) => m.id === r.userId);
+                    const rowIsIntern = rowMember?.isIntern === true;
+                    const rowExistingKpi = getKpiForDate(getKpiForUser(allKpiRecords, r.userId), r.date);
+                    const inlineKpiSaving = gapInlineKpiSavingKey === gapApproveKey;
                     return (
                       <tr
                         key={`${r.userId}-${r.date}`}
@@ -5521,6 +5588,74 @@ function AdminDashboard(props: {
                                 </button>
                               </div>
                             </div>
+                          )}
+                        </td>
+                        <td className="min-w-[15rem] px-3 py-2.5 align-top">
+                          {rowIsIntern ? (
+                            <span className="text-[11px] text-slate-500">
+                              インターンはKPI入力対象外
+                            </span>
+                          ) : (
+                            <form
+                              key={
+                                rowExistingKpi
+                                  ? `${rowExistingKpi.totalCalls}-${rowExistingKpi.validCalls}-${rowExistingKpi.kcCount}-${rowExistingKpi.followUpCreated}-${rowExistingKpi.decisionMakerApo}-${rowExistingKpi.nonDecisionMakerApo}`
+                                  : "empty"
+                              }
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                const fd = new FormData(e.currentTarget);
+                                const num = (k: string) => {
+                                  const n = Number.parseInt(String(fd.get(k) ?? ""), 10);
+                                  return Number.isFinite(n) && n > 0 ? n : 0;
+                                };
+                                void handleInlineGapKpiSave(r.userId, r.date, {
+                                  totalCalls: num("totalCalls"),
+                                  validCalls: num("validCalls"),
+                                  kcCount: num("kcCount"),
+                                  followUpCreated: num("followUpCreated"),
+                                  decisionMakerApo: num("decisionMakerApo"),
+                                  nonDecisionMakerApo: num("nonDecisionMakerApo"),
+                                });
+                              }}
+                              className="flex flex-col gap-2"
+                            >
+                              <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
+                                {[
+                                  { key: "totalCalls", short: "総コール" },
+                                  { key: "validCalls", short: "有効コール" },
+                                  { key: "kcCount", short: "KC" },
+                                  { key: "followUpCreated", short: "追いかけ" },
+                                  { key: "decisionMakerApo", short: "決アポ" },
+                                  { key: "nonDecisionMakerApo", short: "非決アポ" },
+                                ].map((f) => (
+                                  <label
+                                    key={f.key}
+                                    className="flex flex-col gap-0.5 text-[10px] font-medium text-slate-600"
+                                  >
+                                    {f.short}
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step={1}
+                                      inputMode="numeric"
+                                      name={f.key}
+                                      defaultValue={
+                                        rowExistingKpi ? rowExistingKpi[f.key as KpiFormFieldKey] : ""
+                                      }
+                                      className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 text-xs tabular-nums text-slate-900"
+                                    />
+                                  </label>
+                                ))}
+                              </div>
+                              <button
+                                type="submit"
+                                disabled={inlineKpiSaving}
+                                className="self-start rounded bg-slate-800 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 sm:text-xs"
+                              >
+                                {inlineKpiSaving ? "保存中…" : rowExistingKpi ? "KPIを更新" : "KPIを保存"}
+                              </button>
+                            </form>
                           )}
                         </td>
                       </tr>
