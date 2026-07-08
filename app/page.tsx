@@ -1645,7 +1645,8 @@ function AdminDashboard(props: {
   const currentYearMonth = getTodayJstDateString().slice(0, 7);
   const todayStr = getTodayJstDateString();
   const activeMembers = members.filter((mem) => mem.isActive !== false);
-  /** 在籍中の時給制メンバー（インターン除く）で直近3ヶ月に活動記録がない人（打刻ゼロも含む） */
+  /** 在籍中の時給制メンバー（インターン除く）を「休眠（過去に稼働歴あり・3ヶ月止まり）」と
+   *  「未稼働（一度も打刻なし＝新人を含む）」に分ける。新人が休眠に誤検出されるのを防ぐ。 */
   const dormantMembers = useMemo(() => {
     const [ty, tm, td] = todayStr.split("-").map(Number);
     let thYear = ty;
@@ -1660,28 +1661,22 @@ function AdminDashboard(props: {
       const cur = lastByUser.get(r.userId);
       if (!cur || r.date > cur) lastByUser.set(r.userId, r.date);
     }
-    const rows = activeMembers
-      .filter((m) => m.isIntern !== true)
-      .map((m) => {
-        const lastWorkDate = lastByUser.get(m.id) ?? null;
-        const daysSince =
-          lastWorkDate != null
-            ? Math.round(
-                (new Date(`${todayStr}T00:00:00`).getTime() - new Date(`${lastWorkDate}T00:00:00`).getTime()) /
-                  86_400_000
-              )
-            : null;
-        return { member: m, lastWorkDate, daysSince };
-      })
-      .filter((row) => row.lastWorkDate == null || row.lastWorkDate < threshold)
-      .sort((a, b) => {
-        if (a.lastWorkDate == null && b.lastWorkDate == null)
-          return a.member.name.localeCompare(b.member.name, "ja");
-        if (a.lastWorkDate == null) return -1;
-        if (b.lastWorkDate == null) return 1;
-        return a.lastWorkDate.localeCompare(b.lastWorkDate);
-      });
-    return { rows, threshold };
+    const todayMs = new Date(`${todayStr}T00:00:00`).getTime();
+    const dormant: { member: Member; lastWorkDate: string; daysSince: number }[] = [];
+    const neverWorked: { member: Member }[] = [];
+    for (const m of activeMembers) {
+      if (m.isIntern === true) continue;
+      const lastWorkDate = lastByUser.get(m.id) ?? null;
+      if (lastWorkDate == null) {
+        neverWorked.push({ member: m });
+      } else if (lastWorkDate < threshold) {
+        const daysSince = Math.round((todayMs - new Date(`${lastWorkDate}T00:00:00`).getTime()) / 86_400_000);
+        dormant.push({ member: m, lastWorkDate, daysSince });
+      }
+    }
+    dormant.sort((a, b) => a.lastWorkDate.localeCompare(b.lastWorkDate));
+    neverWorked.sort((a, b) => a.member.name.localeCompare(b.member.name, "ja"));
+    return { dormant, neverWorked, threshold };
   }, [activeMembers, allRecords, todayStr]);
   /** メンバー数サマリー：総登録（退会含む）・稼働（直近30日打刻）・在籍/退会/一般/インターンの内訳 */
   const memberCountSummary = useMemo(() => {
@@ -6535,7 +6530,7 @@ function AdminDashboard(props: {
         <div className="space-y-6">
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-900">メンバー数サマリー</h2>
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="text-xs font-medium text-slate-600">総登録メンバー（退会含む）</div>
               <div className="mt-1 text-2xl font-bold tabular-nums text-slate-900">
@@ -6558,10 +6553,19 @@ function AdminDashboard(props: {
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
               <div className="text-xs font-medium text-amber-800">休眠メンバー（3ヶ月以上）</div>
               <div className="mt-1 text-2xl font-bold tabular-nums text-amber-900">
-                {dormantMembers.rows.length} 名
+                {dormantMembers.dormant.length} 名
               </div>
               <div className="mt-1 text-[11px] leading-relaxed text-amber-700">
-                在籍・時給制で直近3ヶ月に打刻なし（下表）
+                過去に稼働歴あり・直近3ヶ月は打刻なし
+              </div>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="text-xs font-medium text-slate-600">未稼働メンバー</div>
+              <div className="mt-1 text-2xl font-bold tabular-nums text-slate-900">
+                {dormantMembers.neverWorked.length} 名
+              </div>
+              <div className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                一度も打刻なし（新規加入直後を含む）
               </div>
             </div>
           </div>
@@ -6569,12 +6573,12 @@ function AdminDashboard(props: {
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-900">休眠メンバー（3ヶ月以上稼働なし）</h2>
           <p className="mt-1 text-xs leading-relaxed text-slate-600">
-            在籍中の時給制メンバー（インターン除く）のうち、直近3ヶ月（{dormantMembers.threshold} 以降）に活動記録がない人の一覧です。一度も稼働記録がない人も含みます。該当{" "}
-            <span className="font-semibold text-slate-800">{dormantMembers.rows.length}</span> 名。
+            在籍中の時給制メンバー（インターン除く）のうち、<span className="font-medium text-slate-800">過去に稼働歴があり</span>、直近3ヶ月（{dormantMembers.threshold} 以降）に活動記録がない人の一覧です。該当{" "}
+            <span className="font-semibold text-slate-800">{dormantMembers.dormant.length}</span> 名。
           </p>
-          {dormantMembers.rows.length === 0 ? (
+          {dormantMembers.dormant.length === 0 ? (
             <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-              3ヶ月以上稼働がないメンバーはいません。
+              3ヶ月以上稼働が止まっているメンバーはいません。
             </p>
           ) : (
             <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
@@ -6588,15 +6592,46 @@ function AdminDashboard(props: {
                   </tr>
                 </thead>
                 <tbody>
-                  {dormantMembers.rows.map(({ member, lastWorkDate, daysSince }) => (
+                  {dormantMembers.dormant.map(({ member, lastWorkDate, daysSince }) => (
                     <tr key={member.id} className="border-b border-slate-100 last:border-b-0">
                       <td className="px-3 py-2.5 font-medium text-slate-800">{member.name}</td>
                       <td className="px-3 py-2.5 font-mono text-xs tabular-nums text-slate-700 sm:text-sm">
-                        {lastWorkDate ?? <span className="font-sans text-red-700">稼働記録なし</span>}
+                        {lastWorkDate}
                       </td>
-                      <td className="px-3 py-2.5 tabular-nums text-slate-700">
-                        {daysSince != null ? `${daysSince}日` : "—"}
+                      <td className="px-3 py-2.5 tabular-nums text-slate-700">{daysSince}日</td>
+                      <td className="px-3 py-2.5 tabular-nums text-slate-500">
+                        {formatMemberInvoiceNumberThreeDigits(member.invoiceNumber) ?? "—"}
                       </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-900">未稼働メンバー（一度も打刻なし）</h2>
+          <p className="mt-1 text-xs leading-relaxed text-slate-600">
+            在籍中の時給制メンバーのうち、これまで一度も活動記録（打刻）がない人です。<span className="font-medium text-slate-800">新規加入直後でこれから稼働する人を含む</span>ため、休眠とは分けています。該当{" "}
+            <span className="font-semibold text-slate-800">{dormantMembers.neverWorked.length}</span> 名。
+          </p>
+          {dormantMembers.neverWorked.length === 0 ? (
+            <p className="mt-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+              未稼働（打刻ゼロ）のメンバーはいません。
+            </p>
+          ) : (
+            <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+              <table className="w-full min-w-[360px] border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="px-3 py-2.5 font-medium text-slate-600">氏名</th>
+                    <th className="px-3 py-2.5 font-medium text-slate-600">管理番号</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dormantMembers.neverWorked.map(({ member }) => (
+                    <tr key={member.id} className="border-b border-slate-100 last:border-b-0">
+                      <td className="px-3 py-2.5 font-medium text-slate-800">{member.name}</td>
                       <td className="px-3 py-2.5 tabular-nums text-slate-500">
                         {formatMemberInvoiceNumberThreeDigits(member.invoiceNumber) ?? "—"}
                       </td>
