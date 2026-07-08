@@ -1327,6 +1327,87 @@ function AdminKpiProxyModal(props: {
   );
 }
 
+/** 管理者サイドバーの各メニュー用アイコン（依存を増やさないインライン SVG） */
+function AdminNavIcon({ id }: { id: AdminSection }) {
+  const paths: Record<string, JSX.Element> = {
+    dashboard: (
+      <>
+        <rect x="4" y="4" width="7" height="7" rx="1" />
+        <rect x="4" y="14" width="7" height="6" rx="1" />
+        <rect x="13" y="4" width="7" height="5" rx="1" />
+        <rect x="13" y="12" width="7" height="8" rx="1" />
+      </>
+    ),
+    attendance: <path d="M3 12h4l2 6l4 -12l2 6h6" />,
+    shift: (
+      <>
+        <rect x="4" y="5" width="16" height="15" rx="2" />
+        <path d="M4 10h16M8 3v4M16 3v4" />
+      </>
+    ),
+    kpi: (
+      <>
+        <path d="M4 20h16" />
+        <rect x="5.5" y="11" width="3" height="7" rx="0.5" />
+        <rect x="10.5" y="6" width="3" height="12" rx="0.5" />
+        <rect x="15.5" y="14" width="3" height="4" rx="0.5" />
+      </>
+    ),
+    dailyActual: (
+      <>
+        <rect x="4" y="4" width="16" height="16" rx="2" />
+        <path d="M4 10h16M4 15h16M10 4v16" />
+      </>
+    ),
+    planActualGap: (
+      <>
+        <path d="M12 4l8 15h-16z" />
+        <path d="M12 10v4M12 16.5v.01" />
+      </>
+    ),
+    roi: (
+      <>
+        <path d="M3 17l6 -6l4 4l8 -8" />
+        <path d="M17 7h4v4" />
+      </>
+    ),
+    productivityExport: (
+      <>
+        <path d="M6 3h8l4 4v13a1 1 0 0 1 -1 1h-11a1 1 0 0 1 -1 -1v-16a1 1 0 0 1 1 -1z" />
+        <path d="M14 3v4h4M9 13h6M9 16h6" />
+      </>
+    ),
+    invoiceBatchExport: (
+      <>
+        <path d="M6 3v17l2 -1l2 1l2 -1l2 1l2 -1v-16z" />
+        <path d="M9 8h6M9 12h6" />
+      </>
+    ),
+    settings: (
+      <>
+        <path d="M4 6h9M17 6h3M4 12h4M12 12h8M4 18h11M19 18h1" />
+        <circle cx="15" cy="6" r="2" />
+        <circle cx="10" cy="12" r="2" />
+        <circle cx="17" cy="18" r="2" />
+      </>
+    ),
+  };
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-[18px] w-[18px] flex-none"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {paths[id] ?? null}
+    </svg>
+  );
+}
+
 function AdminDashboard(props: {
   isAdminUser: boolean;
   adminLoginAccount: string;
@@ -1352,6 +1433,7 @@ function AdminDashboard(props: {
   ) => Promise<void>;
   deepLinkMemberId?: string;
   onAdminDeepLinkConsumed?: () => void;
+  onLogout?: () => void;
 }) {
   const {
     isAdminUser,
@@ -1372,8 +1454,11 @@ function AdminDashboard(props: {
     onApplyManualPlanActualGap,
     deepLinkMemberId,
     onAdminDeepLinkConsumed,
+    onLogout,
   } = props;
   const [adminSection, setAdminSection] = useState<AdminSection>("dashboard");
+  /** スマホでサイドバーを開いているか（PC は常時表示） */
+  const [adminSidebarOpen, setAdminSidebarOpen] = useState(false);
   const [newMemberName, setNewMemberName] = useState("");
   const [newMemberLogin, setNewMemberLogin] = useState("");
   const [newMemberPassword, setNewMemberPassword] = useState("12345");
@@ -3493,27 +3578,108 @@ function AdminDashboard(props: {
         </div>
       </div>
 
-      <div className="admin-dashboard-screen-only space-y-6">
-      <nav className="flex flex-wrap gap-0 border-b border-slate-200 bg-white shadow-sm">
-        {navItems.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setAdminSection(item.id)}
-            className={`inline-flex items-center gap-1.5 px-4 py-3 text-sm font-medium transition ${adminSection === item.id ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
+      <div className="admin-dashboard-screen-only relative flex min-h-screen bg-slate-100">
+      {adminSidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden"
+          onClick={() => setAdminSidebarOpen(false)}
+          aria-hidden
+        />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex h-full w-60 flex-none flex-col border-r border-slate-200 bg-white transition-transform duration-200 lg:sticky lg:top-0 lg:z-0 lg:h-screen lg:translate-x-0 ${
+          adminSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="flex items-center gap-2.5 border-b border-slate-200 px-4 py-3.5">
+          <div
+            className="flex h-8 w-8 flex-none items-center justify-center rounded-lg text-base font-semibold text-white"
+            style={{ backgroundColor: "#38bdf8" }}
           >
-            {item.label}
-            {item.id === "settings" && invoiceMissingNavCount > 0 ? (
-              <span
-                className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white"
-                title="請求管理番号未入力のメンバーがいます"
-              >
-                {invoiceMissingNavCount}
-              </span>
-            ) : null}
+            業
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-800">業務委託管理</div>
+            <div className="text-[11px] text-slate-400">管理者</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setAdminSidebarOpen(false)}
+            className="ml-auto rounded p-1 text-slate-400 hover:bg-slate-100 lg:hidden"
+            aria-label="メニューを閉じる"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+              <path d="M6 6l12 12M18 6l-12 12" />
+            </svg>
           </button>
-        ))}
-      </nav>
+        </div>
+        <nav className="flex-1 overflow-y-auto px-2 py-3">
+          {navItems.map((item) => {
+            const active = adminSection === item.id;
+            return (
+              <div key={item.id}>
+                {item.id === "invoiceBatchExport" && (
+                  <div className="px-3 pb-1 pt-3 text-[11px] font-medium text-slate-400">管理</div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminSection(item.id);
+                    setAdminSidebarOpen(false);
+                  }}
+                  className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition ${
+                    active ? "bg-sky-50 font-medium text-sky-700" : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <AdminNavIcon id={item.id} />
+                  <span className="flex-1 truncate">{item.label}</span>
+                  {item.id === "settings" && invoiceMissingNavCount > 0 ? (
+                    <span
+                      className="rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white"
+                      title="請求管理番号未入力のメンバーがいます"
+                    >
+                      {invoiceMissingNavCount}
+                    </span>
+                  ) : null}
+                </button>
+              </div>
+            );
+          })}
+        </nav>
+        <div className="flex items-center gap-2.5 border-t border-slate-200 px-3 py-3">
+          <div className="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-sky-100 text-xs font-semibold text-sky-700">
+            {(adminLoginAccount || "A").slice(0, 1).toUpperCase()}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-medium text-slate-700">管理者（Admin）</div>
+            <div className="truncate text-[11px] text-slate-400">{adminLoginAccount || "admin"}</div>
+          </div>
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              className="flex-none rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50"
+            >
+              ログアウト
+            </button>
+          )}
+        </div>
+      </aside>
+      <main className="min-w-0 flex-1">
+        <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5 lg:hidden">
+          <button
+            type="button"
+            onClick={() => setAdminSidebarOpen(true)}
+            className="rounded p-1 text-slate-600 hover:bg-slate-100"
+            aria-label="メニューを開く"
+          >
+            <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <span className="text-sm font-medium text-slate-800">{navItems.find((i) => i.id === adminSection)?.label ?? ""}</span>
+        </div>
+        <div className="space-y-6 px-4 py-5 sm:px-6 lg:px-8">
 
       {adminSection === "dashboard" && (
         <div className="space-y-6">
@@ -7432,6 +7598,8 @@ function AdminDashboard(props: {
           </div>
         </div>
       )}
+        </div>
+      </main>
     </div>
     </>
   );
@@ -9590,13 +9758,15 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-      <header className="bg-slate-800 text-white shadow-md print:hidden" style={{ backgroundColor: "#1e293b" }}>
-        <div className="mx-auto max-w-2xl px-4 py-4 sm:px-6">
-          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
-            {isAdminMode ? "業務進捗・活動報告（管理者）" : `業務進捗・活動報告${currentMember ? ` - ${currentMember.name}` : ""}`}
-          </h1>
-        </div>
-      </header>
+      {!(isAdminMode && isAdminUser) && (
+        <header className="bg-slate-800 text-white shadow-md print:hidden" style={{ backgroundColor: "#1e293b" }}>
+          <div className="mx-auto max-w-2xl px-4 py-4 sm:px-6">
+            <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
+              {isAdminMode ? "業務進捗・活動報告（管理者）" : `業務進捗・活動報告${currentMember ? ` - ${currentMember.name}` : ""}`}
+            </h1>
+          </div>
+        </header>
+      )}
 
       {!isAdminMode && (
         <div className="border-b border-slate-200 bg-white print:hidden">
@@ -9629,7 +9799,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <main className="mx-auto max-w-2xl px-4 py-6 sm:px-6 sm:py-8 print:mx-0 print:max-w-none print:w-full print:px-3 print:py-2">
+      <main className={`${isAdminMode && isAdminUser ? "w-full" : "mx-auto max-w-2xl px-4 py-6 sm:px-6 sm:py-8"} print:mx-0 print:max-w-none print:w-full print:px-3 print:py-2`}>
         {isAdminMode && isAdminUser ? (
           <AdminDashboard
             isAdminUser={isAdminUser}
@@ -9643,6 +9813,7 @@ export default function DashboardPage() {
             onRefresh={refresh}
             deepLinkMemberId={adminEditMemberFromUrl}
             onAdminDeepLinkConsumed={clearAdminEditDeepLink}
+            onLogout={handleLogout}
             onSaveMemberRecords={async (memberId, records) => {
               await saveRecordsForUser(memberId, records, {
                 bypassPunchTimeRestrictions: true,
