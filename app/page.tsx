@@ -4788,8 +4788,7 @@ function AdminDashboard(props: {
               集計期間: {kpiRangeNorm.start} ～ {kpiRangeNorm.end}（一般メンバー・時給制のみ。インターンは下部の成果報酬集計を参照）
             </p>
             {(() => {
-              const { totals: rangeTotals, totalMinutes: summaryTotalMinutes, aposPerHour } =
-                kpiGeneralRangeMetrics;
+              const { totals: rangeTotals, totalMinutes: summaryTotalMinutes } = kpiGeneralRangeMetrics;
               const ratePercent2 = (num: number, denom: number): number | null =>
                 denom === 0 || !Number.isFinite(denom) ? null : Math.round((num / denom) * 10000) / 100;
               const rangeValidRate = ratePercent2(rangeTotals.validCalls, rangeTotals.totalCalls);
@@ -4838,12 +4837,6 @@ function AdminDashboard(props: {
                       <div className="text-xs font-medium text-slate-600">決アポ数</div>
                       <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
                         {rangeTotals.decisionMakerApo} 件
-                      </div>
-                    </div>
-                    <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
-                      <div className="text-xs font-medium text-slate-600">時間あたりアポ率</div>
-                      <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
-                        {aposPerHour != null ? `${aposPerHour.toFixed(2)} 件/時間` : "—"}
                       </div>
                     </div>
                     <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
