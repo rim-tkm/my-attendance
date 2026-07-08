@@ -1683,6 +1683,31 @@ function AdminDashboard(props: {
       });
     return { rows, threshold };
   }, [activeMembers, allRecords, todayStr]);
+  /** メンバー数サマリー：総登録（退会含む）・稼働（直近30日打刻）・在籍/退会/一般/インターンの内訳 */
+  const memberCountSummary = useMemo(() => {
+    const totalRegistered = members.length;
+    const activeRegistered = members.filter((m) => m.isActive !== false).length;
+    const retired = totalRegistered - activeRegistered;
+    const internCount = members.filter((m) => m.isIntern === true).length;
+    const generalCount = totalRegistered - internCount;
+    const cutoff = new Date(`${todayStr}T00:00:00`);
+    cutoff.setDate(cutoff.getDate() - 30);
+    const cutoff30 = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, "0")}-${String(cutoff.getDate()).padStart(2, "0")}`;
+    const memberIdSet = new Set(members.map((m) => m.id));
+    const recentWorkerIds = new Set<string>();
+    for (const r of allRecords) {
+      if (r.date >= cutoff30 && memberIdSet.has(r.userId)) recentWorkerIds.add(r.userId);
+    }
+    return {
+      totalRegistered,
+      activeRegistered,
+      retired,
+      internCount,
+      generalCount,
+      activeWorkers: recentWorkerIds.size,
+      cutoff30,
+    };
+  }, [members, allRecords, todayStr]);
   const [adminMemberTableSort, setAdminMemberTableSort] = useState<{
     key: AdminMemberTableSortKey;
     dir: "asc" | "desc";
@@ -6507,6 +6532,40 @@ function AdminDashboard(props: {
       )}
 
       {adminSection === "dormant" && (
+        <div className="space-y-6">
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-900">メンバー数サマリー</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="text-xs font-medium text-slate-600">総登録メンバー（退会含む）</div>
+              <div className="mt-1 text-2xl font-bold tabular-nums text-slate-900">
+                {memberCountSummary.totalRegistered} 名
+              </div>
+              <div className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                在籍 {memberCountSummary.activeRegistered}・退会 {memberCountSummary.retired}／一般{" "}
+                {memberCountSummary.generalCount}・インターン {memberCountSummary.internCount}
+              </div>
+            </div>
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+              <div className="text-xs font-medium text-emerald-800">稼働メンバー（直近30日）</div>
+              <div className="mt-1 text-2xl font-bold tabular-nums text-emerald-900">
+                {memberCountSummary.activeWorkers} 名
+              </div>
+              <div className="mt-1 text-[11px] leading-relaxed text-emerald-700">
+                {memberCountSummary.cutoff30} 以降に活動記録（打刻）がある人
+              </div>
+            </div>
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <div className="text-xs font-medium text-amber-800">休眠メンバー（3ヶ月以上）</div>
+              <div className="mt-1 text-2xl font-bold tabular-nums text-amber-900">
+                {dormantMembers.rows.length} 名
+              </div>
+              <div className="mt-1 text-[11px] leading-relaxed text-amber-700">
+                在籍・時給制で直近3ヶ月に打刻なし（下表）
+              </div>
+            </div>
+          </div>
+        </section>
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-900">休眠メンバー（3ヶ月以上稼働なし）</h2>
           <p className="mt-1 text-xs leading-relaxed text-slate-600">
@@ -6548,6 +6607,7 @@ function AdminDashboard(props: {
             </div>
           )}
         </section>
+        </div>
       )}
 
       {adminSection === "settings" && (
