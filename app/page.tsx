@@ -477,11 +477,17 @@ function dateHasShiftActualData(
 }
 
 /** 前日以前の「業務開始のみ」記録を稼働予定終了時刻で自動補完（日付変更時・起動時に実行） */
-async function runAutoComplete(): Promise<void> {
-  const [records, openRecs, shifts] = await Promise.all([loadRecords(), loadOpenRecords(), loadShifts()]);
+/** 過去日の開きっぱなし打刻を自動締めする。呼び出し側が読み込み済みのデータを渡す
+ *  （内部で再ロードしない）。DB を更新したときだけ true を返し、更新がなければ
+ *  false を返して呼び出し側の再ロードを省けるようにする。 */
+async function runAutoComplete(
+  records: WorkRecord[],
+  openRecs: OpenRecord[],
+  shifts: Shift[]
+): Promise<boolean> {
   const todayStr = getTodayJstDateString();
   const openPast = openRecs.filter((o) => o.date < todayStr && !isWeekendYmdJst(o.date));
-  if (openPast.length === 0) return;
+  if (openPast.length === 0) return false;
   const newRecords: WorkRecord[] = [];
   for (const o of openPast) {
     const shift = shifts.find((s) => s.userId === o.userId && s.date === o.date);
@@ -499,15 +505,17 @@ async function runAutoComplete(): Promise<void> {
     const built = buildWorkRecordFromTimes(o.date, startHhmm, endTime, o.userId, o.id, true);
     if (built) newRecords.push(built);
   }
-  if (newRecords.length === 0) return;
+  if (newRecords.length === 0) return false;
   const updatedRecords = [...records, ...newRecords].filter((r) => !isWeekendYmdJst(r.date));
   const completedIds = new Set(openPast.map((x) => x.id));
   const updatedOpen = openRecs.filter((r) => !completedIds.has(r.id));
   try {
     await saveRecords(updatedRecords);
     await saveOpenRecords(updatedOpen);
+    return true;
   } catch (e) {
     console.warn("runAutoComplete save error:", e);
+    return false;
   }
 }
 
@@ -8567,18 +8575,22 @@ export default function DashboardPage() {
       setPlanActualGapResolutionByKey(
         new Map(gapDetailed0.map((r) => [planActualGapApprovalKey(r.userId, r.date), r.resolution]))
       );
-      await runAutoComplete();
-      const [records2, open2, gapDetailed] = await Promise.all([
-        loadRecords(),
-        loadOpenRecords(),
-        loadPlanActualGapApprovalsDetailed(),
-      ]);
-      setAllRecords(records2);
-      setAllOpenRecords(open2);
-      setPlanActualGapApprovedKeys(new Set(gapDetailed.map((r) => planActualGapApprovalKey(r.userId, r.date))));
-      setPlanActualGapResolutionByKey(
-        new Map(gapDetailed.map((r) => [planActualGapApprovalKey(r.userId, r.date), r.resolution]))
-      );
+      // 過去日の開きっぱなし打刻がある場合のみ DB が更新されるので、その時だけ再ロードする。
+      // 通常（更新なし）は上でロード済みのデータをそのまま使い、全件ロードの重複を避ける。
+      const autoCompleteChanged = await runAutoComplete(records, openRecs, shifts);
+      if (autoCompleteChanged) {
+        const [records2, open2, gapDetailed] = await Promise.all([
+          loadRecords(),
+          loadOpenRecords(),
+          loadPlanActualGapApprovalsDetailed(),
+        ]);
+        setAllRecords(records2);
+        setAllOpenRecords(open2);
+        setPlanActualGapApprovedKeys(new Set(gapDetailed.map((r) => planActualGapApprovalKey(r.userId, r.date))));
+        setPlanActualGapResolutionByKey(
+          new Map(gapDetailed.map((r) => [planActualGapApprovalKey(r.userId, r.date), r.resolution]))
+        );
+      }
       const now = new Date();
       setSelectedMonth((prev) => prev || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
       if (mems.length === 0) {

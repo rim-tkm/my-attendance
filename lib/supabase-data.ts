@@ -741,6 +741,14 @@ export async function deleteMember(memberId: string): Promise<void> {
 
 const SUPABASE_SELECT_PAGE_SIZE = 1000;
 
+/** 全件ページング取得で使う SELECT 列。`*` だと未使用列まで転送されるため、
+ *  各 to* マッピングが参照する列だけに絞って転送量を削減する。 */
+const ATTENDANCE_SELECT_COLUMNS =
+  "id,user_id,start_raw,start_rounded,end_raw,end_rounded,duration_minutes,date,is_auto_completed";
+const SHIFT_SELECT_COLUMNS = "id,user_id,date,start_planned,end_planned,start_planned2,end_planned2";
+const KPI_SELECT_COLUMNS =
+  "id,user_id,date,start_time,total_calls,valid_calls,kc_count,follow_up_created,decision_maker_apo,non_decision_maker_apo,confirmed_dm,confirmed_non_dm,kpi_missing_slack_notified_at";
+
 async function loadAllAttendanceRows(
   supabase: NonNullable<ReturnType<typeof getSupabase>>
 ): Promise<DbAttendance[]> {
@@ -749,7 +757,7 @@ async function loadAllAttendanceRows(
   for (;;) {
     const { data, error } = await supabase
       .from("attendance")
-      .select("*")
+      .select(ATTENDANCE_SELECT_COLUMNS)
       .order("date", { ascending: false })
       .range(from, from + SUPABASE_SELECT_PAGE_SIZE - 1);
     if (error) {
@@ -864,7 +872,7 @@ async function loadAllShiftRows(supabase: NonNullable<ReturnType<typeof getSupab
   for (;;) {
     const { data, error } = await supabase
       .from("shifts")
-      .select("*")
+      .select(SHIFT_SELECT_COLUMNS)
       .order("date", { ascending: false })
       .range(from, from + SUPABASE_SELECT_PAGE_SIZE - 1);
     if (error) {
@@ -886,7 +894,7 @@ async function loadAllKpiRows(supabase: NonNullable<ReturnType<typeof getSupabas
   for (;;) {
     const { data, error } = await supabase
       .from("kpis")
-      .select("*")
+      .select(KPI_SELECT_COLUMNS)
       .order("date", { ascending: false })
       .range(from, from + SUPABASE_SELECT_PAGE_SIZE - 1);
     if (error) {
