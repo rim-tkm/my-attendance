@@ -103,6 +103,7 @@ import {
   ROI_YEN_PER_FOLLOWUP,
   ROI_YEN_PER_NON_DECISION_APO,
   ROI_YEN_PER_DECISION_APO,
+  computeValueCreatedYenFromTotals,
   ROI_FIXED_COST_ADMIN_YEN,
   ROI_FIXED_COST_AUTOCALL_YEN,
   ROI_PER_PERSON_FIXED_COST_YEN,
@@ -3870,10 +3871,15 @@ function AdminDashboard(props: {
             </div>
           </section>
           {dashboardMemberSplit.intern.length > 0 && (
-            <section className="rounded-xl border-2 border-violet-300 bg-gradient-to-b from-white to-violet-50/50 p-5 shadow-sm">
-              <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
+            <details className="group rounded-xl border-2 border-violet-300 bg-gradient-to-b from-white to-violet-50/50 p-5 shadow-sm">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-base font-semibold text-violet-950 [&::-webkit-details-marker]:hidden">
+                <span>インターン成果確定（管理者用）</span>
+                <svg viewBox="0 0 24 24" className="h-5 w-5 flex-none text-violet-400 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 9l6 6l6 -6" />
+                </svg>
+              </summary>
+              <div className="mt-4 flex flex-wrap items-end justify-between gap-4">
                 <div>
-                  <h2 className="text-base font-semibold text-violet-950">インターン成果確定（管理者用）</h2>
                   <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-600">
                     インターン生のみ表示しています。入力した確定数は kpis テーブル（confirmed_dm / confirmed_non_dm）に保存され、請求書の成果報酬計算（単価適用）に反映されます。
                   </p>
@@ -3957,7 +3963,7 @@ function AdminDashboard(props: {
               <p className="mt-3 text-[11px] text-slate-500">
                 各フィールドはフォーカスを外すと自動保存されます。「保存」で両方をまとめて保存できます。
               </p>
-            </section>
+            </details>
           )}
 
           {dashboardMemberSplit.intern.length > 0 && (
@@ -4194,10 +4200,14 @@ function AdminDashboard(props: {
 
           <div className="space-y-5 border-t border-slate-200 pt-8">
             <h3 className="text-sm font-medium text-slate-700">本日の稼働予定・状況</h3>
-            <div className="rounded-lg border border-slate-200 bg-slate-50/90 p-4">
-              <p className="mb-3 text-sm font-medium text-slate-800">
-                👥 本日の稼働予定：合計 {todayPlannedShiftList.length}名
-              </p>
+            <details className="group rounded-lg border border-slate-200 bg-slate-50/90 p-4">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-medium text-slate-800 [&::-webkit-details-marker]:hidden">
+                <span>👥 本日の稼働予定：合計 {todayPlannedShiftList.length}名</span>
+                <svg viewBox="0 0 24 24" className="h-5 w-5 flex-none text-slate-400 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 9l6 6l6 -6" />
+                </svg>
+              </summary>
+              <div className="mt-3">
               {todayPlannedShiftList.length === 0 ? (
                 <p className="text-xs text-slate-600">本日、実際の稼働予定が入っているメンバーはいません。</p>
               ) : (
@@ -4210,7 +4220,8 @@ function AdminDashboard(props: {
                   ))}
                 </ul>
               )}
-            </div>
+              </div>
+            </details>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] border-collapse text-sm">
                 <thead>
@@ -4810,6 +4821,17 @@ function AdminDashboard(props: {
                       <div className="text-xs font-medium text-slate-600">総支払額（時給）</div>
                       <div className="mt-1 text-lg font-bold tabular-nums text-slate-900 sm:text-xl">
                         {summaryTotalPay.toLocaleString("ja-JP")}円
+                      </div>
+                    </div>
+                    <div className="min-w-[8.5rem] flex-1 rounded-lg border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+                      <div
+                        className="text-xs font-medium text-emerald-800"
+                        title="コール×10円 ＋ 追いかけ×100円 ＋ 非決裁アポ×200円 ＋ 決裁アポ×10,000円"
+                      >
+                        生産価値（合計）
+                      </div>
+                      <div className="mt-1 text-lg font-bold tabular-nums text-emerald-900 sm:text-xl">
+                        {computeValueCreatedYenFromTotals(rangeTotals).toLocaleString("ja-JP")}円
                       </div>
                     </div>
                     <div className="min-w-[8.5rem] flex-1 rounded-lg border border-slate-200 bg-slate-50 p-4 shadow-sm">
