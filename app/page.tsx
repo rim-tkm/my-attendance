@@ -3233,7 +3233,6 @@ function AdminDashboard(props: {
     { id: "attendance", label: "稼働状況" },
     { id: "shift", label: "稼働予定管理" },
     { id: "kpi", label: "業務委託KPI" },
-    { id: "dailyActual", label: "日別実績（予定・実績）" },
     { id: "planActualGap", label: "予実乖離アーカイブ" },
     ...(isAdminUser
       ? ([
