@@ -1468,6 +1468,9 @@ function AdminDashboard(props: {
   const [adminSection, setAdminSection] = useState<AdminSection>("dashboard");
   /** スマホでサイドバーを開いているか（PC は常時表示） */
   const [adminSidebarOpen, setAdminSidebarOpen] = useState(false);
+  /** 休眠メンバーの一括無効化：選択中のID・処理中フラグ */
+  const [dormantSelectedIds, setDormantSelectedIds] = useState<Set<string>>(new Set());
+  const [dormantBulkBusy, setDormantBulkBusy] = useState(false);
   const [newMemberName, setNewMemberName] = useState("");
   const [newMemberLogin, setNewMemberLogin] = useState("");
   const [newMemberPassword, setNewMemberPassword] = useState("12345");
@@ -1703,6 +1706,55 @@ function AdminDashboard(props: {
       cutoff30,
     };
   }, [members, allRecords, todayStr]);
+  const dormantAllSelected =
+    dormantMembers.dormant.length > 0 && dormantMembers.dormant.every((r) => dormantSelectedIds.has(r.member.id));
+  const toggleDormantSelected = (id: string) => {
+    setDormantSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleDormantSelectAll = () => {
+    setDormantSelectedIds((prev) => {
+      if (dormantMembers.dormant.length > 0 && dormantMembers.dormant.every((r) => prev.has(r.member.id))) {
+        return new Set();
+      }
+      return new Set(dormantMembers.dormant.map((r) => r.member.id));
+    });
+  };
+  /** 選択した休眠メンバーを一括で無効化（is_active=false）。既存の単体無効化と同じ経路。 */
+  const handleBulkDeactivateDormant = async () => {
+    const dormantIdSet = new Set(dormantMembers.dormant.map((r) => r.member.id));
+    const ids = Array.from(dormantSelectedIds).filter((id) => dormantIdSet.has(id));
+    if (ids.length === 0 || dormantBulkBusy) return;
+    const names = dormantMembers.dormant
+      .filter((r) => ids.includes(r.member.id))
+      .map((r) => r.member.name)
+      .join("、");
+    if (
+      !window.confirm(
+        `選択した ${ids.length} 名を無効化します。\n\n${names}\n\n一覧から非表示になり、ログインできなくなります（データは残り、アーカイブ一覧から復元できます）。実行しますか？`
+      )
+    )
+      return;
+    setDormantBulkBusy(true);
+    try {
+      for (const id of ids) {
+        await updateMember(id, { isActive: false });
+      }
+      const mems = await loadMembers();
+      setMembers(mems ?? []);
+      setDormantSelectedIds(new Set());
+      onRefresh();
+      alert(`${ids.length} 名を無効化しました。`);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDormantBulkBusy(false);
+    }
+  };
   const [adminMemberTableSort, setAdminMemberTableSort] = useState<{
     key: AdminMemberTableSortKey;
     dir: "asc" | "desc";
@@ -6581,32 +6633,81 @@ function AdminDashboard(props: {
               3ヶ月以上稼働が止まっているメンバーはいません。
             </p>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
-              <table className="w-full min-w-[560px] border-collapse text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50">
-                    <th className="px-3 py-2.5 font-medium text-slate-600">氏名</th>
-                    <th className="px-3 py-2.5 font-medium text-slate-600">最終稼働日</th>
-                    <th className="px-3 py-2.5 font-medium text-slate-600">経過</th>
-                    <th className="px-3 py-2.5 font-medium text-slate-600">管理番号</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dormantMembers.dormant.map(({ member, lastWorkDate, daysSince }) => (
-                    <tr key={member.id} className="border-b border-slate-100 last:border-b-0">
-                      <td className="px-3 py-2.5 font-medium text-slate-800">{member.name}</td>
-                      <td className="px-3 py-2.5 font-mono text-xs tabular-nums text-slate-700 sm:text-sm">
-                        {lastWorkDate}
-                      </td>
-                      <td className="px-3 py-2.5 tabular-nums text-slate-700">{daysSince}日</td>
-                      <td className="px-3 py-2.5 tabular-nums text-slate-500">
-                        {formatMemberInvoiceNumberThreeDigits(member.invoiceNumber) ?? "—"}
-                      </td>
+            <>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void handleBulkDeactivateDormant()}
+                  disabled={dormantSelectedIds.size === 0 || dormantBulkBusy}
+                  className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {dormantBulkBusy ? "無効化中…" : `選択した ${dormantSelectedIds.size} 名を無効化`}
+                </button>
+                {dormantSelectedIds.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setDormantSelectedIds(new Set())}
+                    disabled={dormantBulkBusy}
+                    className="text-xs font-medium text-slate-500 underline hover:text-slate-700 disabled:opacity-40"
+                  >
+                    選択をクリア
+                  </button>
+                )}
+                <span className="text-xs text-slate-500">
+                  無効化すると一覧非表示・ログイン不可になります（アーカイブ一覧から復元可）。
+                </span>
+              </div>
+              <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full min-w-[600px] border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50">
+                      <th className="w-10 px-3 py-2.5">
+                        <input
+                          type="checkbox"
+                          aria-label="全選択"
+                          checked={dormantAllSelected}
+                          onChange={toggleDormantSelectAll}
+                          className="h-4 w-4 cursor-pointer accent-amber-600"
+                        />
+                      </th>
+                      <th className="px-3 py-2.5 font-medium text-slate-600">氏名</th>
+                      <th className="px-3 py-2.5 font-medium text-slate-600">最終稼働日</th>
+                      <th className="px-3 py-2.5 font-medium text-slate-600">経過</th>
+                      <th className="px-3 py-2.5 font-medium text-slate-600">管理番号</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {dormantMembers.dormant.map(({ member, lastWorkDate, daysSince }) => {
+                      const checked = dormantSelectedIds.has(member.id);
+                      return (
+                        <tr
+                          key={member.id}
+                          className={`border-b border-slate-100 last:border-b-0 ${checked ? "bg-amber-50/60" : ""}`}
+                        >
+                          <td className="px-3 py-2.5">
+                            <input
+                              type="checkbox"
+                              aria-label={`${member.name} を選択`}
+                              checked={checked}
+                              onChange={() => toggleDormantSelected(member.id)}
+                              className="h-4 w-4 cursor-pointer accent-amber-600"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 font-medium text-slate-800">{member.name}</td>
+                          <td className="px-3 py-2.5 font-mono text-xs tabular-nums text-slate-700 sm:text-sm">
+                            {lastWorkDate}
+                          </td>
+                          <td className="px-3 py-2.5 tabular-nums text-slate-700">{daysSince}日</td>
+                          <td className="px-3 py-2.5 tabular-nums text-slate-500">
+                            {formatMemberInvoiceNumberThreeDigits(member.invoiceNumber) ?? "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
