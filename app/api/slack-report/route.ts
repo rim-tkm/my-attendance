@@ -18,10 +18,14 @@ export async function GET(request: NextRequest) {
       { status: slackSendFailureHttpStatus(result.error) }
     );
   }
-  return NextResponse.json({ ok: true, date: result.date });
+  return NextResponse.json({
+    ok: true,
+    date: result.date,
+    ...(result.sent ? {} : { skipped: true, skipReason: result.skipReason }),
+  });
 }
 
-/** 手動: POST + Bearer CRON_SECRET、body `{ "date": "YYYY-MM-DD" }` で対象日を指定可 */
+/** 手動: POST + Bearer CRON_SECRET、body `{ "date": "YYYY-MM-DD", "test": true }`。test:true で土日でも送信 */
 export async function POST(request: NextRequest) {
   const denied = verifyCronSecret(request);
   if (denied) return denied;
@@ -29,12 +33,16 @@ export async function POST(request: NextRequest) {
   const dateOverride = typeof body?.date === "string" ? body.date : null;
   const targetDate =
     dateOverride && /^\d{4}-\d{2}-\d{2}$/.test(dateOverride) ? dateOverride : getYesterdayJstDateString();
-  const result = await sendSlackReportForDate(targetDate);
+  const result = await sendSlackReportForDate(targetDate, { bypassWeekendSkip: body?.test === true });
   if (!result.ok) {
     return NextResponse.json(
       { error: result.error, detail: result.detail, ok: false },
       { status: slackSendFailureHttpStatus(result.error) }
     );
   }
-  return NextResponse.json({ ok: true, date: result.date });
+  return NextResponse.json({
+    ok: true,
+    date: result.date,
+    ...(result.sent ? {} : { skipped: true, skipReason: result.skipReason }),
+  });
 }

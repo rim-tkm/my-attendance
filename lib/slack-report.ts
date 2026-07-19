@@ -5,6 +5,7 @@ import {
   DEFAULT_HOURLY_RATE,
   formatDuration,
   getKpiTotalsFromRecords,
+  isWeekendYmd,
   safeRatePercent,
   type KpiRecord,
 } from "@/lib/attendance";
@@ -71,12 +72,27 @@ function rowToKpi(r: DbKpiRow): KpiRecord {
   };
 }
 
-export type SlackReportResult = { ok: true; date: string } | { ok: false; error: string; detail?: string };
+export type SlackReportResult =
+  | { ok: true; date: string; sent: true }
+  | { ok: true; date: string; sent: false; skipReason: "weekend" }
+  | { ok: false; error: string; detail?: string };
+
+export type SendSlackReportOptions = {
+  /** 土日（対象日の暦）でも送信する（手動検証用）。既定は土日スキップ。 */
+  bypassWeekendSkip?: boolean;
+};
 
 /**
  * 指定日（チーム全体）の KPI・稼働・概算委託料を集計し Slack に送信する。
  */
-export async function sendSlackReportForDate(dateStr: string): Promise<SlackReportResult> {
+export async function sendSlackReportForDate(
+  dateStr: string,
+  options?: SendSlackReportOptions
+): Promise<SlackReportResult> {
+  // 対象日（レポート対象の日）が土日なら、稼働がない前提で送信しない。
+  if (!options?.bypassWeekendSkip && isWeekendYmd(dateStr)) {
+    return { ok: true, date: dateStr, sent: false, skipReason: "weekend" };
+  }
   const webhookUrl = resolveSlackWebhookUrl("report");
   if (!webhookUrl) {
     return { ok: false, error: "Slack webhook is not configured", detail: slackWebhookMissingMessage("report") };
@@ -156,5 +172,5 @@ ${apoDetailBlock}`;
     return { ok: false, error: posted.error, detail: posted.detail };
   }
 
-  return { ok: true, date: dateStr };
+  return { ok: true, date: dateStr, sent: true };
 }
