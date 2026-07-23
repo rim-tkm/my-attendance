@@ -8972,7 +8972,7 @@ export default function DashboardPage() {
   /** 打刻可能時間帯・締切の境界で UI を更新する */
   const [punchUiTick, setPunchUiTick] = useState(0);
   const [showEndWithoutStartModal, setShowEndWithoutStartModal] = useState(false);
-  const [manualStartTimeHhmm, setManualStartTimeHhmm] = useState("09:00");
+  const [manualStartTimeHhmm, setManualStartTimeHhmm] = useState("10:00");
   const [endModalSubmitting, setEndModalSubmitting] = useState(false);
   /** 終了打刻成功時に全画面フィードバックを約1秒表示 */
   const [punchCompleteFlash, setPunchCompleteFlash] = useState(false);
@@ -9569,7 +9569,7 @@ export default function DashboardPage() {
         }
       }
       setPunchSubmitPhase("end_modal_open");
-      setManualStartTimeHhmm("09:00");
+      setManualStartTimeHhmm("10:00");
       setShowEndWithoutStartModal(true);
     })();
   };
