@@ -11,6 +11,7 @@
 - **`docs/TROUBLESHOOTING.md`**: 症状→原因→対処。詰まったらまずここ。**新しい解決策は追記**。
 - **`docs/COMMANDS.md`**: コマンド早見表（開発・git・認証復旧・Supabase SQL）。
 - **`docs/DEPLOY.md`**: デプロイ・Cron・本番環境変数・切り戻し手順。
+- **`docs/SESSION_LOG.md`**: 作業ログ（チャット引き継ぎ用・新しいものが上）。**直近に何をしたか／申し送りはここ。チャットを変えた直後は必ず読む。作業が終わったら追記する。**
 
 ---
 
@@ -231,7 +232,7 @@ git status --short          # 変更確認
 
 ## 16. Claudeが作業開始時に最初に確認すべきこと
 
-1. **`CLAUDE.md`（本ファイル）と `PROJECT_HANDOVER.md` を読む。**
+1. **`CLAUDE.md`（本ファイル）と `PROJECT_HANDOVER.md`、`docs/SESSION_LOG.md`（直近の作業と申し送り）を読む。**
 2. `git status --short` と `git log --oneline -5` で現状（未コミット/最新）を確認。
 3. `app/page.tsx` の `type AdminSection`（≈L700）と `navItems`（`AdminDashboard` 内）を見て、管理画面の全機能を把握。
 4. 触る領域に応じて `lib/attendance.ts`（型・ロジック）と `lib/supabase-data.ts`（データ経路）の該当箇所を読む。
@@ -245,5 +246,6 @@ git status --short          # 変更確認
 2. **commit & push**（`git add -A && git commit -m "..." && git push origin main`）。コミットメッセージは「何を・なぜ」を日本語で簡潔に。
 3. ユーザーに **変更点・確認方法（どの画面をどう見るか）・注意点** を伝える。破壊的機能は「まず少数で試す」ことを案内。
 4. スキーマ変更をしたなら **Supabase SQL の実行手順**もセットで渡す。
-5. 大きな設計判断や新たな地雷を見つけたら **`PROJECT_HANDOVER.md` を更新**する。
-6. 「完了した」と言うときは、**検証コマンドの結果（tsc/buildの成功）を根拠**にする。証拠なしに成功を断言しない。
+5. 大きな設計判断や新たな地雷を見つけたら **`PROJECT_HANDOVER.md` を更新**する。設計判断は **`docs/DECISIONS.md` に ADR を追記**する。
+6. **`docs/SESSION_LOG.md` の先頭に今回の作業を追記**する（依頼 / 変更箇所 / 検証 / 反映コミット / 申し送り）。チャットを変えても次のAIが続きから入れるようにするため。
+7. 「完了した」と言うときは、**検証コマンドの結果（tsc/buildの成功）を根拠**にする。証拠なしに成功を断言しない。
