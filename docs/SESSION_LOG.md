@@ -37,4 +37,28 @@
 
 ---
 
+## 2026-07-27（自動転記の請求書を結合版に戻す＋インボイス番号の確認）
+
+- **依頼**: 自動転記（一括記帳）で上がる請求書を「以前みたいに内容（業務委託実績報告書）まで入ってる版」に変更したい。あわせてインボイス番号（適格請求書登録番号）があれば入れてほしい。
+
+- **調査でわかった構造（重要）**:
+  - 自動転記 = [`app/api/admin/invoice-batch-export/route.ts`](../app/api/admin/invoice-batch-export/route.ts)。**導入当初(コミット `0b41e3f`)からずっと「請求書のみ1ページ」**（`renderInvoicePdfBlobFromModel`）だった。
+  - 「請求書＋実績報告書」の3ページ版は**別経路** `renderMemberCombinedPdfBlob`（[`lib/member-combined-pdf.ts`](../lib/member-combined-pdf.ts)）。今もメンバー自身のDL／管理者一括ZIPで使用。過去の3ページPDFはこちら経由で作られたもの。
+  - **インボイス番号は既に実装済み**: メンバーの `invoice_registration_number`(T+13桁)がDBにあれば、請求書PDFの**「お振込先」ボックス内に「登録番号：T…」**として自動表示（[`lib/invoice-pdf-pdflib.ts:637`](../lib/invoice-pdf-pdflib.ts)）。無ければ非表示（＝なし）。表示位置は今回「現状のまま（お振込先の欄）」でユーザー確認済み。
+
+- **変更**: batch-export の PDF 生成を `renderInvoicePdfBlobFromModel(model)` → `renderMemberCombinedPdfBlob(member, yearMonth, allRecords, allKpiRecords)` に差し替え（import含め2箇所・計5行）。
+  - 記帳CSVの数値（`invoiceNo`/`amount` 等）は従来どおり `model` から取得 → **記帳データには影響なし**。PDFの中身だけ3ページ化。
+  - インボイス番号は結合版1ページ目=同じ請求書なので挙動不変（登録があれば出る）。
+
+- **検証**: `npx tsc --noEmit` OK ／ `npm run build` OK（両方緑）。
+
+- **反映**: commit `e0fe385` → `git push origin main` 済み。
+  - この自動転記は**管理画面から手動実行するAPI**（cronではない）。**次に自動転記を回した時から**3ページ版で出る。
+
+- **申し送り**:
+  - もし「番号をヘッダー（会社名・住所付近）に出したい」等になったら pdf-lib のY座標調整が要る（`invoice-pdf-pdflib.ts`、地雷②）。今回は見送り。
+  - 結合版は1ページ版より生成が重い。CHUNK_SIZE=1・maxDuration=300s なので1人ずつなら問題ないが、人数が多い月に途中タイムアウトが出たら範囲指定(startIndex/endIndex)で分割実行する運用は従来どおり有効。
+
+---
+
 <!-- 新しいセッションはこの上に追記してください（新しいものが上） -->
