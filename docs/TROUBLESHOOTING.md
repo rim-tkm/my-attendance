@@ -50,6 +50,12 @@
 - **原因**: フォント埋め込み不足、または範囲区切りに非ASCIIハイフンを使用。
 - **対処**: サーバー生成経路（フルフォント埋め込み）を使う。区切りはASCIIハイフン。`lib/invoice-pdf-pdflib.ts` / `pdf-fonts/`。
 
+### PDFの一部の記号だけ豆腐（□）になる（例: 「※」）
+- **原因**: 同梱フォント `lib/pdf-fonts/NotoSansJP-Regular/Bold.ttf` は**縮小版（約8,361字）**で、`※`(U+203B)・`★`・`●`・`◆`・`■`・`→`(U+2192)・`～`(U+FF5E) 等の**一部記号の字形が入っていない**。漢字・仮名・〒・円・数字・全角カッコ・全角アスタ「＊」(U+FF0A)・「注」等は有り。
+- **切り分け**: `python3 -c "from fontTools.ttLib import TTFont; print(0x203B in TTFont('lib/pdf-fonts/NotoSansJP-Regular.ttf').getBestCmap())"` で字形有無を確認できる。
+- **対処**: PDF描画文字列（`report-pdf-pdflib.ts` / `invoice-pdf-pdflib.ts` の drawText に渡す文字列）では**フォントに含まれる文字だけを使う**。`※`→`＊`(全角アスタ) 等に置換。コメント内の記号は描画されないので無害。
+- **実例**: 2026-07-27 実績報告の注記「※本金額は…」が豆腐化 → 「＊」へ置換（commit `15aa1b9`）。
+
 ### 契約書PDFに「タブ1」が混入・余白ページが出る
 - **原因**: Googleドキュメントのタブ機能を使った（GAS側テンプレ）。
 - **対処**: タブ機能を使わない。テンプレIDは固定運用。`PROJECT_HANDOVER.md §8 地雷③`。
