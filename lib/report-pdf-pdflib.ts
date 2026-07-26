@@ -182,9 +182,11 @@ export async function appendReportPagesToPdfDocument(
   }
   fromTop += 4;
   page.drawText(
+    // 注記マークは同梱フォント(NotoSansJP縮小版)に「※」(U+203B)の字形が無く豆腐化するため、
+    // フォントに含まれる全角アスタリスク「＊」を使う。
     model.isIntern
-      ? "※本金額は管理者承認済みの商談確定数に基づく成果報酬（税込）です。"
-      : "※本金額は業務委託契約に基づく、稼働時間に応じた委託料の概算です。",
+      ? "＊本金額は管理者承認済みの商談確定数に基づく成果報酬（税込）です。"
+      : "＊本金額は業務委託契約に基づく、稼働時間に応じた委託料の概算です。",
     {
     x: m,
     y: baselineY(H, fromTop, noteFs),
