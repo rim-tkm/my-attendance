@@ -8934,6 +8934,32 @@ const EMPTY_MEMBER_SELF_BANK_DRAFT: MemberSelfBankDraft = {
   invoiceRegistrationNumber: "",
 };
 
+/**
+ * 請求書発行に必要な振込先・プロフィール項目のうち、未入力のものの表示名を返す。
+ * 打刻ブロック（handleStart）と本人保存（handleSaveMemberSelfBankProfile）の両方で使い、
+ * 「必須項目」の判定基準を1か所に集約して二重実装によるズレを防ぐ。
+ * ※インボイス登録番号（適格請求書番号）は持たない人がいるため必須対象外。
+ */
+function getMissingBillingProfileFields(source: {
+  postalCode?: string | null;
+  address?: string | null;
+  bankName?: string | null;
+  branchName?: string | null;
+  accountNumber?: string | null;
+  accountHolder?: string | null;
+  phoneNumber?: string | null;
+}): string[] {
+  const missing: string[] = [];
+  if (!(source.postalCode ?? "").trim()) missing.push("郵便番号");
+  if (!(source.address ?? "").trim()) missing.push("住所");
+  if (!(source.bankName ?? "").trim()) missing.push("銀行名");
+  if (!(source.branchName ?? "").trim()) missing.push("支店名");
+  if (!(source.accountNumber ?? "").trim()) missing.push("口座番号");
+  if (!(source.accountHolder ?? "").trim()) missing.push("口座名義");
+  if (!(source.phoneNumber ?? "").trim()) missing.push("電話番号");
+  return missing;
+}
+
 export default function DashboardPage() {
   const [mounted, setMounted] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
@@ -9358,6 +9384,22 @@ export default function DashboardPage() {
     setPunchSubmitPhase("start_sending");
     const uid = currentUserId;
     try {
+      // 請求書発行に必要な情報（振込先・住所・電話番号）が未入力なら打刻させない。
+      // 未入力の人はメッセージで案内し、入力欄「振込先・インボイス設定」へスクロールする。
+      const me = members.find((m) => m.id === uid);
+      const missingProfile = me ? getMissingBillingProfileFields(me) : [];
+      if (missingProfile.length > 0) {
+        setPunchSubmitPhase("idle");
+        if (typeof window !== "undefined") {
+          window.alert(
+            `打刻の前に、請求書の発行に必要な情報の入力が必要です。\n\n未入力の項目：${missingProfile.join("、")}\n\n下の「振込先・インボイス設定」から入力・保存してください。`
+          );
+          document
+            .getElementById("member-billing-profile")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        return;
+      }
       let openFromDb: OpenRecord | null = null;
       try {
         openFromDb = await loadMemberOpenRecordFromDb(uid);
@@ -9934,14 +9976,15 @@ export default function DashboardPage() {
     const accNum = memberSelfBankDraft.accountNumber.trim();
     const accHolder = memberSelfBankDraft.accountHolder.trim();
     const phone = memberSelfBankDraft.phoneNumber.trim();
-    const missing: string[] = [];
-    if (!zip) missing.push("郵便番号");
-    if (!addr) missing.push("住所");
-    if (!bank) missing.push("銀行名");
-    if (!branch) missing.push("支店名");
-    if (!accNum) missing.push("口座番号");
-    if (!accHolder) missing.push("口座名義");
-    if (!phone) missing.push("電話番号");
+    const missing = getMissingBillingProfileFields({
+      postalCode: zip,
+      address: addr,
+      bankName: bank,
+      branchName: branch,
+      accountNumber: accNum,
+      accountHolder: accHolder,
+      phoneNumber: phone,
+    });
     if (missing.length > 0) {
       alert(`振込先情報が未入力です。以下の項目を入力してください。\n\n${missing.join("、")}`);
       return;
@@ -10372,7 +10415,7 @@ export default function DashboardPage() {
             ) : null}
 
             {currentMember && !isAdminUser ? (
-              <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:mb-8 sm:p-6">
+              <section id="member-billing-profile" className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:mb-8 sm:p-6">
                 <h2 className="mb-1 text-sm font-semibold text-slate-800">振込先・インボイス設定</h2>
                 <p className="mb-4 text-xs leading-relaxed text-slate-600">
                   経理・請求書に印字される情報です。
