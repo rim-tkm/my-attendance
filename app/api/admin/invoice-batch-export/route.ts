@@ -24,7 +24,8 @@ import {
   isInvoiceDriveUploadConfigured,
   uploadInvoicePdfToDrive,
 } from "@/lib/invoice-google-drive-upload";
-import { preloadJpFontsForPdf, renderInvoicePdfBlobFromModel } from "@/lib/invoice-pdf-pdflib";
+import { preloadJpFontsForPdf } from "@/lib/invoice-pdf-pdflib";
+import { renderMemberCombinedPdfBlob } from "@/lib/member-combined-pdf";
 import { loadKpiInDateRange, loadMembers, loadRecords } from "@/lib/supabase-data";
 
 export type { InvoiceBatchExportRow };
@@ -320,7 +321,9 @@ async function processMemberChunk(
 
       console.log(`${LOG_PREFIX} PDF生成開始: ${member.name}`);
       const pdfStarted = Date.now();
-      const pdfBlob = await renderInvoicePdfBlobFromModel(model);
+      // 自動転記の請求書は「請求書＋業務委託実績報告書」の結合版（複数ページ）で出す。
+      // 記帳CSVの数値（invoiceNo/amount 等）は下記 model から取るため、PDF が複数ページでも記帳データには影響しない。
+      const pdfBlob = await renderMemberCombinedPdfBlob(member, yearMonth, allRecords, allKpiRecords);
       console.log(`${LOG_PREFIX} PDF生成完了: ${member.name} (${Date.now() - pdfStarted}ms)`);
 
       const buf = Buffer.from(await pdfBlob.arrayBuffer());
