@@ -7,6 +7,29 @@
 
 ---
 
+## 2026-07-27（管理画面の重さ改善・フェーズ1: 再計算の抑制）
+
+- **依頼**: 「アプリが異常に重く、クリックしてから数秒たたないと進まない」。原因調査→対策。対象は**管理画面（AdminDashboard）**、保持期間は**直近3ヶ月**方針で合意。
+
+- **診断（重要）**: 「クリック→数秒」の直接主因は**データ量ではなく毎レンダー再計算**だった。
+  - `AdminDashboard`（`isAdminMode` 時のみ描画・[app/page.tsx:1420](../app/page.tsx)〜）内で `activeMembers`（旧 [1653](../app/page.tsx)）が**毎レンダー新配列**として作られ、これを依存に持つ多数の重い `useMemo`（`dashboardMemberSplit`→`dashboardGeneralMetrics`、`adminMemberTable`、`plannedShiftList`、`dailyActual` 等）が**毎クリック再計算**されていた。
+  - さらに生産性/選択日集計（`rangeKpisForProductivity`/`rangeMinutesForProductivity`/`dateKpis`/`userIdsFromAttendance`/`workingCountForDate`/`dateTeamMinutes`/`apoListForDate`）が**未メモ化**で毎レンダー全配列走査。
+
+- **変更**（[app/page.tsx](../app/page.tsx) のみ・+51/-20）:
+  - `activeMembers` を `useMemo(() => members.filter(...), [members])` 化。
+  - 上記スキャン群を `useMemo` 化（変数名は不変・下流参照はそのまま。deps は期間文字列/`dashboardDate`/元配列）。
+  - **読み込むデータ・表示内容は一切不変**。ムダな再計算を止めるのみ＝低リスク。
+
+- **検証**: `npx tsc --noEmit` ✅ / `npm run build` ✅（両緑）。
+
+- **反映**: コミット `64e2747`（`main`）。
+
+- **申し送り（次にやること）**:
+  - **フェーズ2（未着手・合意済み）**: 起動時ロードを**直近3ヶ月**に絞る（`allRecords/allShifts/allKpiRecords`）。ただし `allRecords/allShifts/allKpiRecords` は全画面共有のため、**古い期間を開く画面**（月選択 `getSelectableMonths` [app/page.tsx:3452付近](../app/page.tsx)／過去月の請求書・実績PDF／メンバー全履歴 [4322付近](../app/page.tsx)／ROI・生産性・KPI・予実乖離アーカイブ・スケジュールCSVの任意期間）には**オンデマンド追加取得の受け皿**が必須。既存 `loadShiftsInDateRange`/`loadKpiInDateRange`（[lib/supabase-data.ts:925/941](../lib/supabase-data.ts)）があるので、`loadRecordsInDateRange` を足して同じ仕組みに乗せる。→ 中リスクなので着手前に設計確認。
+  - まずはユーザーに**今回の効果（クリックの体感）を確認してもらう**のが先。効果不足ならフェーズ2へ。
+
+---
+
 ## 2026-07-23（打刻モーダルの既定時刻変更）
 
 - **依頼元**: Slack / RIM 中野晃之介さん
