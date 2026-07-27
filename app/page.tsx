@@ -1650,7 +1650,10 @@ function AdminDashboard(props: {
 
   const currentYearMonth = getTodayJstDateString().slice(0, 7);
   const todayStr = getTodayJstDateString();
-  const activeMembers = members.filter((mem) => mem.isActive !== false);
+  // members の参照が変わった時だけ再計算する。毎レンダーで新配列を作ると、
+  // activeMembers を依存に持つ多数の重い useMemo（メンバー表・ダッシュボード指標・
+  // 日次実績・シフト予定 等）が毎クリック再計算されてしまうため memo 化する。
+  const activeMembers = useMemo(() => members.filter((mem) => mem.isActive !== false), [members]);
   /** 在籍中の時給制メンバー（インターン除く）を「休眠（過去に稼働歴あり・3ヶ月止まり）」と
    *  「未稼働（一度も打刻なし＝新人を含む）」に分ける。新人が休眠に誤検出されるのを防ぐ。 */
   const dormantMembers = useMemo(() => {
@@ -2159,34 +2162,62 @@ function AdminDashboard(props: {
   ];
 
   const selectedProductivityPeriod = productivityPeriodOptions.find((p) => p.key === productivityPeriodKey) ?? productivityPeriodOptions[0];
-  const rangeKpisForProductivity = getKpiInDateRange(allKpiRecords, selectedProductivityPeriod.start, selectedProductivityPeriod.end);
-  const rangeTotalsForProductivity = getKpiTotalsFromRecords(rangeKpisForProductivity);
-  const rangeMinutesForProductivity = allRecords
-    .filter((r) => r.date >= selectedProductivityPeriod.start && r.date <= selectedProductivityPeriod.end)
-    .reduce((s, r) => s + r.durationMinutes, 0);
+  // 全 KPI / 全稼働を期間で走査する重い計算。期間（文字列）と元配列が変わった時だけ再計算する。
+  const rangeKpisForProductivity = useMemo(
+    () => getKpiInDateRange(allKpiRecords, selectedProductivityPeriod.start, selectedProductivityPeriod.end),
+    [allKpiRecords, selectedProductivityPeriod.start, selectedProductivityPeriod.end]
+  );
+  const rangeTotalsForProductivity = useMemo(
+    () => getKpiTotalsFromRecords(rangeKpisForProductivity),
+    [rangeKpisForProductivity]
+  );
+  const rangeMinutesForProductivity = useMemo(
+    () =>
+      allRecords
+        .filter((r) => r.date >= selectedProductivityPeriod.start && r.date <= selectedProductivityPeriod.end)
+        .reduce((s, r) => s + r.durationMinutes, 0),
+    [allRecords, selectedProductivityPeriod.start, selectedProductivityPeriod.end]
+  );
   const rangeApoCostMinutes =
     rangeTotalsForProductivity.decisionMakerApo > 0 ? rangeMinutesForProductivity / rangeTotalsForProductivity.decisionMakerApo : null;
 
   // ダッシュボード表示日付に基づく集計（Supabase kpis / attendance / open_records を日付でフィルタ）
-  const dateKpis = allKpiRecords.filter((k) => k.date === dashboardDate);
+  // 全配列を選択日で走査する。dashboardDate と元配列が変わった時だけ再計算する。
+  const dateKpis = useMemo(() => allKpiRecords.filter((k) => k.date === dashboardDate), [allKpiRecords, dashboardDate]);
   const dateDecision = dateKpis.reduce((s, k) => s + k.decisionMakerApo, 0);
   const dateNonDecision = dateKpis.reduce((s, k) => s + k.nonDecisionMakerApo, 0);
   // 選択日の「業務開始」活動記録が1回でもあるメンバー数（完了した記録 or 未終了の記録のいずれか）
-  const userIdsFromAttendance = allRecords.filter((r) => r.date === dashboardDate).map((r) => r.userId);
-  const userIdsFromOpen = allOpenRecords.filter((r) => r.date === dashboardDate).map((r) => r.userId);
-  const workingCountForDate = new Set([...userIdsFromAttendance, ...userIdsFromOpen]).size;
-  const dateTeamMinutes = allRecords.filter((r) => r.date === dashboardDate).reduce((s, r) => s + r.durationMinutes, 0);
+  const userIdsFromAttendance = useMemo(
+    () => allRecords.filter((r) => r.date === dashboardDate).map((r) => r.userId),
+    [allRecords, dashboardDate]
+  );
+  const userIdsFromOpen = useMemo(
+    () => allOpenRecords.filter((r) => r.date === dashboardDate).map((r) => r.userId),
+    [allOpenRecords, dashboardDate]
+  );
+  const workingCountForDate = useMemo(
+    () => new Set([...userIdsFromAttendance, ...userIdsFromOpen]).size,
+    [userIdsFromAttendance, userIdsFromOpen]
+  );
+  const dateTeamMinutes = useMemo(
+    () => allRecords.filter((r) => r.date === dashboardDate).reduce((s, r) => s + r.durationMinutes, 0),
+    [allRecords, dashboardDate]
+  );
   const dateApoCostMinutes = dateDecision > 0 ? dateTeamMinutes / dateDecision : null;
   // 決裁者アポまたは非決裁者アポが1件以上あるメンバーのみ、決裁者アポ多い順
-  const apoListForDate = activeMembers
-    .map((mem) => {
-      const k = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), dashboardDate);
-      const dec = k ? k.decisionMakerApo : 0;
-      const non = k ? k.nonDecisionMakerApo : 0;
-      return { mem, dec, non };
-    })
-    .filter(({ dec, non }) => dec >= 1 || non >= 1)
-    .sort((a, b) => b.dec - a.dec);
+  const apoListForDate = useMemo(
+    () =>
+      activeMembers
+        .map((mem) => {
+          const k = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), dashboardDate);
+          const dec = k ? k.decisionMakerApo : 0;
+          const non = k ? k.nonDecisionMakerApo : 0;
+          return { mem, dec, non };
+        })
+        .filter(({ dec, non }) => dec >= 1 || non >= 1)
+        .sort((a, b) => b.dec - a.dec),
+    [activeMembers, allKpiRecords, dashboardDate]
+  );
 
   // 振込先情報が未登録のメンバー（銀行名・支店名・口座番号・口座名義の主要4項目を trim して判定し、4つ揃っていれば入力済みとする）
   const trimVal = (v: string | number | null | undefined) => (v == null ? "" : String(v).trim());
