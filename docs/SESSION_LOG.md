@@ -7,6 +7,24 @@
 
 ---
 
+## 2026-07-27（ログインの体感改善: 二重送信防止＋処理中表示）
+
+- **依頼**: 「ログインする時が遅い」「ボタンが押せてるか不安でダブルタップしてしまう。対処法は？」
+
+- **診断**: ログインは重い認証を2段階で実行（`loginUser` の `bcrypt.compare`（[lib/users.ts:44](../lib/users.ts)）→ `signIn`（NextAuth・[app/page.tsx:9908/9915付近](../app/page.tsx)））で数秒かかるのが本質。にもかかわらずログインボタン（旧 [app/page.tsx:10147](../app/page.tsx)）に**処理中表示も二重押し防止も無かった**。→ 無反応に見えてダブルタップ→重い認証が2回走りさらに遅延、の悪循環。bcrypt は意図的に遅い処理なので「速くする」より「待ちを可視化＋多重実行防止」が正解。
+
+- **変更**（[app/page.tsx](../app/page.tsx) のみ・+39/-22）:
+  - `isLoggingIn` state 追加。`handleLogin` を再入ガード（先頭で `if (isLoggingIn) return;`）＋ `try/finally` で busy 管理＋ catch でエラーメッセージ。
+  - ログインボタンを `disabled`＋スピナー＋「ログイン中…」表示に。入力欄も処理中は `disabled`。
+  - **認証ロジックは不変**。既存の他ボタン（`endModalSubmitting`/`invoiceBatchExportBusy` 等）と同じ方式。
+
+- **検証**: `npx tsc --noEmit` ✅ / `npm run build` ✅。
+- **反映**: コミット `ca9fd1d`（`main`）。
+
+- **申し送り**: 「押した実感が無いボタン」は他にもあり得る（保存/送信系）。今回はユーザー合意でログインのみ対応。要望あれば主要ボタンを一括点検して同方式（busy＋disabled＋再入ガード）を横展開する。多くの主要ボタンは既に busy 状態を持つ（打刻=`punchSubmitPhase`、一括記帳=`invoiceBatchExportBusy` 等）。
+
+---
+
 ## 2026-07-27（管理画面の重さ改善・フェーズ1: 再計算の抑制）
 
 - **依頼**: 「アプリが異常に重く、クリックしてから数秒たたないと進まない」。原因調査→対策。対象は**管理画面（AdminDashboard）**、保持期間は**直近3ヶ月**方針で合意。
