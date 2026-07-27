@@ -9007,6 +9007,8 @@ export default function DashboardPage() {
   const [loginAccount, setLoginAccount] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  /** ログイン処理中フラグ（ボタン無効化・「ログイン中…」表示・二重送信防止に使用） */
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [setupName, setSetupName] = useState("");
   const [setupLogin, setSetupLogin] = useState("");
   const [setupPassword, setSetupPassword] = useState("");
@@ -9904,28 +9906,38 @@ export default function DashboardPage() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    // 二重送信防止：処理中に再度押されても何もしない（bcrypt 認証が2回走るのを防ぐ）
+    if (isLoggingIn) return;
     setLoginError("");
-    const user = await loginUser(loginAccount.trim(), loginPassword);
-    if (user) {
-      if ((user.loginAccount ?? "").toLowerCase() === "admin") {
-        slackAdminAuthMemory.current = { loginId: loginAccount.trim(), password: loginPassword };
+    setIsLoggingIn(true);
+    try {
+      const user = await loginUser(loginAccount.trim(), loginPassword);
+      if (user) {
+        if ((user.loginAccount ?? "").toLowerCase() === "admin") {
+          slackAdminAuthMemory.current = { loginId: loginAccount.trim(), password: loginPassword };
+        } else {
+          slackAdminAuthMemory.current = null;
+        }
+        const na = await signIn("credentials", {
+          loginId: loginAccount.trim(),
+          password: loginPassword,
+          redirect: false,
+        });
+        setCurrentUserId(user.id);
+        setLoginPassword("");
+        // 管理者アカウントは最初から管理者画面で開く（毎回トグルする手間をなくす）
+        setIsAdminMode((user.loginAccount ?? "").toLowerCase() === "admin");
+        if (na?.error) {
+          console.warn("NextAuth セッション作成に失敗（Slack送信などAPIで401になる可能性）:", na.error);
+        }
       } else {
-        slackAdminAuthMemory.current = null;
+        setLoginError("ユーザー名またはパスワードが正しくありません。");
       }
-      const na = await signIn("credentials", {
-        loginId: loginAccount.trim(),
-        password: loginPassword,
-        redirect: false,
-      });
-      setCurrentUserId(user.id);
-      setLoginPassword("");
-      // 管理者アカウントは最初から管理者画面で開く（毎回トグルする手間をなくす）
-      setIsAdminMode((user.loginAccount ?? "").toLowerCase() === "admin");
-      if (na?.error) {
-        console.warn("NextAuth セッション作成に失敗（Slack送信などAPIで401になる可能性）:", na.error);
-      }
-    } else {
-      setLoginError("ユーザー名またはパスワードが正しくありません。");
+    } catch (err) {
+      console.error("handleLogin", err);
+      setLoginError("ログイン処理でエラーが発生しました。通信環境を確認してもう一度お試しください。");
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -10137,14 +10149,19 @@ export default function DashboardPage() {
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-slate-600">ユーザー名</label>
-              <input type="text" value={loginAccount} onChange={(e) => setLoginAccount(e.target.value)} placeholder="ユーザー名" className="rounded border border-slate-300 px-3 py-2 text-sm" autoComplete="username" />
+              <input type="text" value={loginAccount} onChange={(e) => setLoginAccount(e.target.value)} disabled={isLoggingIn} placeholder="ユーザー名" className="rounded border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60" autoComplete="username" />
             </div>
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-slate-600">パスワード</label>
-              <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} placeholder="パスワード" className="rounded border border-slate-300 px-3 py-2 text-sm" autoComplete="current-password" />
+              <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} disabled={isLoggingIn} placeholder="パスワード" className="rounded border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60" autoComplete="current-password" />
             </div>
             {loginError && <p className="text-sm text-red-600">{loginError}</p>}
-            <button type="submit" className="w-full rounded bg-slate-700 py-2.5 text-sm font-medium text-white hover:bg-slate-600">ログイン</button>
+            <button type="submit" disabled={isLoggingIn} aria-busy={isLoggingIn} className="flex w-full items-center justify-center gap-2 rounded bg-slate-700 py-2.5 text-sm font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60">
+              {isLoggingIn && (
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />
+              )}
+              {isLoggingIn ? "ログイン中…" : "ログイン"}
+            </button>
           </form>
         </div>
       </div>
