@@ -1,6 +1,6 @@
 "use client";
 
-import { signIn, signOut } from "next-auth/react";
+import { getSession, signIn, signOut } from "next-auth/react";
 import { useEffect, useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import type { WorkRecord, OpenRecord, Shift, KpiRecord, Member } from "@/lib/attendance";
 import {
@@ -9243,10 +9243,22 @@ export default function DashboardPage() {
         return;
       }
       setShowSetup(false);
+      // リロードするとログイン画面に戻ってしまう対策：
+      // ログイン時に作成済みの NextAuth セッション（Cookie・30日有効）から currentUserId を復元する。
+      // 無効化済みメンバーは復元しない。
+      const session = await getSession();
+      const sessionUserId = (session?.user as { id?: string } | undefined)?.id;
+      const sessionMember = sessionUserId
+        ? mems.find((m) => m.id === sessionUserId && m.isActive !== false)
+        : undefined;
       setCurrentUserId((prev) => {
         if (prev && mems.some((m) => m.id === prev)) return prev;
-        return null;
+        return sessionMember ? sessionMember.id : null;
       });
+      // 管理者アカウントはログイン時と同様、復元時も管理者画面で開く
+      if (sessionMember && (sessionMember.loginAccount ?? "").toLowerCase() === "admin") {
+        setIsAdminMode(true);
+      }
     } catch (err) {
       console.error("hydrate", err);
       setLoadError("Supabase に接続できません。.env.local の NEXT_PUBLIC_SUPABASE_URL と NEXT_PUBLIC_SUPABASE_ANON_KEY を確認し、supabase-schema.sql でテーブルを作成してください。");
