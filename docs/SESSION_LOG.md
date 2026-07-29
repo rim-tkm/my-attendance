@@ -7,6 +7,27 @@
 
 ---
 
+## 2026-07-29（リロードでログアウトされる問題の修正: NextAuthセッションから復元）
+
+- **依頼**: 「毎回リロードするだけでログインはじかれるんですけどどうにかできないですか？」
+
+- **診断**: 地雷⑥そのもの。ログイン時に NextAuth セッション（JWT Cookie・30日有効・[lib/auth.ts](../lib/auth.ts)）は作成しているのに、ログイン判定はメモリ上の `currentUserId`（useState・[app/page.tsx:8998](../app/page.tsx)）のみ。リロード→state消滅→`hydrate()` が `currentUserId` を null のまま→必ずログイン画面に戻る構造だった。
+
+- **変更**（[app/page.tsx](../app/page.tsx) のみ・+14/-1）:
+  - `hydrate()` 末尾で `getSession()`（next-auth/react）を呼び、セッションの `user.id` が有効メンバー（`isActive !== false`）に一致すれば `currentUserId` を復元。admin アカウントは復元時も `isAdminMode: true` で開く（ログイン時と同じ挙動）。
+  - **独自のlocalStorage実装は追加せず**、ログイン時に既に作っていた NextAuth セッションを読むだけ。ログアウト（`signOut`）で消えるのも従来通り。
+
+- **検証**: `npx tsc --noEmit` ✅ / `npm run build` ✅。admin パスワード不明のため実ログイン→リロードの手動確認はユーザーに依頼。
+
+- **反映**: コミット `1a43081`（`main`）。
+
+- **申し送り**:
+  - 復元は「ログイン時に NextAuth セッション作成が成功していた場合」のみ有効。本番で `AUTH_SECRET`/`NEXTAUTH_URL` 未設定だと signIn が失敗し（console.warn は既存実装で出る）、従来通りリロードでログアウトされる。
+  - 管理者の Slack テスト送信用パスワード（`slackAdminAuthMemory`）はメモリ保持のためリロードで消えるが、既存のフォールバック（`window.prompt` で再入力・[app/page.tsx:2400付近](../app/page.tsx)）があるので機能は壊れない。
+  - CLAUDE.md §10 地雷⑥「セッションはリロードで消える」は本修正で解消。次回ドキュメント整備時に文言更新を検討。
+
+---
+
 ## 2026-07-27（ログインの体感改善: 二重送信防止＋処理中表示）
 
 - **依頼**: 「ログインする時が遅い」「ボタンが押せてるか不安でダブルタップしてしまう。対処法は？」
