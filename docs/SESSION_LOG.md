@@ -7,7 +7,24 @@
 
 ---
 
-## 2026-07-30（続き：リロード直後にログイン画面が見える問題の修正）
+## 2026-07-30（2部制メンバーの2回目「業務開始」が押せないバグ修正）
+
+- **依頼**: 「10-12時/13-16時の2部制の人が、10-12で打刻終了した後、13時に業務開始を押すと押せなかった。原因を突き止めて→デプロイまでして」
+
+- **診断**: 開始打刻の予定ベース許可ウィンドウが**その日の最速枠の開始だけ**を基準に「開始−60分〜開始＋60分」で計算されていた（旧 `getMemberStartPunchEarliest/LatestJstMinutesSinceMidnight`・[lib/punch-time-guard.ts](../lib/punch-time-guard.ts)）。10-12/13-16 の人は許可窓が 9:45〜11:00 のみになり、13:00 の2回目開始は「遅すぎ」で拒否（トースト「稼働開始は予定時刻の1時間後まで可能です。管理者に連絡してください」）。
+  - さらに過去の `61c40f7`（2026-06-01「休憩後の業務開始ボタン無効化バグを修正」）が**ボタンの見た目だけ** `hasWorkedTodayAlready` で有効化していたため、「押せるのに押すとエラー」というチグハグが発生していた（handleStart と DB保存側 `assertMemberOpenRecordPunchAllowed` には免除なし）。
+
+- **変更**（[lib/punch-time-guard.ts](../lib/punch-time-guard.ts) +43/-47・[app/page.tsx](../app/page.tsx) +12/-16）:
+  - 新設 `getMemberStartPunchWindowsJstMinutes`: **枠1・枠2それぞれの開始±60分**の許可ウィンドウ一覧を返す（`getShiftPlannedSegmentsChronological` ベース・9:45/21:15クランプ）。予定なしは null。
+  - `isMemberStartPunchAllowedByPlannedWorkJst` / `assertMemberStartPunchAllowedByPlannedWork` をウィンドウ一覧判定に書き換え（全窓より後=遅すぎ、それ以外の窓外=早すぎ）。旧 Earliest/Latest ヘルパーは削除。
+  - page.tsx の `punchStartPlanBlockReason`・handleStart 内の tooLate 判定を新ヘルパーに置換。
+  - `hasWorkedTodayAlready` の抜け道を撤去し、ボタン無効化条件と実判定を一致させた（UI・handleStart・DB保存の3層が同一規則に）。
+
+- **検証**: `npx tsc --noEmit` ✅ / `npm run build` ✅ / 一時スクリプト（tsx・削除済み）で10ケース検証 ALL PASS（10-12/13-16 で 10:00・11:00・12:00・13:00・14:00 許可、11:30 は早すぎ、14:01 は遅すぎ、1枠のみの13:00は従来どおり拒否、予定なしは日次窓のみ）。
+
+- **反映**: コミット `f99a8a6`（`main`）。
+
+- **申し送り**: 枠間ギャップ（例 11:01〜11:59）は「早すぎ」メッセージになる（次の枠基準）。枠2開始の1時間前（例 12:00）から開始できる仕様は枠1と同じ前倒しルールの適用。
 
 - **依頼**: 前回修正(1a43081)後も「リロードしてもログイン画面に行く」との報告。
 
