@@ -8993,6 +8993,10 @@ function getMissingBillingProfileFields(source: {
 
 export default function DashboardPage() {
   const [mounted, setMounted] = useState(false);
+  // リロード時、セッション復元の判定が終わるまでログイン画面を出さないためのフラグ
+  const [sessionChecked, setSessionChecked] = useState(false);
+  // 初回データ読み込みが終わるまで空のダッシュボードを出さないためのフラグ
+  const [initialDataLoaded, setInitialDataLoaded] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -9204,6 +9208,24 @@ export default function DashboardPage() {
         return;
       }
       setMembers(mems);
+      // リロードするとログイン画面に戻ってしまう対策：
+      // ログイン時に作成済みの NextAuth セッション（Cookie・30日有効）から currentUserId を復元する。
+      // 重いデータ読み込みの前に行い、判定完了（sessionChecked）までログイン画面は表示しない。
+      // 無効化済みメンバーは復元しない。
+      const session = await getSession();
+      const sessionUserId = (session?.user as { id?: string } | undefined)?.id;
+      const sessionMember = sessionUserId
+        ? mems.find((m) => m.id === sessionUserId && m.isActive !== false)
+        : undefined;
+      setCurrentUserId((prev) => {
+        if (prev && mems.some((m) => m.id === prev)) return prev;
+        return sessionMember ? sessionMember.id : null;
+      });
+      // 管理者アカウントはログイン時と同様、復元時も管理者画面で開く
+      if (sessionMember && (sessionMember.loginAccount ?? "").toLowerCase() === "admin") {
+        setIsAdminMode(true);
+      }
+      setSessionChecked(true);
       const [records, openRecs, shifts, kpis, gapDetailed0] = await Promise.all([
         loadRecords(),
         loadOpenRecords(),
@@ -9243,27 +9265,15 @@ export default function DashboardPage() {
         return;
       }
       setShowSetup(false);
-      // リロードするとログイン画面に戻ってしまう対策：
-      // ログイン時に作成済みの NextAuth セッション（Cookie・30日有効）から currentUserId を復元する。
-      // 無効化済みメンバーは復元しない。
-      const session = await getSession();
-      const sessionUserId = (session?.user as { id?: string } | undefined)?.id;
-      const sessionMember = sessionUserId
-        ? mems.find((m) => m.id === sessionUserId && m.isActive !== false)
-        : undefined;
-      setCurrentUserId((prev) => {
-        if (prev && mems.some((m) => m.id === prev)) return prev;
-        return sessionMember ? sessionMember.id : null;
-      });
-      // 管理者アカウントはログイン時と同様、復元時も管理者画面で開く
-      if (sessionMember && (sessionMember.loginAccount ?? "").toLowerCase() === "admin") {
-        setIsAdminMode(true);
-      }
     } catch (err) {
       console.error("hydrate", err);
       setLoadError("Supabase に接続できません。.env.local の NEXT_PUBLIC_SUPABASE_URL と NEXT_PUBLIC_SUPABASE_ANON_KEY を確認し、supabase-schema.sql でテーブルを作成してください。");
       setMembers([]);
       setCurrentUserId(null);
+    } finally {
+      // どの経路（成功・エラー・早期return）でもローディング表示が固まらないようにする
+      setSessionChecked(true);
+      setInitialDataLoaded(true);
     }
   }, []);
 
@@ -10153,6 +10163,16 @@ export default function DashboardPage() {
   }
 
   if (currentUserId === null) {
+    // セッション復元の判定が終わる前にログイン画面を出すと、
+    // ログイン済みなのに「ログアウトされた」ように見えてしまうため、判定完了まではローディングを表示する。
+    if (!sessionChecked) {
+      return (
+        <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center gap-3 p-4">
+          <span className="h-8 w-8 animate-spin rounded-full border-4 border-slate-300 border-t-slate-700" aria-hidden="true" />
+          <p className="text-sm font-medium text-slate-600" role="status">読み込み中…</p>
+        </div>
+      );
+    }
     return (
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-md">
@@ -10176,6 +10196,17 @@ export default function DashboardPage() {
             </button>
           </form>
         </div>
+      </div>
+    );
+  }
+
+  // ログイン済み（セッション復元含む）でも、初回データの読み込みが終わるまではローディングを表示する。
+  // 空のダッシュボードが一瞬見えて「データが消えた」と誤解されるのを防ぐ。
+  if (!initialDataLoaded) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex flex-col items-center justify-center gap-3 p-4">
+        <span className="h-8 w-8 animate-spin rounded-full border-4 border-slate-300 border-t-slate-700" aria-hidden="true" />
+        <p className="text-sm font-medium text-slate-600" role="status">読み込み中…</p>
       </div>
     );
   }
