@@ -14,17 +14,17 @@ export const PUNCH_DEADLINE_PASSED_MESSAGE =
   "打刻期限を過ぎました。管理者に連絡して時間を報告してください";
 
 /** 業務開始打刻: 各枠の稼働予定開始のこの分だけ前から許可 */
-export const PUNCH_START_LEAD_MINUTES_BEFORE_PLANNED = 60;
+export const PUNCH_START_LEAD_MINUTES_BEFORE_PLANNED = 30;
 
 /** 業務開始打刻: 各枠の稼働予定開始のこの分だけ後まで許可 */
-export const PUNCH_START_LAG_MINUTES_AFTER_PLANNED = 60;
+export const PUNCH_START_LAG_MINUTES_AFTER_PLANNED = 30;
 
 /** 予定に基づく開始打刻がまだ早いとき（UI 案内・API エラーで共通） */
-export const PUNCH_START_BEFORE_PLANNED_MESSAGE = "稼働開始は予定時刻の1時間前から可能です";
+export const PUNCH_START_BEFORE_PLANNED_MESSAGE = `稼働開始は予定時刻の${PUNCH_START_LEAD_MINUTES_BEFORE_PLANNED}分前から可能です`;
 
 /** 予定に基づく開始打刻が遅すぎるとき（UI 案内・API エラーで共通） */
 export const PUNCH_START_AFTER_PLANNED_MESSAGE =
-  "稼働開始は予定時刻の1時間後まで可能です。管理者に連絡してください";
+  `稼働開始は予定時刻の${PUNCH_START_LAG_MINUTES_AFTER_PLANNED}分後まで可能です。管理者に連絡してください`;
 
 const WINDOW_START_MIN = 9 * 60 + 45;
 const WINDOW_END_MIN = 21 * 60 + 15;
@@ -73,8 +73,8 @@ export function isWithinDailyPunchClockWindowJst(at: Date): boolean {
 
 /**
  * 予定に基づく業務開始打刻の許可ウィンドウ（JST の「その日 0:00 からの分」）一覧。
- * 2部制（枠1・枠2）に対応し、各枠の開始時刻の前後60分をそれぞれ許可する
- * （例: 10-12/13-16 の予定なら 9:45〜11:00 と 12:00〜14:00 の2つ）。
+ * 2部制（枠1・枠2）に対応し、各枠の開始時刻の前後30分をそれぞれ許可する
+ * （例: 10-12/13-16 の予定なら 9:45〜10:30 と 12:30〜13:30 の2つ）。
  * 従来は最速枠の開始だけを基準にしていたため、枠2の開始打刻が「遅すぎ」で弾かれていた。
  * 具体の予定が無い場合は null（9:45〜21:15 の日次ウィンドウのみ適用）。開始昇順で返す。
  */

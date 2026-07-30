@@ -10705,7 +10705,7 @@ export default function DashboardPage() {
                       <p className="text-center text-[11px] leading-snug text-slate-500 sm:text-xs">
                         {punchStartPlanBlockReason === "late"
                           ? PUNCH_START_AFTER_PLANNED_MESSAGE
-                          : "稼働開始は予定時刻の1時間前〜1時間後に打刻可能です"}
+                          : "稼働開始は予定時刻の30分前〜30分後に打刻可能です"}
                       </p>
                     )}
                 </div>
