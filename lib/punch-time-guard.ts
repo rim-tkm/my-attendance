@@ -2,8 +2,8 @@ import type { OpenRecord, Shift, WorkRecord } from "@/lib/attendance";
 import {
   SHIFT_ENTRY_NONE,
   canonicalShiftForUserDate,
-  earliestPlannedShiftStartMinutes,
   formatYmdJst,
+  getShiftPlannedSegmentsChronological,
   WORK_DURATION_EXCEEDS_24H_MESSAGE,
   WORK_DURATION_HARD_MAX_MINUTES,
 } from "@/lib/attendance";
@@ -13,10 +13,10 @@ export const PUNCH_OUTSIDE_WINDOW_MESSAGE = "打刻は9:45〜21:15の間のみ�
 export const PUNCH_DEADLINE_PASSED_MESSAGE =
   "打刻期限を過ぎました。管理者に連絡して時間を報告してください";
 
-/** 業務開始打刻: 当日の最も早い稼働予定開始のこの分だけ前から許可 */
+/** 業務開始打刻: 各枠の稼働予定開始のこの分だけ前から許可 */
 export const PUNCH_START_LEAD_MINUTES_BEFORE_PLANNED = 60;
 
-/** 業務開始打刻: 当日の最も早い稼働予定開始のこの分だけ後まで許可 */
+/** 業務開始打刻: 各枠の稼働予定開始のこの分だけ後まで許可 */
 export const PUNCH_START_LAG_MINUTES_AFTER_PLANNED = 60;
 
 /** 予定に基づく開始打刻がまだ早いとき（UI 案内・API エラーで共通） */
@@ -72,50 +72,46 @@ export function isWithinDailyPunchClockWindowJst(at: Date): boolean {
 }
 
 /**
- * 業務開始打刻が許可される JST の「その日 0:00 からの分」（下限）。
- * - 具体の稼働予定がある: max(9:45, 最速枠の開始 − 60分)
- * - 予定なし・枠なし: 9:45
+ * 予定に基づく業務開始打刻の許可ウィンドウ（JST の「その日 0:00 からの分」）一覧。
+ * 2部制（枠1・枠2）に対応し、各枠の開始時刻の前後60分をそれぞれ許可する
+ * （例: 10-12/13-16 の予定なら 9:45〜11:00 と 12:00〜14:00 の2つ）。
+ * 従来は最速枠の開始だけを基準にしていたため、枠2の開始打刻が「遅すぎ」で弾かれていた。
+ * 具体の予定が無い場合は null（9:45〜21:15 の日次ウィンドウのみ適用）。開始昇順で返す。
  */
-export function getMemberStartPunchEarliestJstMinutesSinceMidnight(shift: Shift | undefined | null): number {
-  const earliestPlan = earliestPlannedShiftStartMinutes(shift ?? undefined);
-  if (earliestPlan == null || !Number.isFinite(earliestPlan)) {
-    return WINDOW_START_MIN;
-  }
-  return Math.max(WINDOW_START_MIN, earliestPlan - PUNCH_START_LEAD_MINUTES_BEFORE_PLANNED);
-}
-
-/**
- * 業務開始打刻が許可される JST の「その日 0:00 からの分」（上限）。
- * 具体の稼働予定があるときのみ min(21:15, 最速枠の開始 + 60分)。予定なしは null（日次上限のみ）。
- */
-export function getMemberStartPunchLatestJstMinutesSinceMidnight(shift: Shift | undefined | null): number | null {
-  const earliestPlan = earliestPlannedShiftStartMinutes(shift ?? undefined);
-  if (earliestPlan == null || !Number.isFinite(earliestPlan)) {
-    return null;
-  }
-  return Math.min(WINDOW_END_MIN, earliestPlan + PUNCH_START_LAG_MINUTES_AFTER_PLANNED);
+export function getMemberStartPunchWindowsJstMinutes(
+  shift: Shift | undefined | null
+): { from: number; to: number }[] | null {
+  const segs = getShiftPlannedSegmentsChronological(shift);
+  if (segs.length === 0) return null;
+  return segs.map((seg) => ({
+    from: Math.max(WINDOW_START_MIN, seg.startMin - PUNCH_START_LEAD_MINUTES_BEFORE_PLANNED),
+    to: Math.min(WINDOW_END_MIN, seg.startMin + PUNCH_START_LAG_MINUTES_AFTER_PLANNED),
+  }));
 }
 
 /** 現在時刻が「予定に基づく業務開始打刻」ウィンドウ内か（当日 JST の分で比較） */
 export function isMemberStartPunchAllowedByPlannedWorkJst(now: Date, shift: Shift | undefined | null): boolean {
   const m = getJstMinutesSinceMidnight(now);
   if (m < 0) return false;
-  if (m < getMemberStartPunchEarliestJstMinutesSinceMidnight(shift)) return false;
-  const latest = getMemberStartPunchLatestJstMinutesSinceMidnight(shift);
-  if (latest != null && m > latest) return false;
-  return true;
+  const windows = getMemberStartPunchWindowsJstMinutes(shift);
+  if (windows == null) return m >= WINDOW_START_MIN;
+  return windows.some((w) => m >= w.from && m <= w.to);
 }
 
 export function assertMemberStartPunchAllowedByPlannedWork(now: Date, shift: Shift | undefined | null): void {
   const m = getJstMinutesSinceMidnight(now);
   if (m < 0) throw new Error(PUNCH_OUTSIDE_WINDOW_MESSAGE);
-  if (m < getMemberStartPunchEarliestJstMinutesSinceMidnight(shift)) {
-    throw new Error(PUNCH_START_BEFORE_PLANNED_MESSAGE);
+  const windows = getMemberStartPunchWindowsJstMinutes(shift);
+  if (windows == null) {
+    if (m < WINDOW_START_MIN) throw new Error(PUNCH_START_BEFORE_PLANNED_MESSAGE);
+    return;
   }
-  const latest = getMemberStartPunchLatestJstMinutesSinceMidnight(shift);
-  if (latest != null && m > latest) {
+  if (windows.some((w) => m >= w.from && m <= w.to)) return;
+  // 全ウィンドウより後なら「遅すぎ」、それ以外（最初の枠の前・枠と枠の間）は次の枠に対して「早すぎ」
+  if (m > windows[windows.length - 1]!.to) {
     throw new Error(PUNCH_START_AFTER_PLANNED_MESSAGE);
   }
+  throw new Error(PUNCH_START_BEFORE_PLANNED_MESSAGE);
 }
 
 function slotEndMs(ymd: string, start: string, end: string): number | null {

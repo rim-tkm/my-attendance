@@ -181,8 +181,7 @@ import {
   isWithinDailyPunchClockWindowJst,
   isMemberEndPunchLockedByPlanAt,
   isMemberStartPunchAllowedByPlannedWorkJst,
-  getMemberStartPunchEarliestJstMinutesSinceMidnight,
-  getMemberStartPunchLatestJstMinutesSinceMidnight,
+  getMemberStartPunchWindowsJstMinutes,
   getJstMinutesSinceMidnight,
   PUNCH_OUTSIDE_WINDOW_MESSAGE,
   PUNCH_DEADLINE_PASSED_MESSAGE,
@@ -9361,11 +9360,10 @@ export default function DashboardPage() {
     if (!memberPunchContext || punchBlockedJstWeekend || !punchWindowOkJst) return null;
     const m = getJstMinutesSinceMidnight(punchNow);
     if (m < 0) return null;
-    const earliest = getMemberStartPunchEarliestJstMinutesSinceMidnight(todayShiftForStartPunch);
-    if (m < earliest) return "early" as const;
-    const latest = getMemberStartPunchLatestJstMinutesSinceMidnight(todayShiftForStartPunch);
-    if (latest != null && m > latest) return "late" as const;
-    return null;
+    const windows = getMemberStartPunchWindowsJstMinutes(todayShiftForStartPunch);
+    if (windows == null || windows.some((w) => m >= w.from && m <= w.to)) return null;
+    // 全ウィンドウより後なら「遅すぎ」、それ以外（最初の枠の前・枠と枠の間）は「早すぎ」
+    return m > windows[windows.length - 1]!.to ? ("late" as const) : ("early" as const);
   })();
   const openShiftForPunch =
     openRecord != null
@@ -9377,16 +9375,13 @@ export default function DashboardPage() {
     !isWeekendYmdJst(openRecord.date) &&
     isMemberEndPunchLockedByPlanAt(punchNow, openRecord.date, openShiftForPunch);
   const punchFlowBusy = punchSubmitPhase !== "idle";
-  const hasWorkedTodayAlready = allRecords.some(
-    (r) => r.userId === (currentUserId ?? "") && r.date === formatYmdJst(punchNow)
-  );
   const punchStartDisabled =
     !memberPunchContext ||
     !!openRecord ||
     punchFlowBusy ||
     punchBlockedJstWeekend ||
     !punchWindowOkJst ||
-    (!hasWorkedTodayAlready && !punchStartAllowedByPlan);
+    !punchStartAllowedByPlan;
   const punchEndDisabledWithOpen =
     !memberPunchContext ||
     !openRecord ||
@@ -9481,8 +9476,8 @@ export default function DashboardPage() {
       const shiftForStart = canonicalShiftForUserDate(allShifts, uid, getTodayJstDateString(guardNow));
       if (!isMemberStartPunchAllowedByPlannedWorkJst(guardNow, shiftForStart)) {
         const m = getJstMinutesSinceMidnight(guardNow);
-        const latest = getMemberStartPunchLatestJstMinutesSinceMidnight(shiftForStart);
-        const tooLate = latest != null && m > latest;
+        const windows = getMemberStartPunchWindowsJstMinutes(shiftForStart);
+        const tooLate = windows != null && windows.length > 0 && m > windows[windows.length - 1]!.to;
         setPunchToast({
           message: tooLate ? PUNCH_START_AFTER_PLANNED_MESSAGE : PUNCH_START_BEFORE_PLANNED_MESSAGE,
           isError: true,
