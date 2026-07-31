@@ -1,3 +1,5 @@
+import { withNetworkRetry } from "@/lib/network-retry";
+
 /**
  * Slack Incoming Webhook の URL を用途ごとに解決する。
  * 用途専用の環境変数に**有効な文字列**があるときだけそれを使い、
@@ -87,14 +89,14 @@ function slackIncomingWebhookBodyIsSuccess(text: string): boolean {
   }
 }
 
-/**
- * Incoming Webhook へ POST し、HTTP と応答本文で成功を検証する。
- * 200 でも本文が ok でない場合は失敗（未送達を成功扱いしない）。
- */
-export async function postSlackIncomingWebhook(
+type SlackPostFailure = { ok: false; error: string; detail: string };
+type SlackPostAttempt = { ok: true } | (SlackPostFailure & { retryable: boolean });
+
+/** Incoming Webhook への 1 回分の送信。再試行してよい失敗かを retryable で返す。 */
+async function attemptSlackIncomingWebhook(
   webhookUrl: string,
   payload: Record<string, unknown>
-): Promise<{ ok: true } | { ok: false; error: string; detail: string }> {
+): Promise<SlackPostAttempt> {
   let res: Response;
   try {
     res = await fetch(webhookUrl, {
@@ -103,33 +105,71 @@ export async function postSlackIncomingWebhook(
       body: JSON.stringify(payload),
     });
   } catch (e) {
+    // ネットワーク例外は一時的な可能性が高いので再試行する
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[Slack webhook] fetch failed:", msg);
-    return { ok: false, error: "Slack への接続に失敗しました", detail: msg };
+    return { ok: false, error: "Slack への接続に失敗しました", detail: msg, retryable: true };
   }
 
   const raw = await res.text();
   const bodyText = raw.trim();
 
   if (!res.ok) {
-    console.error("[Slack webhook] HTTP", res.status, bodyText);
+    // 429（レート制限）と 5xx（サーバ側一時障害）だけ再試行。4xx は設定不備等なので即失敗。
+    const retryable = res.status === 429 || res.status >= 500;
+    console.error("[Slack webhook] HTTP", res.status, bodyText, retryable ? "(retry)" : "");
     return {
       ok: false,
       error: "Slack がエラーを返しました",
       detail: bodyText || `HTTP ${res.status}`,
+      retryable,
     };
   }
 
   if (!slackIncomingWebhookBodyIsSuccess(bodyText)) {
+    // 200 だが本文が ok でない＝ペイロード/設定の問題が多く、再試行しても変わらないため即失敗
     console.error("[Slack webhook] 送達未確認（応答本文）:", bodyText || "(空)");
     return {
       ok: false,
       error: "Slack が送信成功を返しませんでした",
       detail: bodyText || "応答が空です。Webhook URL・チャンネル・ワークスペースを確認してください。",
+      retryable: false,
     };
   }
 
   return { ok: true };
+}
+
+/**
+ * Incoming Webhook へ POST し、HTTP と応答本文で成功を検証する。
+ * 200 でも本文が ok でない場合は失敗（未送達を成功扱いしない）。
+ * 一時障害（ネットワーク例外・429・5xx）は最大3回まで自動再試行する（4xx等は即失敗）。
+ */
+export async function postSlackIncomingWebhook(
+  webhookUrl: string,
+  payload: Record<string, unknown>
+): Promise<{ ok: true } | SlackPostFailure> {
+  let lastFailure: SlackPostFailure = {
+    ok: false,
+    error: "Slack 送信に失敗しました",
+    detail: "",
+  };
+  try {
+    return await withNetworkRetry(
+      async () => {
+        const r = await attemptSlackIncomingWebhook(webhookUrl, payload);
+        if (r.ok) return { ok: true } as const;
+        lastFailure = { ok: false, error: r.error, detail: r.detail };
+        // 再試行可なら例外を投げて withNetworkRetry に再試行させる。不可ならそのまま返す。
+        if (r.retryable) throw new Error(r.detail || r.error);
+        return lastFailure;
+      },
+      { maxAttempts: 3, baseDelayMs: 500, perAttemptTimeoutMs: 10_000 }
+    );
+  } catch {
+    // 再試行を使い切っても回復しなかった一時障害
+    return lastFailure;
+  }
 }
 
 /** API ルート用: 設定不備は 500、Slack 側・ネットワーク不調は 502 */
