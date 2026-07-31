@@ -50,6 +50,17 @@
 - 方式候補B: Supabase Auth を導入し `auth.uid()` ベースの本人限定RLS（NextAuthと二重管理の整理が必要）。
 - どちらも中〜大。usersを守った後に別途設計。
 
+## 進捗（2026-07-31）
+- ✅ フェーズ0：プラン・`lib/supabase-admin.ts`・`SUPABASE_SERVICE_ROLE_KEY`(Vercel投入)。
+- ✅ service_roleキー疎通検証：`GET /api/admin/members` で168名取得(本番・管理者セッション)。
+- ✅ 1-1途中：`getUsersDb()`（サーバ=service_role/クライアント=anon）を `loadMembers` に適用。サーバNextAuthログインも service_role で users を読む（本番ログイン/リロード確認済 `eccbb28`）。
+- ✅ 読み取りAPI足場：`GET /api/admin/members`(管理者=全件・PW除外)＋`GET /api/member/me`(本人1件・PW除外)。**まだクライアント未使用**。
+- ⬜ **残り（リスク高・要集中）**:
+  1. **書き込み系のサーバ集約**: `addMember`/`updateMemberOrThrow`/`deleteMember`/`saveMembers`/`allocateNextInvoiceManagementNumber` を `getUsersDb` 化 or サーバAPIに寄せる。`member-update`/`bank-profile` 等の既存サーバ経路も getSupabase(anon)→admin へ。
+  2. **クライアント読み取り差し替え**: `page.tsx` の `loadMembers` 直呼び(hydrate等)を、管理者=`/api/admin/members`・一般=`/api/member/me` に。**要確認: 一般メンバー画面が他メンバー情報を必要としないか**（必要なら「名前だけの公開ビュー」等を別途設計）。
+  3. **ログイン signIn 化**: `page.tsx:9939` の client `loginUser` を撤去し `signIn()` に一本化（anon での users 読みを無くす）。**リロード復元(hydrate/sessionChecked)に影響・要本番確認**。
+  4. **RLS締め**: `drop policy "Allow all for users" on public.users;`。締めた後 `curl`(anon)で users が読めないこと＋アプリ正常動作を確認。
+
 ## フェーズ3：④認証堅牢化（初期PWランダム化＋初回変更必須・試行回数制限）
 
 ---
