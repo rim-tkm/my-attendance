@@ -26,7 +26,10 @@
 - **本番Supabase実体確認済（pg_policies）**: 全7テーブル `USING(true) WITH CHECK(true)`＝全開放。FREEプラン・quota超過警告あり（2026-08-14以降制限の可能性）。
 
 - **申し送り（残Critical・未着手）**:
-  - **①RLS全開放（最大の穴）**: パスワードはハッシュ化したが、口座/住所/氏名等は今も平文＆anonで読み書き可能。正しい対処はサーバ側移行（service_role未導入・ブラウザ直クエリ・ログインも page.tsx:9939 でクライアント `loginUser`）。**アプリ全体が壊れるため段階移行必須・本番DB変更につき事前確認必須**。
+  - **①RLS全開放（最大の穴・フェーズ0完了/フェーズ1未着手）**: パスワードはハッシュ化したが、口座/住所/氏名等は今も平文＆anonで読み書き可能。
+    - **フェーズ0（完了・`1bb1729`）**: 段階移行プラン [docs/RLS_MIGRATION_PLAN.md](RLS_MIGRATION_PLAN.md) 策定。`lib/supabase-admin.ts`（service_role・クライアント誤importで例外）追加。**Vercelに `SUPABASE_SERVICE_ROLE_KEY` 投入済（Production/Preview・Sensitive・非NEXT_PUBLIC）**。`.env.local` は未設定（ローカルで service_role は扱わない方針）。
+    - **フェーズ1（次回・未着手）**: usersをサーバ移行→RLS締め。手順は RLS_MIGRATION_PLAN.md の1-1〜1-4。①ログインをサーバ専用に（page.tsx:9939 の client `loginUser`→`signIn`。**先日直したリロード復元 hydrate/sessionChecked に触るので各段で本番ログイン確認**）→②メンバー取得/更新のサーバAPI（既存 `app/api/admin/member-update` は認証付きだが getSupabase(anon) 使用→admin化要）→③クライアント23箇所差し替え→④`drop policy "Allow all for users"`。**繊細＝小分けに実装し都度検証**。
+    - 補足: `member-update`/`bank-profile` 等サーバ経路も現状 anon 使用のため、RLS締め前に service_role へ切替が必要。
   - **④認証堅牢化（残）**: 初期PW"12345"のランダム化＋初回変更必須（users.must_change_password列追加・登録/ログインUI）、ログイン試行回数制限、AUTH_SECRET未設定で起動停止。※無効化メンバーのセッション失効は既に対応済（loginUser 1537・hydrate 9225 とも isActive!==false 判定あり。残る窓は「無効化された本人が同一タブでリロードしない間」のみ・低リスク）。
   - `external-register-auth.ts` のフェイルオープンは本番でsecret設定済みのため実害無し（フェイルクローズ化は任意）。
   - メモリ: [[security-audit-2026-07-31]] に要点記録済み。
