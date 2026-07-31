@@ -76,7 +76,7 @@ async function hashPasswordForStorage(plain: string | null | undefined): Promise
   return await bcrypt.hash(s, 10);
 }
 
-type DbUser = {
+export type DbUser = {
   id: string;
   name: string;
   furigana?: string | null;
@@ -166,7 +166,7 @@ function normStr(v: string | number | null | undefined): string {
   return String(v).trim();
 }
 
-function toMember(r: DbUser): Member {
+export function toMember(r: DbUser): Member {
   const zip = normStr(r.zip_code ?? r.postal_code ?? "");
   const addr = normStr(r.address ?? "");
   const bank = normStr(r.bank_name ?? "");
