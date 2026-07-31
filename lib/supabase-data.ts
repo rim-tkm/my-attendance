@@ -62,6 +62,19 @@ async function passwordMatchesStored(stored: string, plain: string): Promise<boo
   return s === plain;
 }
 
+/**
+ * 保存用にパスワードを bcrypt ハッシュ化する。
+ * - 空文字はそのまま（ログイン不可メンバーの空PWを維持）。
+ * - 既に bcrypt 形式ならそのまま（二重ハッシュ防止）。
+ * DB に平文を書かないための入口。全ての password 書き込み経路はこれを通すこと。
+ */
+async function hashPasswordForStorage(plain: string | null | undefined): Promise<string> {
+  const s = String(plain ?? "");
+  if (s === "") return "";
+  if (/^\$2[aby]\$/.test(s)) return s;
+  return await bcrypt.hash(s, 10);
+}
+
 type DbUser = {
   id: string;
   name: string;
@@ -406,15 +419,18 @@ export async function saveMembers(members: Member[]): Promise<void> {
         }
       }
     }
-    const rowsBase = members.map((m) => {
-      const row = usersUpsertRowFromMember(m);
-      const incoming = normStr(m.invoiceNumber ?? "");
-      if (incoming === "") {
-        const prev = existingInv.get(m.id);
-        if (prev) row.invoice_number = prev;
-      }
-      return row;
-    });
+    const rowsBase = await Promise.all(
+      members.map(async (m) => {
+        const row = usersUpsertRowFromMember(m);
+        row.password = await hashPasswordForStorage(m.password); // 平文をDBに書かない（既ハッシュはそのまま）
+        const incoming = normStr(m.invoiceNumber ?? "");
+        if (incoming === "") {
+          const prev = existingInv.get(m.id);
+          if (prev) row.invoice_number = prev;
+        }
+        return row;
+      })
+    );
     const { error } = await supabase.from("users").upsert(rowsBase, { onConflict: "id" });
     if (error) {
       console.warn("saveMembers error:", error);
@@ -480,7 +496,7 @@ export async function addMember(
     id: newMember.id,
     name: newMember.name,
     login_account: loginNorm === "" ? null : (newMember.loginAccount ?? "").trim(),
-    password: newMember.password,
+    password: await hashPasswordForStorage(newMember.password),
     hourly_rate: newMember.hourlyRate,
     zip_code: "",
     address: "",
@@ -610,7 +626,7 @@ export async function updateMemberOrThrow(
     const t = updates.loginAccount.trim();
     body.login_account = t === "" ? null : t;
   }
-  if (updates.password !== undefined) body.password = updates.password;
+  if (updates.password !== undefined) body.password = await hashPasswordForStorage(updates.password);
   if (updates.hourlyRate !== undefined) body.hourly_rate = updates.hourlyRate;
   if (updates.postalCode !== undefined) body.zip_code = updates.postalCode;
   if (updates.address !== undefined) body.address = updates.address;
