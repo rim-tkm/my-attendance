@@ -3303,11 +3303,20 @@ function AdminDashboard(props: {
     setShiftViewEnd(dates[6]);
   };
   const applyShiftShortcutNextMonth = () => {
+    // 来月の初日〜末日を暦の数値から直接組み立てる。
+    // toDateString(=toISOString)はUTC基準のため、new Date(年,月,日)のローカル真夜中を渡すと
+    // JST(UTC+9)では1日前にずれていた（例: 8/1→"2026-07-31"）。timezone非依存の直組み立てに修正。
     const now = new Date();
-    const first = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    const last = new Date(now.getFullYear(), now.getMonth() + 2, 0);
-    setShiftViewStart(toDateString(first));
-    setShiftViewEnd(toDateString(last));
+    let y = now.getFullYear();
+    let mIdx = now.getMonth() + 1; // 来月の月インデックス(0-11)。12なら翌年1月へ繰り上げ
+    if (mIdx > 11) {
+      mIdx = 0;
+      y += 1;
+    }
+    const mm = String(mIdx + 1).padStart(2, "0");
+    const lastDay = new Date(y, mIdx + 1, 0).getDate(); // 来月の末日（getDateはローカルで安全）
+    setShiftViewStart(`${y}-${mm}-01`);
+    setShiftViewEnd(`${y}-${mm}-${String(lastDay).padStart(2, "0")}`);
   };
 
   const scheduleCsvTargetMembers = useMemo(
