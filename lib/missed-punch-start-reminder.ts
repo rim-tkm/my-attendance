@@ -291,7 +291,22 @@ async function sendStartAlertsAndPersist(
   candidates: StartCand[],
   webhookUrl: string
 ): Promise<{ ok: true; count: number } | { ok: false; error: string; detail?: string }> {
+  let count = 0;
   for (const c of candidates) {
+    // 予約: 送信の前に記録を INSERT する。従来は「送信→記録」順で、記録が失敗すると
+    // 次回実行で同じ通知を再送していた（監査7）。先に記録すれば重複送信を防げる。
+    // 一意制約(user_id,work_date,slot_kind)違反＝既に送信/予約済みとみなしスキップ。
+    const { error: reserveErr } = await supabase.from("punch_start_reminder_sent").insert({
+      user_id: c.userId,
+      work_date: dateYmd,
+      slot_kind: c.slotKind,
+      notified_at: new Date().toISOString(),
+    });
+    if (reserveErr) {
+      if (/duplicate key|unique|23505/i.test(reserveErr.message ?? "")) continue;
+      console.error("[missed-punch] reserve punch_start_reminder_sent failed:", reserveErr);
+      return { ok: false, error: "DB write failed", detail: reserveErr.message };
+    }
     const text = buildSlotAlertText({
       memberName: c.memberName,
       plannedStart: c.plannedStart,
@@ -300,23 +315,16 @@ async function sendStartAlertsAndPersist(
     });
     const posted = await postSlackIncomingWebhook(webhookUrl, { text });
     if (!posted.ok) {
+      // 送信失敗 → 予約を取り消し、次回再送できるようにする（未送達を握り潰さない）
+      await supabase
+        .from("punch_start_reminder_sent")
+        .delete()
+        .match({ user_id: c.userId, work_date: dateYmd, slot_kind: c.slotKind });
       return { ok: false, error: posted.error, detail: posted.detail };
     }
-    const { error: insErr } = await supabase.from("punch_start_reminder_sent").upsert(
-      {
-        user_id: c.userId,
-        work_date: dateYmd,
-        slot_kind: c.slotKind,
-        notified_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,work_date,slot_kind" }
-    );
-    if (insErr) {
-      console.error("[missed-punch] upsert punch_start_reminder_sent failed:", insErr);
-      return { ok: false, error: "DB write failed", detail: insErr.message };
-    }
+    count += 1;
   }
-  return { ok: true, count: candidates.length };
+  return { ok: true, count };
 }
 
 async function sendEndAlertsAndPersist(
@@ -325,7 +333,20 @@ async function sendEndAlertsAndPersist(
   candidates: EndCand[],
   webhookUrl: string
 ): Promise<{ ok: true; count: number } | { ok: false; error: string; detail?: string }> {
+  let count = 0;
   for (const c of candidates) {
+    // 予約→送信→失敗時取消（開始アラートと同じ。重複送信を防ぐ・監査7）
+    const { error: reserveErr } = await supabase.from("punch_end_reminder_sent").insert({
+      user_id: c.userId,
+      work_date: dateYmd,
+      slot_kind: c.slotKind,
+      notified_at: new Date().toISOString(),
+    });
+    if (reserveErr) {
+      if (/duplicate key|unique|23505/i.test(reserveErr.message ?? "")) continue;
+      console.error("[missed-punch] reserve punch_end_reminder_sent failed:", reserveErr);
+      return { ok: false, error: "DB write failed", detail: reserveErr.message };
+    }
     const text = buildSlotAlertText({
       memberName: c.memberName,
       plannedStart: c.plannedStart,
@@ -334,23 +355,15 @@ async function sendEndAlertsAndPersist(
     });
     const posted = await postSlackIncomingWebhook(webhookUrl, { text });
     if (!posted.ok) {
+      await supabase
+        .from("punch_end_reminder_sent")
+        .delete()
+        .match({ user_id: c.userId, work_date: dateYmd, slot_kind: c.slotKind });
       return { ok: false, error: posted.error, detail: posted.detail };
     }
-    const { error: insErr } = await supabase.from("punch_end_reminder_sent").upsert(
-      {
-        user_id: c.userId,
-        work_date: dateYmd,
-        slot_kind: c.slotKind,
-        notified_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,work_date,slot_kind" }
-    );
-    if (insErr) {
-      console.error("[missed-punch] upsert punch_end_reminder_sent failed:", insErr);
-      return { ok: false, error: "DB write failed", detail: insErr.message };
-    }
+    count += 1;
   }
-  return { ok: true, count: candidates.length };
+  return { ok: true, count };
 }
 
 /**
