@@ -18,15 +18,17 @@
   1. **無認証の口座API（Critical②）** `7d20910`: [update-bank-info](../app/api/external/update-bank-info/route.ts)・[update-member-details](../app/api/external/update-member-details/route.ts) に登録系と同じ `verifyExternalRegisterSecret` を追加（失敗401）。`EXTERNAL_REGISTER_SECRET` は本番設定済み(5/27)のため即保護。**本番でcurl検証→無認証/誤トークンとも401を確認**。
   2. **平文パスワード表示削除（Critical③一部）** `ce313ac`: [app/page.tsx](../app/page.tsx) 管理メンバー表の `mem.password` 平文表示（title hover含む）を「設定済み/未設定」マスクに。PWリセットは既存の編集フォーム(editPass)で継続可能。
   3. **管理者の自己ロックアウト防止（High/監査5）** `cae6d4d`: UI(dormantMembers memoでlogin_account='admin'除外)＋保存層(updateMemberOrThrowで is_active=false×admin を throw)の二層。削除経路 deleteMember と同じ規則。
+  4. **③完了：平文パスワード撲滅** `c1bb36d`+`0c53701`: 本番の平文PW48件を pgcrypto `crypt(password, gen_salt('bf',10))` でハッシュ化（ユーザーがSQL Editorで実行・remaining=0確認）。コードは `hashPasswordForStorage` を addMember/updateMemberOrThrow/saveMembers に適用→照合の平文フォールバック `s===plain` を撤去（bcryptのみ許可）。ログイン動作確認済。external-register は元々ハッシュ済。
+  5. **監査6：一括無効化の誤成功表示を修正** `d6eb869`: 休眠/未稼働の一括無効化を `updateMember`(握り潰し)→`updateMemberOrThrow` に切替え、1件ずつ成功/失敗を集計し失敗は氏名＋理由を表示。管理者ガードのエラーも画面表示されるように。
 
-- **検証**: 各修正で `npx tsc --noEmit` ✅ / `npm run build` ✅。②は本番実機(curl)で401確認。
+- **検証**: 各修正で `npx tsc --noEmit` ✅ / `npm run build` ✅。②は本番実機(curl)で401確認。③はログイン再確認済。
+
+- **本番Supabase実体確認済（pg_policies）**: 全7テーブル `USING(true) WITH CHECK(true)`＝全開放。FREEプラン・quota超過警告あり（2026-08-14以降制限の可能性）。
 
 - **申し送り（残Critical・未着手）**:
-  - **①RLS全開放**: 最優先だが本番Supabaseの現RLS実体をダッシュボードで要確認（スキーマファイルと乖離の可能性）。usersのanon読み書き禁止＋ログイン/取得のサーバ側移行＋`select("*")`廃止。**本番DB変更につき事前確認必須**。
-  - **③平文PWのbcrypt統一**: 照合の平文フォールバック(`supabase-data.ts` `s===plain`)撤去は、既存平文PWの一括ハッシュ化移行を先に本番で実施しないとログイン不能になる。移行→コード撤去の順で。**本番DB操作につき要確認**。
-  - **④認証堅牢化**: 初期PWランダム化＋初回変更必須（users.must_change_password列追加）、試行回数制限、無効化メンバーのセッション失効、AUTH_SECRET未設定で起動停止。
-  - **監査6（保存失敗の誤成功表示）**: 一括無効化ハンドラが `updateMember`(握り潰し版)を使い失敗でも「N名無効化」表示。`updateMemberOrThrow` へ寄せる。
-  - `external-register-auth.ts` のフェイルオープンは本番でsecret設定済みのため実害は無いが、フェイルクローズ化も検討可。
+  - **①RLS全開放（最大の穴）**: パスワードはハッシュ化したが、口座/住所/氏名等は今も平文＆anonで読み書き可能。正しい対処はサーバ側移行（service_role未導入・ブラウザ直クエリ・ログインも page.tsx:9939 でクライアント `loginUser`）。**アプリ全体が壊れるため段階移行必須・本番DB変更につき事前確認必須**。
+  - **④認証堅牢化（残）**: 初期PW"12345"のランダム化＋初回変更必須（users.must_change_password列追加・登録/ログインUI）、ログイン試行回数制限、AUTH_SECRET未設定で起動停止。※無効化メンバーのセッション失効は既に対応済（loginUser 1537・hydrate 9225 とも isActive!==false 判定あり。残る窓は「無効化された本人が同一タブでリロードしない間」のみ・低リスク）。
+  - `external-register-auth.ts` のフェイルオープンは本番でsecret設定済みのため実害無し（フェイルクローズ化は任意）。
   - メモリ: [[security-audit-2026-07-31]] に要点記録済み。
 
 ---
