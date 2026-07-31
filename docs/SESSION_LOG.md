@@ -23,6 +23,7 @@
   6. **監査11：実名入り試作データ＋デッドコード削除** `b10f7c6`: `data/users.json`・`data/records/user-1.json`(実名＋bcryptハッシュ)を削除＋`data/`を.gitignore。`lib/store.ts`・`lib/users.ts`＋無効API3本(records/records-open/users・揮発FS・無認証)を削除。相互参照のみで他未参照を確認。open-record-client-backup.ts は現用で残置。※git履歴にはまだ残る(パージ未実施・低緊急)。
   7. **監査7：Slack Webhook自動リトライ** `af4ce4f`: `postSlackIncomingWebhook` を `attemptSlackIncomingWebhook`＋`withNetworkRetry`(最大3回)に。ネットワーク例外/429/5xxのみ再試行、4xx/本文not-okは即失敗。全Slack通知に効く。
   8. **監査7：未打刻アラート重複送信を防止** `b52d05d`: 開始/終了アラートを「送信→記録」順から「予約(先INSERT)→送信→失敗時DELETE」順へ。一意制約違反はスキップ。重複送信→最悪1回スキップに。
+  9. **監査10：シフト『来月』の日付1日ズレ修正** `fa50494`: `applyShiftShortcutNextMonth` が `new Date(年,月,1)`(ローカル)を `toDateString`(=toISOString・UTC)で整形しJSTで1日前にずれていた→暦の数値から直接 YYYY-MM-DD 組み立てに。8822の prevDate は UTC解析→UTC整形で相殺され正しいため不変。
 
 - **検証**: 各修正で `npx tsc --noEmit` ✅ / `npm run build` ✅。②は本番実機(curl)で401確認。③はログイン再確認済。
 
