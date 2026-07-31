@@ -52,14 +52,15 @@ export { loadEntityChangeHistory } from "@/lib/data-change-history";
 
 async function passwordMatchesStored(stored: string, plain: string): Promise<boolean> {
   const s = stored ?? "";
-  if (/^\$2[aby]\$/.test(s)) {
-    try {
-      return await bcrypt.compare(plain, s);
-    } catch {
-      return false;
-    }
+  // 保存済みパスワードは bcrypt ハッシュのみを許可する。
+  // （2026-07-31: 既存の平文48件を本番でハッシュ化し全書き込み経路もハッシュ化したため、
+  //   平文一致フォールバック `s === plain` を撤去。平文パスワードは一切受け付けない。）
+  if (!/^\$2[aby]\$/.test(s)) return false;
+  try {
+    return await bcrypt.compare(plain, s);
+  } catch {
+    return false;
   }
-  return s === plain;
 }
 
 /**
@@ -1527,7 +1528,7 @@ export async function saveKpiForUser(
   await saveKpi(merged, opts);
 }
 
-/** ログイン: login_account と password が一致するユーザーを返す（bcrypt または従来の平文） */
+/** ログイン: login_account と password が一致するユーザーを返す（bcryptハッシュのみ照合） */
 export async function loginUser(loginAccount: string, password: string): Promise<Member | null> {
   const members = await loadMembers();
   if (members === null) return null;
