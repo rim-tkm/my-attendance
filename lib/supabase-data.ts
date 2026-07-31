@@ -28,6 +28,7 @@ import {
 } from "@/lib/member-category";
 import { shiftHasPlannedWorkHours } from "@/lib/shift-planned-work";
 import { getSupabase } from "@/lib/supabase";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { isWeekendYmdJst, JST_WEEKEND_WORK_REJECTED_MESSAGE } from "@/lib/export-schedule";
 import {
   assertMemberOpenRecordPunchAllowed,
@@ -317,8 +318,22 @@ async function safeQuery<T>(builder: QueryResult<T>): Promise<T[]> {
 }
 
 /** メンバー一覧。接続失敗やテーブルなしの場合は []。Supabase 未設定の場合は null（呼び出し元で loadError 表示用） */
+/**
+ * users テーブル用の DB クライアント。
+ * サーバ実行時は service_role（RLSをバイパス）を優先し、RLSを締めてもサーバからは読める。
+ * クライアント実行時は従来どおり anon。（RLS段階移行フェーズ1・docs/RLS_MIGRATION_PLAN.md）
+ * ※ getSupabaseAdmin() はクライアントで呼ぶと例外を投げるため、window 判定の中でのみ呼ぶ。
+ */
+function getUsersDb() {
+  if (typeof window === "undefined") {
+    const admin = getSupabaseAdmin();
+    if (admin) return admin;
+  }
+  return getSupabase();
+}
+
 export async function loadMembers(): Promise<Member[] | null> {
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) return null;
   try {
     const rows = await safeQuery<DbUser>(supabase.from("users").select("*").order("name"));
