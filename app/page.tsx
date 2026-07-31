@@ -149,6 +149,7 @@ import {
   loadMembers,
   addMember,
   updateMember,
+  updateMemberOrThrow,
   loadRecords,
   loadOpenRecords,
   loadShifts,
@@ -1758,17 +1759,29 @@ function AdminDashboard(props: {
     )
       return;
     setDormantBulkBusy(true);
+    // 1件ずつ結果を確認する。updateMemberOrThrow は失敗時に例外を投げるので、
+    // 成功件数と失敗理由を集計して正確に報告する（保存失敗を握り潰して「成功」と誤表示しない）。
+    let okCount = 0;
+    const failures: string[] = [];
     try {
       for (const id of ids) {
-        await updateMember(id, { isActive: false });
+        try {
+          await updateMemberOrThrow(id, { isActive: false });
+          okCount += 1;
+        } catch (e) {
+          const nm = members.find((m) => m.id === id)?.name ?? id;
+          failures.push(`${nm}（${e instanceof Error ? e.message : String(e)}）`);
+        }
       }
       const mems = await loadMembers();
       setMembers(mems ?? []);
       setDormantSelectedIds(new Set());
       onRefresh();
-      alert(`${ids.length} 名を無効化しました。`);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      alert(
+        failures.length === 0
+          ? `${okCount} 名を無効化しました。`
+          : `${okCount} 名を無効化しました。\n\n失敗 ${failures.length} 名:\n${failures.join("\n")}`
+      );
     } finally {
       setDormantBulkBusy(false);
     }
@@ -1811,17 +1824,27 @@ function AdminDashboard(props: {
     )
       return;
     setNeverWorkedBulkBusy(true);
+    let okCount = 0;
+    const failures: string[] = [];
     try {
       for (const id of ids) {
-        await updateMember(id, { isActive: false });
+        try {
+          await updateMemberOrThrow(id, { isActive: false });
+          okCount += 1;
+        } catch (e) {
+          const nm = members.find((m) => m.id === id)?.name ?? id;
+          failures.push(`${nm}（${e instanceof Error ? e.message : String(e)}）`);
+        }
       }
       const mems = await loadMembers();
       setMembers(mems ?? []);
       setNeverWorkedSelectedIds(new Set());
       onRefresh();
-      alert(`${ids.length} 名を無効化しました。`);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      alert(
+        failures.length === 0
+          ? `${okCount} 名を無効化しました。`
+          : `${okCount} 名を無効化しました。\n\n失敗 ${failures.length} 名:\n${failures.join("\n")}`
+      );
     } finally {
       setNeverWorkedBulkBusy(false);
     }
