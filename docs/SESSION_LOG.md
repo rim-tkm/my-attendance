@@ -7,6 +7,30 @@
 
 ---
 
+## 2026-07-31（全体監査＋セキュリティCritical修正・第1弾）
+
+- **依頼**: 「30体以上のサブエージェントで、セキュリティ・矛盾・問題点・追加機能・重要事項を調べて最強のサービスを目指して」。
+
+- **監査**: Workflowで63体のサブエージェントを稼働（領域×観点マトリクス＋critical/high敵対的検証）。指摘103件・機能提案35件。フルレポートは **[docs/AUDIT_2026-07-31.md](AUDIT_2026-07-31.md)**（未コミット）。最重要Criticalは Claude が実ファイルReadで裏取り済み。
+  - 判明した重大欠陥: ①RLS全開放（`supabase-schema.sql:179-192` 全テーブル `USING(true) WITH CHECK(true)`→anonキーだけで全データ読み書き）②無認証の口座更新API ③平文パスワード（照合フォールバック/管理画面表示/初期PW"12345"）④認証弱化（試行制限なし・無効化後30日セッション）。運用事故（管理者自己ロックアウト・保存失敗の誤成功・他人打刻消失・アラート重複）、性能（全件ロード）、整合性（一意制約欠落）等。
+
+- **修正（この日デプロイ済み）**:
+  1. **無認証の口座API（Critical②）** `7d20910`: [update-bank-info](../app/api/external/update-bank-info/route.ts)・[update-member-details](../app/api/external/update-member-details/route.ts) に登録系と同じ `verifyExternalRegisterSecret` を追加（失敗401）。`EXTERNAL_REGISTER_SECRET` は本番設定済み(5/27)のため即保護。**本番でcurl検証→無認証/誤トークンとも401を確認**。
+  2. **平文パスワード表示削除（Critical③一部）** `ce313ac`: [app/page.tsx](../app/page.tsx) 管理メンバー表の `mem.password` 平文表示（title hover含む）を「設定済み/未設定」マスクに。PWリセットは既存の編集フォーム(editPass)で継続可能。
+  3. **管理者の自己ロックアウト防止（High/監査5）** `cae6d4d`: UI(dormantMembers memoでlogin_account='admin'除外)＋保存層(updateMemberOrThrowで is_active=false×admin を throw)の二層。削除経路 deleteMember と同じ規則。
+
+- **検証**: 各修正で `npx tsc --noEmit` ✅ / `npm run build` ✅。②は本番実機(curl)で401確認。
+
+- **申し送り（残Critical・未着手）**:
+  - **①RLS全開放**: 最優先だが本番Supabaseの現RLS実体をダッシュボードで要確認（スキーマファイルと乖離の可能性）。usersのanon読み書き禁止＋ログイン/取得のサーバ側移行＋`select("*")`廃止。**本番DB変更につき事前確認必須**。
+  - **③平文PWのbcrypt統一**: 照合の平文フォールバック(`supabase-data.ts` `s===plain`)撤去は、既存平文PWの一括ハッシュ化移行を先に本番で実施しないとログイン不能になる。移行→コード撤去の順で。**本番DB操作につき要確認**。
+  - **④認証堅牢化**: 初期PWランダム化＋初回変更必須（users.must_change_password列追加）、試行回数制限、無効化メンバーのセッション失効、AUTH_SECRET未設定で起動停止。
+  - **監査6（保存失敗の誤成功表示）**: 一括無効化ハンドラが `updateMember`(握り潰し版)を使い失敗でも「N名無効化」表示。`updateMemberOrThrow` へ寄せる。
+  - `external-register-auth.ts` のフェイルオープンは本番でsecret設定済みのため実害は無いが、フェイルクローズ化も検討可。
+  - メモリ: [[security-audit-2026-07-31]] に要点記録済み。
+
+---
+
 ## 2026-07-30（2部制メンバーの2回目「業務開始」が押せないバグ修正）
 
 - **依頼**: 「10-12時/13-16時の2部制の人が、10-12で打刻終了した後、13時に業務開始を押すと押せなかった。原因を突き止めて→デプロイまでして」
