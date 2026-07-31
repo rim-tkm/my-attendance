@@ -7285,7 +7285,7 @@ function AdminDashboard(props: {
               </thead>
               <tbody>
                 {sortedRowsForAdminMemberSettingsTable.map(({ mem, monthMin, pay, invDisplay }) => {
-                  const pw = mem.password || "—";
+                  const hasPassword = typeof mem.password === "string" && mem.password.length > 0;
                   const nameLine = invDisplay ? `${invDisplay} ${mem.name}` : mem.name;
                   const adminRow = isAdminAccountMember(mem);
                   const morningAllowed = mem.canWorkMorning === true;
@@ -7475,7 +7475,13 @@ function AdminDashboard(props: {
                         )}
                       </td>
                       <td className="min-w-0 overflow-hidden px-2 py-1.5 font-mono text-slate-600 truncate" title={mem.loginAccount || ""}>{mem.loginAccount || "—"}</td>
-                      <td className="min-w-0 overflow-hidden px-2 py-1.5 font-mono text-slate-600 truncate" title={pw}>{pw}</td>
+                      <td className="min-w-0 overflow-hidden px-2 py-1.5 truncate">
+                        {hasPassword ? (
+                          <span className="text-slate-500">設定済み</span>
+                        ) : (
+                          <span className="text-amber-600">未設定</span>
+                        )}
+                      </td>
                       <td className="px-2 py-1.5 text-right tabular-nums text-slate-700 whitespace-nowrap">{formatDuration(monthMin)}</td>
                       <td className="px-2 py-1.5 text-right tabular-nums font-medium text-slate-800 whitespace-nowrap">¥{pay.toLocaleString()}</td>
                       <td className="px-2 py-1.5 text-right align-middle">
