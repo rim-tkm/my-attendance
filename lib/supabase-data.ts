@@ -672,6 +672,19 @@ export async function updateMemberOrThrow(
       console.warn("[supabase-data] updateMember: 請求管理番号が空のまま保存", { memberId });
     }
   }
+  // 管理者アカウントの無効化を保存層で禁止する（UI/ハンドラを回避した経路でも自己ロックアウトを防ぐ）。
+  // 削除経路 deleteMember と同じ規則。無効化(is_active=false)を試みる時だけ本人を確認する。
+  if (body.is_active === false) {
+    const { data: guardRow, error: guardErr } = await supabase
+      .from("users")
+      .select("login_account")
+      .eq("id", memberId)
+      .maybeSingle();
+    if (guardErr) throw new Error(guardErr.message ?? String(guardErr));
+    if ((guardRow?.login_account ?? "").trim().toLowerCase() === "admin") {
+      throw new Error("管理者アカウントは無効化できません");
+    }
+  }
   const { error } = await supabase.from("users").update(body).eq("id", memberId);
   if (error && slackIdSchemaErrorMessage(error.message ?? "") && "slack_id" in body) {
     const { slack_id: _s, ...rest } = body;

@@ -1674,6 +1674,8 @@ function AdminDashboard(props: {
     const neverWorked: { member: Member }[] = [];
     for (const m of activeMembers) {
       if (m.isIntern === true) continue;
+      // 管理者アカウントは無効化対象に出さない（自分自身を無効化してログイン不能になる事故を防ぐ）
+      if ((m.loginAccount ?? "").trim().toLowerCase() === "admin") continue;
       const lastWorkDate = lastByUser.get(m.id) ?? null;
       if (lastWorkDate == null) {
         neverWorked.push({ member: m });
