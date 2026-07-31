@@ -32,3 +32,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ローカルFS試作データ（本番はSupabase）。実名/ハッシュを再コミットしない
+data/
