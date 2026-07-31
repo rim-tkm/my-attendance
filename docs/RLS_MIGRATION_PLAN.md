@@ -57,7 +57,9 @@
 - ✅ 読み取りAPI足場：`GET /api/admin/members`(管理者=全件・PW除外)＋`GET /api/member/me`(本人1件・PW除外)。**まだクライアント未使用**。
 - ⬜ **残り（リスク高・要集中）**:
   1. **書き込み系のサーバ集約**: `addMember`/`updateMemberOrThrow`/`deleteMember`/`saveMembers`/`allocateNextInvoiceManagementNumber` を `getUsersDb` 化 or サーバAPIに寄せる。`member-update`/`bank-profile` 等の既存サーバ経路も getSupabase(anon)→admin へ。
-  2. **クライアント読み取り差し替え**: `page.tsx` の `loadMembers` 直呼び(hydrate等)を、管理者=`/api/admin/members`・一般=`/api/member/me` に。**要確認: 一般メンバー画面が他メンバー情報を必要としないか**（必要なら「名前だけの公開ビュー」等を別途設計）。
+  2. **クライアント読み取り差し替え**: `page.tsx` の `loadMembers` 直呼び(hydrate等)を、管理者=`/api/admin/members`・一般=`/api/member/me` に。
+     - ✅ **調査確定(2026-07-31)**: 一般メンバー画面は**本人Member1件で足りる**（他人の氏名すら不参照）。根拠: 画面分岐 `page.tsx:10381`（AdminDashboardは管理者時のみ描画）、DashboardPage内 `members` 参照は本人検索のみ（`9351`/`9470`/`10042` の `find(id===currentUserId)`）。records/shifts/kpi は非管理者時 `getRecordsForUser` 等で本人分に絞り済（`9374-9377`）。
+     - ⚠ **login と結合している**: 現状 hydrate は認証前に `loadMembers()`(anon全件) を実行し、その後 getSession で本人特定。API化すると「認証前はメンバー取得不可(401)」になるため、**先にログインを済ませてから API でメンバー取得**する順序に変える必要がある＝下記3(signIn化)と一緒に実装する。単独では切り替えられない。
   3. **ログイン signIn 化**: `page.tsx:9939` の client `loginUser` を撤去し `signIn()` に一本化（anon での users 読みを無くす）。**リロード復元(hydrate/sessionChecked)に影響・要本番確認**。
   4. **RLS締め**: `drop policy "Allow all for users" on public.users;`。締めた後 `curl`(anon)で users が読めないこと＋アプリ正常動作を確認。
 
