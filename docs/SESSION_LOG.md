@@ -20,6 +20,9 @@
   3. **管理者の自己ロックアウト防止（High/監査5）** `cae6d4d`: UI(dormantMembers memoでlogin_account='admin'除外)＋保存層(updateMemberOrThrowで is_active=false×admin を throw)の二層。削除経路 deleteMember と同じ規則。
   4. **③完了：平文パスワード撲滅** `c1bb36d`+`0c53701`: 本番の平文PW48件を pgcrypto `crypt(password, gen_salt('bf',10))` でハッシュ化（ユーザーがSQL Editorで実行・remaining=0確認）。コードは `hashPasswordForStorage` を addMember/updateMemberOrThrow/saveMembers に適用→照合の平文フォールバック `s===plain` を撤去（bcryptのみ許可）。ログイン動作確認済。external-register は元々ハッシュ済。
   5. **監査6：一括無効化の誤成功表示を修正** `d6eb869`: 休眠/未稼働の一括無効化を `updateMember`(握り潰し)→`updateMemberOrThrow` に切替え、1件ずつ成功/失敗を集計し失敗は氏名＋理由を表示。管理者ガードのエラーも画面表示されるように。
+  6. **監査11：実名入り試作データ＋デッドコード削除** `b10f7c6`: `data/users.json`・`data/records/user-1.json`(実名＋bcryptハッシュ)を削除＋`data/`を.gitignore。`lib/store.ts`・`lib/users.ts`＋無効API3本(records/records-open/users・揮発FS・無認証)を削除。相互参照のみで他未参照を確認。open-record-client-backup.ts は現用で残置。※git履歴にはまだ残る(パージ未実施・低緊急)。
+  7. **監査7：Slack Webhook自動リトライ** `af4ce4f`: `postSlackIncomingWebhook` を `attemptSlackIncomingWebhook`＋`withNetworkRetry`(最大3回)に。ネットワーク例外/429/5xxのみ再試行、4xx/本文not-okは即失敗。全Slack通知に効く。
+  8. **監査7：未打刻アラート重複送信を防止** `b52d05d`: 開始/終了アラートを「送信→記録」順から「予約(先INSERT)→送信→失敗時DELETE」順へ。一意制約違反はスキップ。重複送信→最悪1回スキップに。
 
 - **検証**: 各修正で `npx tsc --noEmit` ✅ / `npm run build` ✅。②は本番実機(curl)で401確認。③はログイン再確認済。
 
