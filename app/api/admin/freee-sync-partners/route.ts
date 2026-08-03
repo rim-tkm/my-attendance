@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
 import { freeeRequest, getFreeeAccess } from "@/lib/freee-api";
 import { buildFreeePartnerPayload } from "@/lib/freee-partner-sync";
+import { normalizeMemberName } from "@/lib/attendance";
 import { getSupabase } from "@/lib/supabase";
 import { loadMembers } from "@/lib/supabase-data";
 
@@ -52,20 +53,30 @@ export async function POST() {
     if (error) console.warn("[freee-sync] freee_partner_id 保存エラー:", error);
   };
 
-  /** 名前重複時のフォールバック: freee 側を検索して同名取引先の ID を返す */
-  const findPartnerIdByName = async (name: string): Promise<number | null> => {
-    try {
-      const res = await freeeRequest<{ partners?: { id: number; name: string }[] }>(
+  // freee 側の既存取引先を全件取得し、空白（半角・全角）を除いた名前で索引を作る。
+  // freee には「安江 聡美」のようにスペース入りで手動登録済みのケースが多く、
+  // アプリ側（スペースなし）と表記が違っても同一人物として自動で紐付け・更新するため。
+  const partnersByNormalizedName = new Map<string, number>();
+  try {
+    const pageLimit = 100;
+    for (let offset = 0; ; offset += pageLimit) {
+      const page = await freeeRequest<{ partners?: { id: number; name: string }[] }>(
         access.accessToken,
         "GET",
-        `/api/1/partners?company_id=${access.companyId}&keyword=${encodeURIComponent(name)}&limit=10`
+        `/api/1/partners?company_id=${access.companyId}&limit=${pageLimit}&offset=${offset}`
       );
-      const hit = (res.partners ?? []).find((p) => p.name === name);
-      return hit ? hit.id : null;
-    } catch {
-      return null;
+      const list = page.partners ?? [];
+      for (const p of list) {
+        partnersByNormalizedName.set(normalizeMemberName(p.name), p.id);
+      }
+      if (list.length < pageLimit) break;
     }
-  };
+  } catch (e) {
+    return NextResponse.json(
+      { error: `freee の既存取引先一覧を取得できません: ${e instanceof Error ? e.message : String(e)}` },
+      { status: 502 }
+    );
+  }
 
   for (const m of targets) {
     const payload = buildFreeePartnerPayload(m, access.companyId);
@@ -76,26 +87,26 @@ export async function POST() {
         results.push({ name: m.name, action: "updated" });
         continue;
       }
-      try {
-        const createdRes = await freeeRequest<{ partner?: { id: number } }>(
-          access.accessToken,
-          "POST",
-          "/api/1/partners",
-          payload
-        );
-        const newId = createdRes.partner?.id;
-        if (newId != null) await savePartnerId(m.id, newId);
-        created++;
-        results.push({ name: m.name, action: "created" });
-      } catch (createErr) {
-        // 名前重複（手動登録済みなど）→ 既存取引先を取り込んで更新
-        const existingId = await findPartnerIdByName(m.name);
-        if (existingId == null) throw createErr;
+      // 表記ゆれを吸収した名前一致（スペース無視）で既存取引先に紐付け。
+      // 更新時に name もアプリ側の表記（スペースなし）へ揃うため、freee 側の表記統一も同時に済む。
+      const existingId = partnersByNormalizedName.get(normalizeMemberName(m.name));
+      if (existingId != null) {
         await freeeRequest(access.accessToken, "PUT", `/api/1/partners/${existingId}`, payload);
         await savePartnerId(m.id, existingId);
         updated++;
-        results.push({ name: m.name, action: "updated", detail: "freee側の同名取引先に紐付けました" });
+        results.push({ name: m.name, action: "updated", detail: "freee側の既存取引先に自動紐付けしました" });
+        continue;
       }
+      const createdRes = await freeeRequest<{ partner?: { id: number } }>(
+        access.accessToken,
+        "POST",
+        "/api/1/partners",
+        payload
+      );
+      const newId = createdRes.partner?.id;
+      if (newId != null) await savePartnerId(m.id, newId);
+      created++;
+      results.push({ name: m.name, action: "created" });
     } catch (e) {
       results.push({ name: m.name, action: "error", detail: e instanceof Error ? e.message : String(e) });
     }
