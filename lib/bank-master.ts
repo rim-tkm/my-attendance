@@ -23,9 +23,29 @@ function kataToHira(s: string): string {
   return s.replace(/[ァ-ヶ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
 }
 
-/** 照合用の正規化: NFKC（全角英数→半角等）・空白除去・ひらがな化・長音等の揺れはそのまま */
+/** 照合用の正規化: NFKC（全角英数→半角等）・空白除去・ひらがな化・英字小文字化（paypay/PayPay 等の揺れ吸収） */
 function normalizeForMatch(raw: string): string {
-  return kataToHira(raw.normalize("NFKC").replace(/[\s　]+/g, ""));
+  return kataToHira(raw.normalize("NFKC").replace(/[\s　]+/g, "")).toLowerCase();
+}
+
+/** 支店名照合用の正規化: 括弧書き（店番号メモ等）を除去し、ヶ/ケ/け の揺れを吸収（竜が丘/竜ヶ丘 等。両辺同変換のため整合は保たれる） */
+function normalizeBranchForMatch(raw: string): string {
+  // kataToHira で ヶ は ゖ になるため、ゖ も含めて「が」へ寄せる
+  return normalizeForMatch(raw.replace(/[（(][^（）()]*[）)]/g, "")).replace(/[ヶケけゖ]/g, "が");
+}
+
+const KANJI_DIGITS = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+
+/**
+ * ゆうちょ銀行の支店名入力の前処理: 正式表記は漢数字3桁（例: 八六八）だが、
+ * 「868」「８６８」の数字表記や「ニ一八」「七ハハ」のカタカナ書き癖が多いため正式表記へ寄せる。
+ */
+function preprocessYuchoBranchName(raw: string): string {
+  return raw
+    .normalize("NFKC")
+    .replace(/[0-9]/g, (d) => KANJI_DIGITS[Number(d)] ?? d)
+    .replace(/ニ/g, "二")
+    .replace(/ハ/g, "八");
 }
 
 /**
@@ -33,8 +53,13 @@ function normalizeForMatch(raw: string): string {
  * 末尾の「銀行」のみ除去（マスタの銀行名は「みずほ」のように銀行を含まないため）。
  */
 export function normalizeBankNameQuery(raw: string): string {
-  const base = normalizeForMatch(raw);
+  const base = normalizeForMatch(
+    raw
+      .replace(/[（(][^（）()]*[）)]/g, "") // 「但陽信用金庫（金融機関番号1696）」等の括弧書きを除去
+      .replace(/自分銀行/g, "じぶん銀行") // 「au自分銀行」→ 正式「auじぶん銀行」
+  );
   return base
+    .replace(/^ja/, "") // 「JA兵庫西」→ マスタは「兵庫西農協」（前方一致で解決）
     .replace(/信用金庫$/, "信金")
     .replace(/信用組合$/, "信組")
     .replace(/労働金庫$/, "労金")
@@ -109,19 +134,21 @@ export function matchBankByName(rawName: string): BankMasterHit | null {
 /** matchBankByName の支店版（bankCode 配下のみ照合） */
 export function matchBranchByName(bankCode: string, rawName: string): BankMasterHit | null {
   const entries = data.branches[bankCode] ?? [];
-  const q = normalizeBranchNameQuery(rawName);
+  const input = bankCode.trim() === "9900" ? preprocessYuchoBranchName(rawName) : rawName;
+  const q = normalizeBranchForMatch(input).replace(/支店$/, "");
   if (q === "") return null;
-  const exact = entries.filter((e) => normalizeForMatch(e.n) === q || normalizeForMatch(e.h) === q);
-  if (exact.length === 1) return { code: exact[0].c, name: exact[0].n, kana: exact[0].k };
+  const hit = (e: ZenginEntry) => ({ code: e.c, name: e.n, kana: e.k });
+  const exact = entries.filter((e) => normalizeBranchForMatch(e.n) === q || normalizeBranchForMatch(e.h) === q);
+  if (exact.length === 1) return hit(exact[0]);
   if (exact.length > 1) return null;
   const prefix = entries.filter(
-    (e) => normalizeForMatch(e.n).startsWith(q) || normalizeForMatch(e.h).startsWith(q)
+    (e) => normalizeBranchForMatch(e.n).startsWith(q) || normalizeBranchForMatch(e.h).startsWith(q)
   );
-  if (prefix.length === 1) return { code: prefix[0].c, name: prefix[0].n, kana: prefix[0].k };
+  if (prefix.length === 1) return hit(prefix[0]);
   if (prefix.length > 1) return null;
-  // 最後の砦: 種別語（出張所・営業部など）を除いた「核」同士の前方一致が1件のときだけ採用。
+  // 種別語（出張所・営業部など）を除いた「核」同士の前方一致が1件のときだけ採用。
   // 例:「高砂出張所」（登録）と「高砂町出張所」（正式）— 誤採用を防ぐため候補が一意の場合に限る。
-  const coreOf = (s: string) => normalizeForMatch(s).replace(/(支店|出張所|営業部|支所)$/, "");
+  const coreOf = (s: string) => normalizeBranchForMatch(s).replace(/(支店|出張所|営業部|支所)$/, "");
   const qCore = coreOf(q);
   if (qCore === "") return null;
   const loose = entries.filter((e) => {
@@ -129,7 +156,17 @@ export function matchBranchByName(bankCode: string, rawName: string): BankMaster
     const h = coreOf(e.h);
     return n.startsWith(qCore) || qCore.startsWith(n) || h.startsWith(qCore) || qCore.startsWith(h);
   });
-  if (loose.length === 1) return { code: loose[0].c, name: loose[0].n, kana: loose[0].k };
+  if (loose.length === 1) return hit(loose[0]);
+  if (loose.length > 1) return null;
+  // 最後の砦: 先頭4文字以上を共有する候補が1件のときだけ採用（「ブルックリンビレッジ」→「ブルックリンブリッジ」等のタイプミス救済）
+  if (qCore.length >= 4) {
+    const sharesPrefix = (a: string, b: string) => {
+      const n = Math.min(a.length, b.length, 4);
+      return n >= 4 && a.slice(0, 4) === b.slice(0, 4);
+    };
+    const fuzzy = entries.filter((e) => sharesPrefix(coreOf(e.n), qCore) || sharesPrefix(coreOf(e.h), qCore));
+    if (fuzzy.length === 1) return hit(fuzzy[0]);
+  }
   return null;
 }
 
