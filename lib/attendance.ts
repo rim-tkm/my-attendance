@@ -22,8 +22,12 @@ export interface Member {
   address?: string;
   /** 銀行名 */
   bankName?: string;
+  /** 銀行コード（全銀協4桁・freee連携用。名称から自動確定） */
+  bankCode?: string;
   /** 支店名 */
   branchName?: string;
+  /** 支店コード（3桁・freee連携用。名称から自動確定） */
+  branchCode?: string;
   /** 口座種別（普通 / 当座） */
   accountType?: string;
   /** 口座番号 */

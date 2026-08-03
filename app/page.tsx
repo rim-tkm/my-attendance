@@ -1514,6 +1514,44 @@ function AdminDashboard(props: {
   const [holidayFeedback, setHolidayFeedback] = useState<{ variant: "success" | "error"; message: string } | null>(
     null
   );
+  /** 銀行コード一括補完（管理設定）の処理状態と結果表示 */
+  const [bankBackfillBusy, setBankBackfillBusy] = useState(false);
+  const [bankBackfillResult, setBankBackfillResult] = useState<{ variant: "success" | "error"; message: string } | null>(
+    null
+  );
+
+  const handleBackfillBankCodes = async () => {
+    if (
+      !window.confirm(
+        "登録済みの銀行名・支店名から、全銀協データと照合して銀行コード・支店コードを自動補完します。\n照合できなかったメンバーは変更されず一覧に表示します。実行しますか？（何度実行しても安全です）"
+      )
+    )
+      return;
+    setBankBackfillBusy(true);
+    setBankBackfillResult(null);
+    try {
+      const res = await fetch("/api/admin/backfill-bank-codes", { method: "POST", credentials: "include" });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        updatedCount?: number;
+        skippedCount?: number;
+        unmatched?: { name: string; bankName: string; branchName: string; detail?: string }[];
+      };
+      if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "一括補完に失敗しました");
+      const unmatched = data.unmatched ?? [];
+      const lines = [
+        `補完（更新）: ${data.updatedCount ?? 0}名 ／ スキップ（補完済み）: ${data.skippedCount ?? 0}名 ／ 要手動対応: ${unmatched.length}名`,
+        ...unmatched.map((u) => `・${u.name}: ${u.bankName}${u.branchName ? ` / ${u.branchName}` : ""} — ${u.detail ?? "照合できません"}`),
+      ];
+      setBankBackfillResult({ variant: "success", message: lines.join("\n") });
+      onRefresh();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setBankBackfillResult({ variant: "error", message: msg });
+    } finally {
+      setBankBackfillBusy(false);
+    }
+  };
 
   /**
    * 休業日登録の共通処理（管理設定の手動フォームとダッシュボードの提案カードの両方から使用）。
@@ -1681,7 +1719,9 @@ function AdminDashboard(props: {
   const [editPostalCode, setEditPostalCode] = useState("");
   const [editAddress, setEditAddress] = useState("");
   const [editBankName, setEditBankName] = useState("");
+  const [editBankCode, setEditBankCode] = useState("");
   const [editBranchName, setEditBranchName] = useState("");
+  const [editBranchCode, setEditBranchCode] = useState("");
   const [editAccountType, setEditAccountType] = useState("普通");
   const [editAccountNumber, setEditAccountNumber] = useState("");
   const [editAccountHolder, setEditAccountHolder] = useState("");
@@ -2675,7 +2715,9 @@ function AdminDashboard(props: {
     setEditPostalCode(member.postalCode ?? "");
     setEditAddress(member.address ?? "");
     setEditBankName(member.bankName ?? "");
+    setEditBankCode(member.bankCode ?? "");
     setEditBranchName(member.branchName ?? "");
+    setEditBranchCode(member.branchCode ?? "");
     setEditAccountType(member.accountType ?? "普通");
     setEditAccountNumber(member.accountNumber ?? "");
     setEditAccountHolder(member.accountHolder ?? "");
@@ -2752,7 +2794,9 @@ function AdminDashboard(props: {
       postalCode: zip,
       address: addr,
       bankName: bank,
+      bankCode: editBankCode.trim(),
       branchName: branch,
+      branchCode: editBranchCode.trim(),
       accountType: editAccountType,
       accountNumber: accNum,
       accountHolder: accHolder,
@@ -7359,6 +7403,33 @@ function AdminDashboard(props: {
             )}
           </div>
 
+          <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+            <span className="text-xs font-medium text-slate-600">
+              銀行コード・支店コードの一括補完（freee 連携用・全銀協データと照合）
+            </span>
+            <p className="text-xs text-slate-500">
+              登録済みの銀行名・支店名からコードを自動で補完します。新規入力時は候補選択で自動確定するため、このボタンは既存メンバーの初回補完用です。照合できなかったメンバーは各メンバーの編集画面で候補から選び直してください。
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleBackfillBankCodes()}
+              disabled={bankBackfillBusy}
+              className="w-fit rounded bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-500 disabled:opacity-50"
+            >
+              {bankBackfillBusy ? "照合中…" : "銀行コードを一括補完"}
+            </button>
+            {bankBackfillResult != null && (
+              <div
+                className={`min-w-0 max-w-xl whitespace-pre-wrap text-sm font-medium ${
+                  bankBackfillResult.variant === "success" ? "text-green-700" : "text-red-600"
+                }`}
+                role="status"
+              >
+                {bankBackfillResult.message}
+              </div>
+            )}
+          </div>
+
           <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-amber-50/40 p-4 ring-1 ring-amber-200/60">
             <span className="text-xs font-medium text-slate-800">
               生産性低下アラート（KPI 保存直後・即時／1時間あたり有効コール10件未満・SLACK_WEBHOOK_PRODUCTIVITY_URL）
@@ -8010,14 +8081,29 @@ function AdminDashboard(props: {
                   <label className="mb-0.5 block text-xs text-slate-500">住所</label>
                   <input type="text" value={editAddress} onChange={(e) => setEditAddress(e.target.value)} placeholder="住所" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
-                <div>
-                  <label className="mb-0.5 block text-xs text-slate-500">銀行名</label>
-                  <input type="text" value={editBankName} onChange={(e) => setEditBankName(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
-                </div>
-                <div>
-                  <label className="mb-0.5 block text-xs text-slate-500">支店名</label>
-                  <input type="text" value={editBranchName} onChange={(e) => setEditBranchName(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
-                </div>
+                <BankMasterAutocompleteField
+                  label="銀行名"
+                  name={editBankName}
+                  code={editBankCode}
+                  onPick={(name, code) => {
+                    setEditBankName(name);
+                    // 銀行を変えたら支店コードの確定は無効（別銀行の支店コードが残らないように）
+                    setEditBranchCode((prev) => (code === editBankCode ? prev : ""));
+                    setEditBankCode(code);
+                  }}
+                  inputClassName="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                />
+                <BankMasterAutocompleteField
+                  label="支店名"
+                  name={editBranchName}
+                  code={editBranchCode}
+                  branchOfBankCode={editBankCode}
+                  onPick={(name, code) => {
+                    setEditBranchName(name);
+                    setEditBranchCode(code);
+                  }}
+                  inputClassName="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                />
                 <div>
                   <label className="mb-0.5 block text-xs text-slate-500">口座種別</label>
                   <select value={editAccountType} onChange={(e) => setEditAccountType(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm">
@@ -9352,7 +9438,9 @@ type MemberSelfBankDraft = {
   postalCode: string;
   address: string;
   bankName: string;
+  bankCode: string;
   branchName: string;
+  branchCode: string;
   accountType: string;
   accountNumber: string;
   accountHolder: string;
@@ -9364,13 +9452,100 @@ const EMPTY_MEMBER_SELF_BANK_DRAFT: MemberSelfBankDraft = {
   postalCode: "",
   address: "",
   bankName: "",
+  bankCode: "",
   branchName: "",
+  branchCode: "",
   accountType: "普通",
   accountNumber: "",
   accountHolder: "",
   phoneNumber: "",
   invoiceRegistrationNumber: "",
 };
+
+/**
+ * 銀行・支店の入力補助フィールド。入力すると /api/bank-master（全銀協データ）から候補を出し、
+ * 候補を選ぶと名称＋コード（銀行4桁・支店3桁）が確定する。手入力のままだとコードは未確定（空）になる。
+ * branchOfBankCode を渡すと支店検索（その銀行の支店のみ）、省略すると銀行検索。
+ */
+function BankMasterAutocompleteField(props: {
+  label: string;
+  name: string;
+  code: string;
+  branchOfBankCode?: string;
+  onPick: (name: string, code: string) => void;
+  inputClassName: string;
+}) {
+  const { label, name, code, branchOfBankCode, onPick, inputClassName } = props;
+  const isBranch = branchOfBankCode !== undefined;
+  const branchSearchDisabled = isBranch && (branchOfBankCode ?? "") === "";
+  const [hits, setHits] = useState<{ code: string; display: string }[]>([]);
+  const [open, setOpen] = useState(false);
+  const debounceRef = useRef<number | null>(null);
+
+  const fetchHits = (q: string) => {
+    if (branchSearchDisabled) return;
+    if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams();
+        if (isBranch) params.set("bank", branchOfBankCode ?? "");
+        params.set("q", q);
+        const res = await fetch(`/api/bank-master?${params.toString()}`);
+        const data = (await res.json()) as { hits?: { code: string; display: string }[] };
+        setHits(data.hits ?? []);
+        setOpen(true);
+      } catch {
+        /* 候補が出ないだけで入力は継続できる */
+      }
+    }, 250);
+  };
+
+  return (
+    <div className="relative">
+      <label className="mb-0.5 block text-xs font-medium text-slate-600">{label}</label>
+      <input
+        type="text"
+        value={name}
+        onChange={(e) => {
+          // 手入力の間はコード未確定に戻す（候補選択で確定する）
+          onPick(e.target.value, "");
+          fetchHits(e.target.value);
+        }}
+        onFocus={() => fetchHits(name)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 150)}
+        placeholder={isBranch ? "例: 丸の内（候補から選択）" : "例: みずほ（候補から選択）"}
+        className={inputClassName}
+      />
+      {open && hits.length > 0 && (
+        <ul className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-slate-300 bg-white py-1 shadow-lg">
+          {hits.map((h) => (
+            <li key={h.code}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onPick(h.display, h.code);
+                  setOpen(false);
+                }}
+                className="flex w-full items-center justify-between px-3 py-1.5 text-left text-sm text-slate-800 hover:bg-slate-100"
+              >
+                <span>{h.display}</span>
+                <span className="ml-2 shrink-0 text-xs tabular-nums text-slate-400">{h.code}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-1 text-[11px] text-slate-500">
+        {branchSearchDisabled
+          ? "先に銀行を候補から選択すると支店の候補が出ます"
+          : code !== ""
+            ? `コード: ${code}（確定済み）`
+            : "候補から選ぶとコードが自動で入ります"}
+      </p>
+    </div>
+  );
+}
 
 /**
  * 請求書発行に必要な振込先・プロフィール項目のうち、未入力のものの表示名を返す。
@@ -9738,7 +9913,9 @@ export default function DashboardPage() {
       postalCode: m.postalCode ?? "",
       address: m.address ?? "",
       bankName: m.bankName ?? "",
+      bankCode: m.bankCode ?? "",
       branchName: m.branchName ?? "",
+      branchCode: m.branchCode ?? "",
       accountType: m.accountType ?? "普通",
       accountNumber: m.accountNumber ?? "",
       accountHolder: m.accountHolder ?? "",
@@ -10480,7 +10657,9 @@ export default function DashboardPage() {
           postalCode: zip,
           address: addr,
           bankName: bank,
+          bankCode: memberSelfBankDraft.bankCode.trim(),
           branchName: branch,
+          branchCode: memberSelfBankDraft.branchCode.trim(),
           accountType: memberSelfBankDraft.accountType.trim() || "普通",
           accountNumber: accNum,
           accountHolder: accHolder,
@@ -10960,24 +11139,29 @@ export default function DashboardPage() {
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
                       />
                     </div>
-                    <div>
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">銀行名</label>
-                      <input
-                        type="text"
-                        value={memberSelfBankDraft.bankName}
-                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, bankName: e.target.value }))}
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">支店名</label>
-                      <input
-                        type="text"
-                        value={memberSelfBankDraft.branchName}
-                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, branchName: e.target.value }))}
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                      />
-                    </div>
+                    <BankMasterAutocompleteField
+                      label="銀行名"
+                      name={memberSelfBankDraft.bankName}
+                      code={memberSelfBankDraft.bankCode}
+                      onPick={(name, code) =>
+                        setMemberSelfBankDraft((d) => ({
+                          ...d,
+                          bankName: name,
+                          bankCode: code,
+                          // 銀行を変えたら支店コードの確定は無効（別銀行の支店コードが残らないように）
+                          branchCode: code === d.bankCode ? d.branchCode : "",
+                        }))
+                      }
+                      inputClassName="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    />
+                    <BankMasterAutocompleteField
+                      label="支店名"
+                      name={memberSelfBankDraft.branchName}
+                      code={memberSelfBankDraft.branchCode}
+                      branchOfBankCode={memberSelfBankDraft.bankCode}
+                      onPick={(name, code) => setMemberSelfBankDraft((d) => ({ ...d, branchName: name, branchCode: code }))}
+                      inputClassName="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    />
                     <div>
                       <label className="mb-0.5 block text-xs font-medium text-slate-600">口座種別</label>
                       <select

@@ -92,6 +92,9 @@ export async function POST(req: Request) {
       accountHolder: accHolder,
       phoneNumber: phone,
       invoiceRegistrationNumber: invRegCheck.value,
+      // 銀行コード・支店コード（候補選択で自動確定。列未作成環境を考慮し指定時のみ）
+      ...(updates.bankCode !== undefined ? { bankCode: updates.bankCode } : {}),
+      ...(updates.branchCode !== undefined ? { branchCode: updates.branchCode } : {}),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

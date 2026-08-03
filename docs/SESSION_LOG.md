@@ -7,6 +7,27 @@
 
 ---
 
+## 2026-08-03（第5弾: 銀行コード・支店コードの自動入力＝freee連携フェーズ1）
+
+- **依頼**: 銀行コード・支店番号を自動入力したい。目的は freee（会計・有料プラン加入済み）との連携。フェーズ1=コード保持＋入力補助、フェーズ2=freee API連携（未着手）と合意。
+
+- **変更**:
+  - **データ**: 全銀協マスタ（zengin-code/source-data 2026-06-30版・MIT）を [lib/zengin-data.json](../lib/zengin-data.json)（約2MB）に統合して内蔵。[lib/bank-master.ts](../lib/bank-master.ts) に検索・厳格照合（正規化: NFKC・かな統一・信用金庫→信金等の略称化）。**サーバー側のみで読む**（クライアントバンドル非搭載）。ADR-013。
+  - **API**: [/api/bank-master](../app/api/bank-master/route.ts)（候補検索・認証不要の公開マスタ）、[/api/admin/backfill-bank-codes](../app/api/admin/backfill-bank-codes/route.ts)（管理者のみ・既存メンバーの一括照合補完）。
+  - **DB**: `users.bank_code / branch_code` 追加。[supabase-migration-users-bank-codes.sql](../supabase-migration-users-bank-codes.sql)（未実行なら下記）。
+  - **型・保存経路**: Member.bankCode/branchCode、toMember、updateMemberOrThrow、本人用 bank-profile API、管理者用 member-update API（列未作成環境でも他項目の保存が通るよう指定時のみ送る）。
+  - **UI**: `BankMasterAutocompleteField`（銀行名→候補選択でコード確定・銀行変更で支店コード無効化・手入力はコード未確定）。メンバー本人の振込先編集と管理者のメンバー編集の両方に適用。管理設定に「銀行コードを一括補完」ボタン（更新/スキップ/要手動対応の内訳と未照合一覧を表示）。
+  - 照合ロジックはメガバンク・ネット銀・ゆうちょ・信金・支店の実データでテスト済み（全ケース正解）。
+
+- **検証**: `npx tsc --noEmit` ✅ / `npm run build` ✅（/u フラグは es5 ターゲット非対応のため除去）
+
+- **申し送り**:
+  - **Supabase SQL 実行が必要**: `ALTER TABLE public.users ADD COLUMN IF NOT EXISTS bank_code TEXT; ALTER TABLE public.users ADD COLUMN IF NOT EXISTS branch_code TEXT;` → 実行後に管理設定の「銀行コードを一括補完」を1回実行。
+  - マスタ更新手順: source-data を再取得して lib/zengin-data.json を再生成（bank-master.ts 冒頭コメント参照）。年1回程度でよい。
+  - **フェーズ2（freee API連携）は未着手**。freeeアプリ登録（OAuth）→「freeeへ同期」ボタンで取引先＋振込口座を登録する構想。
+
+---
+
 ## 2026-08-03（第4弾: 電話番号必須化・ダッシュボード警告カードの判定拡張）
 
 - **依頼**: 電話番号もマストで入力させたい（7月稼働49名の読み取り専用チェックで、不足は伊藤瑛喜さんの電話番号のみと判明。最終稼働 7/14）。

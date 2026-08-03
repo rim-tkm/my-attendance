@@ -89,7 +89,9 @@ export type DbUser = {
   postal_code?: string | null;
   address?: string | null;
   bank_name?: string | null;
+  bank_code?: string | null;
   branch_name?: string | null;
+  branch_code?: string | null;
   account_type?: string | null;
   account_number?: string | null;
   account_holder?: string | null;
@@ -189,7 +191,9 @@ export function toMember(r: DbUser): Member {
     postalCode: zip !== "" ? zip : undefined,
     address: addr !== "" ? addr : undefined,
     bankName: bank !== "" ? bank : undefined,
+    bankCode: normStr(r.bank_code ?? "") !== "" ? normStr(r.bank_code ?? "") : undefined,
     branchName: branch !== "" ? branch : undefined,
+    branchCode: normStr(r.branch_code ?? "") !== "" ? normStr(r.branch_code ?? "") : undefined,
     accountType: normStr(r.account_type ?? "") !== "" ? normStr(r.account_type ?? "") : undefined,
     accountNumber: accNum !== "" ? accNum : undefined,
     accountHolder: accHolder !== "" ? accHolder : undefined,
@@ -386,6 +390,9 @@ function usersUpsertRowFromMember(m: Member): Record<string, unknown> {
     address: m.address ?? "",
     bank_name: m.bankName ?? "",
     branch_name: m.branchName ?? "",
+    // 銀行コード・支店コードは列未作成の環境でも upsert が通るよう、値があるときのみ含める
+    ...(m.bankCode !== undefined ? { bank_code: m.bankCode } : {}),
+    ...(m.branchCode !== undefined ? { branch_code: m.branchCode } : {}),
     account_type: m.accountType ?? "普通",
     account_number: m.accountNumber ?? "",
     account_holder: m.accountHolder ?? "",
@@ -561,7 +568,9 @@ export type MemberUpdatePayload = Partial<
     | "postalCode"
     | "address"
     | "bankName"
+    | "bankCode"
     | "branchName"
+    | "branchCode"
     | "accountType"
     | "accountNumber"
     | "accountHolder"
@@ -595,7 +604,9 @@ export type MemberSelfBankProfilePayload = Pick<
   | "postalCode"
   | "address"
   | "bankName"
+  | "bankCode"
   | "branchName"
+  | "branchCode"
   | "accountType"
   | "accountNumber"
   | "accountHolder"
@@ -622,6 +633,9 @@ export async function updateMemberSelfBankProfileOrThrow(
   if (updates.invoiceRegistrationNumber !== undefined) {
     body.invoice_registration_number = updates.invoiceRegistrationNumber;
   }
+  // 銀行コード・支店コードは列未作成の環境でも本体更新が通るよう、指定時のみ含める
+  if (updates.bankCode !== undefined) body.bank_code = (updates.bankCode ?? "").trim();
+  if (updates.branchCode !== undefined) body.branch_code = (updates.branchCode ?? "").trim();
   const { error } = await supabase.from("users").update(body).eq("id", memberId);
   if (error) {
     const m = error.message ?? String(error);
@@ -648,6 +662,8 @@ export async function updateMemberOrThrow(
   if (updates.postalCode !== undefined) body.zip_code = updates.postalCode;
   if (updates.address !== undefined) body.address = updates.address;
   if (updates.bankName !== undefined) body.bank_name = updates.bankName;
+  if (updates.bankCode !== undefined) body.bank_code = (updates.bankCode ?? "").trim();
+  if (updates.branchCode !== undefined) body.branch_code = (updates.branchCode ?? "").trim();
   if (updates.branchName !== undefined) body.branch_name = updates.branchName;
   if (updates.accountType !== undefined) body.account_type = updates.accountType;
   if (updates.accountNumber !== undefined) body.account_number = updates.accountNumber;

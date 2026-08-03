@@ -23,7 +23,9 @@ export function coerceMemberSelfBankProfileBody(raw: unknown): MemberUpdatePaylo
   if (typeof o.postalCode === "string") out.postalCode = o.postalCode;
   if (typeof o.address === "string") out.address = o.address;
   if (typeof o.bankName === "string") out.bankName = o.bankName;
+  if (typeof o.bankCode === "string") out.bankCode = o.bankCode;
   if (typeof o.branchName === "string") out.branchName = o.branchName;
+  if (typeof o.branchCode === "string") out.branchCode = o.branchCode;
   if (typeof o.accountType === "string") out.accountType = o.accountType;
   if (typeof o.accountNumber === "string") out.accountNumber = o.accountNumber;
   if (typeof o.accountHolder === "string") out.accountHolder = o.accountHolder;
