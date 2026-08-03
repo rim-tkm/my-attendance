@@ -99,6 +99,7 @@ export type DbUser = {
   invoice_registration_number?: string | null;
   phone_number?: string | null;
   slack_id?: string | null;
+  freee_partner_id?: number | null;
   is_active?: boolean | null;
   first_work_date?: string | null;
   slack_first_shift_hours_notified_at?: string | null;
@@ -201,6 +202,7 @@ export function toMember(r: DbUser): Member {
     invoiceRegistrationNumber: invReg !== "" ? invReg : undefined,
     phoneNumber: phone !== "" ? phone : undefined,
     slackId: normStr(r.slack_id ?? "") !== "" ? normStr(r.slack_id ?? "") : undefined,
+    freeePartnerId: typeof r.freee_partner_id === "number" ? r.freee_partner_id : undefined,
     isActive: r.is_active === undefined || r.is_active === null ? true : !!r.is_active,
     firstWorkDate:
       r.first_work_date != null && String(r.first_work_date).trim() !== ""

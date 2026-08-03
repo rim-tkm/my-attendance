@@ -7,6 +7,27 @@
 
 ---
 
+## 2026-08-03（第7弾: freee API自動連携＝フェーズ2）
+
+- **依頼**: freeeと自動連携したい（CSV手動インポートではなくボタン一発同期）。
+
+- **変更**:
+  - **OAuth基盤**: [lib/freee-api.ts](../lib/freee-api.ts)（認可URL・コード交換・自動リフレッシュ・APIラッパー。トークンは freee_oauth_tokens に保管）。[/api/freee/oauth/start](../app/api/freee/oauth/start/route.ts)（state をhttpOnly Cookieで照合）・[callback](../app/api/freee/oauth/callback/route.ts)（交換→事業所取得→保存→`/?freee=connected` へ）。
+  - **同期**: [lib/freee-partner-sync.ts](../lib/freee-partner-sync.ts)（公式OpenAPIスキーマ準拠のpartnerペイロード。org_code=2個人・都道府県コード変換・振込口座・支払条件 末日/翌月/15日・インボイス）。[/api/admin/freee-sync-partners](../app/api/admin/freee-sync-partners/route.ts)（未同期=作成→`users.freee_partner_id` 保存、同期済み=更新、名前重複=freee側を検索して自動紐付け）。[/api/admin/freee-status](../app/api/admin/freee-status/route.ts)。
+  - **UI**: 管理設定に「freee連携」カード（接続状態・[freeeと接続]・[取引先をfreeeへ同期]・結果内訳）。OAuth戻りのクエリで管理設定を自動オープンし結果表示。
+  - **DB**: [supabase-migration-freee-integration.sql](../supabase-migration-freee-integration.sql) — freee_oauth_tokens（**RLSポリシーなし=service_roleのみ**・ADR-014）+ users.freee_partner_id。
+  - `.env.example` に FREEE_CLIENT_ID / FREEE_CLIENT_SECRET を追記。
+
+- **検証**: `npx tsc --noEmit` ✅ / `npm run build` ✅（実APIはfreeeアプリ登録後でないと疎通確認不可）
+
+- **申し送り（ユーザー作業が3つ必要）**:
+  1. Supabase SQL: supabase-migration-freee-integration.sql を実行
+  2. freeeアプリストア開発者ページでアプリ登録 → コールバックURL `https://my-attendance-rho.vercel.app/api/freee/oauth/callback`、権限は取引先の読み書き → Client ID/Secret を取得
+  3. Vercel 環境変数: FREEE_CLIENT_ID / FREEE_CLIENT_SECRET を追加（SUPABASE_SERVICE_ROLE_KEY が未設定ならそれも）→ 再デプロイ
+  - その後 管理設定 → freee連携 → [freeeと接続] → [取引先をfreeeへ同期]。**実データでの疎通確認は未実施**（接続後の初回同期で要確認）。
+
+---
+
 ## 2026-08-03（第6弾: freee取引先CSVエクスポート）
 
 - **依頼**: freeeの「取引先マスタインポートフォーマット」CSV（ユーザー提供・Shift_JIS）を確認し、この形式でメンバーを出力できるようにする。

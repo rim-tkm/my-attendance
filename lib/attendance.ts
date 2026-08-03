@@ -42,6 +42,8 @@ export interface Member {
   phoneNumber?: string;
   /** Slack メンバーID（例: U0123…）。シフト催促で <@…> メンションに使用 */
   slackId?: string | null;
+  /** freee の取引先ID（同期済みなら設定。未同期は undefined） */
+  freeePartnerId?: number | null;
   /** 有効フラグ。false の場合は論理削除（一覧非表示・ログイン不可）。未設定は true 扱い */
   isActive?: boolean;
   /** 初回稼働日（YYYY-MM-DD）。未設定は undefined / null */

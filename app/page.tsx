@@ -1514,6 +1514,95 @@ function AdminDashboard(props: {
   const [holidayFeedback, setHolidayFeedback] = useState<{ variant: "success" | "error"; message: string } | null>(
     null
   );
+  /** freee API 連携: 接続状態・同期処理の状態（管理者のみ利用） */
+  const [freeeStatus, setFreeeStatus] = useState<{
+    configured: boolean;
+    connected: boolean;
+    companyName: string | null;
+  } | null>(null);
+  const [freeeSyncBusy, setFreeeSyncBusy] = useState(false);
+  const [freeeSyncResult, setFreeeSyncResult] = useState<{ variant: "success" | "error"; message: string } | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (!isAdminUser) return;
+    let alive = true;
+    void fetch("/api/admin/freee-status", { credentials: "include" })
+      .then((res) => res.json())
+      .then((data: { configured?: boolean; connected?: boolean; companyName?: string | null }) => {
+        if (!alive) return;
+        setFreeeStatus({
+          configured: data.configured === true,
+          connected: data.connected === true,
+          companyName: data.companyName ?? null,
+        });
+      })
+      .catch(() => {
+        if (alive) setFreeeStatus({ configured: false, connected: false, companyName: null });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isAdminUser]);
+
+  // freee OAuth コールバックからの戻り（?freee=connected / error）を拾って結果表示＋URLを掃除
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const q = new URLSearchParams(window.location.search);
+    const result = q.get("freee");
+    if (!result) return;
+    const detail = q.get("freeeDetail") ?? "";
+    setAdminSection("settings");
+    setFreeeSyncResult(
+      result === "connected"
+        ? { variant: "success", message: `freee（${detail}）と接続しました。「取引先をfreeeへ同期」を実行できます。` }
+        : { variant: "error", message: `freee接続に失敗しました: ${detail}` }
+    );
+    if (result === "connected") {
+      setFreeeStatus((prev) => ({ configured: true, connected: true, companyName: detail || prev?.companyName || null }));
+    }
+    const u = new URL(window.location.href);
+    u.searchParams.delete("freee");
+    u.searchParams.delete("freeeDetail");
+    window.history.replaceState({}, "", `${u.pathname}${u.searchParams.toString() ? `?${u.searchParams}` : ""}`);
+  }, []);
+
+  const handleFreeeSyncPartners = async () => {
+    if (
+      !window.confirm(
+        "有効メンバー全員（管理者除く）を freee の取引先として登録・更新します。freee 側に同名の取引先がある場合は自動で紐付けます。実行しますか？"
+      )
+    )
+      return;
+    setFreeeSyncBusy(true);
+    setFreeeSyncResult(null);
+    try {
+      const res = await fetch("/api/admin/freee-sync-partners", { method: "POST", credentials: "include" });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        companyName?: string;
+        created?: number;
+        updated?: number;
+        errors?: { name: string; detail?: string }[];
+        linked?: { name: string; detail?: string }[];
+      };
+      if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "同期に失敗しました");
+      const errors = data.errors ?? [];
+      const lines = [
+        `freee（${data.companyName ?? ""}）へ同期完了 — 新規登録: ${data.created ?? 0}名 ／ 更新: ${data.updated ?? 0}名 ／ エラー: ${errors.length}名`,
+        ...(data.linked ?? []).map((l) => `・${l.name}: ${l.detail}`),
+        ...errors.map((er) => `・${er.name}: ${er.detail ?? "エラー"}`),
+      ];
+      setFreeeSyncResult({ variant: errors.length === 0 ? "success" : "error", message: lines.join("\n") });
+      onRefresh();
+    } catch (e) {
+      setFreeeSyncResult({ variant: "error", message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setFreeeSyncBusy(false);
+    }
+  };
+
   /** freee 取引先 CSV ダウンロードの処理状態 */
   const [freeeCsvBusy, setFreeeCsvBusy] = useState(false);
 
@@ -7427,6 +7516,49 @@ function AdminDashboard(props: {
               </div>
             )}
           </div>
+
+          {isAdminUser && (
+            <div className="mb-6 flex flex-col gap-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-4">
+              <span className="text-xs font-medium text-slate-800">freee連携（取引先の自動同期）</span>
+              <p className="text-xs text-slate-600">
+                {freeeStatus == null
+                  ? "接続状態を確認中…"
+                  : !freeeStatus.configured
+                    ? "未設定: Vercel の環境変数 FREEE_CLIENT_ID / FREEE_CLIENT_SECRET を設定すると接続できます。"
+                    : freeeStatus.connected
+                      ? `接続済み: ${freeeStatus.companyName ?? "事業所"}。「取引先をfreeeへ同期」で有効メンバーを取引先として登録・更新します（2回目以降は上書き更新）。`
+                      : "未接続: 「freeeと接続」を押して freee にログイン・許可すると連携が始まります。"}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <a
+                  href="/api/freee/oauth/start"
+                  className={`w-fit rounded px-4 py-2 text-sm font-medium text-white ${
+                    freeeStatus?.configured ? "bg-emerald-700 hover:bg-emerald-600" : "pointer-events-none bg-slate-400"
+                  }`}
+                >
+                  {freeeStatus?.connected ? "freeeと再接続" : "freeeと接続"}
+                </a>
+                <button
+                  type="button"
+                  onClick={() => void handleFreeeSyncPartners()}
+                  disabled={freeeSyncBusy || freeeStatus?.connected !== true}
+                  className="w-fit rounded bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+                >
+                  {freeeSyncBusy ? "同期中…" : "取引先をfreeeへ同期"}
+                </button>
+              </div>
+              {freeeSyncResult != null && (
+                <div
+                  className={`min-w-0 max-w-xl whitespace-pre-wrap text-sm font-medium ${
+                    freeeSyncResult.variant === "success" ? "text-green-700" : "text-red-600"
+                  }`}
+                  role="status"
+                >
+                  {freeeSyncResult.message}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
             <span className="text-xs font-medium text-slate-600">
