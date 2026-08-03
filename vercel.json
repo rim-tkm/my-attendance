@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/missed-punch-start",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/freee-sync-partners",
+      "schedule": "30 20 * * *"
     }
   ]
 }

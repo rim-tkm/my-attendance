@@ -1,11 +1,14 @@
-import type { Member } from "@/lib/attendance";
+import { normalizeMemberName, type Member } from "@/lib/attendance";
 import { bankByCode, branchByCode } from "@/lib/bank-master";
+import { freeeRequest, getFreeeAccess } from "@/lib/freee-api";
 import {
   accountNumberForTransfer,
   branchNameForFreee,
   resolveJpAddress,
   toHalfWidthKana,
 } from "@/lib/freee-partners-csv";
+import { getSupabase } from "@/lib/supabase";
+import { loadMembers } from "@/lib/supabase-data";
 
 /**
  * freee 取引先（partner）API の作成・更新ペイロードをメンバーから組み立てる（サーバー専用）。
@@ -77,4 +80,109 @@ export function buildFreeePartnerPayload(member: Member, companyId: number): Fre
     };
   }
   return payload;
+}
+
+export type FreeeSyncRow = { name: string; action: "created" | "updated" | "error"; detail?: string };
+
+export type FreeeSyncSummary =
+  | {
+      ok: true;
+      companyName: string;
+      created: number;
+      updated: number;
+      errors: FreeeSyncRow[];
+      linked: FreeeSyncRow[];
+    }
+  | { ok: false; error: string };
+
+/**
+ * 有効メンバー（管理者除く）を freee の取引先として一括同期する（管理画面のボタンと毎日の Cron の共通コア）。
+ * - users.freee_partner_id が未設定 → 作成して ID を保存。設定済み → 更新
+ * - freee 側の既存取引先とは空白無視の名前照合で自動紐付け（更新時に name がアプリ表記へ揃う）
+ */
+export async function syncAllMembersToFreee(): Promise<FreeeSyncSummary> {
+  const access = await getFreeeAccess();
+  if (!access) {
+    return { ok: false, error: "freee と未接続です。管理設定の「freeeと接続」を実行してください。" };
+  }
+  const supabase = getSupabase();
+  if (!supabase) return { ok: false, error: "データベースに接続できません" };
+  const members = await loadMembers();
+  if (members === null) return { ok: false, error: "メンバーを取得できません" };
+
+  const targets = members.filter(
+    (m) => m.isActive !== false && (m.loginAccount ?? "").trim().toLowerCase() !== "admin"
+  );
+
+  const results: FreeeSyncRow[] = [];
+  let created = 0;
+  let updated = 0;
+
+  const savePartnerId = async (memberId: string, partnerId: number) => {
+    const { error } = await supabase.from("users").update({ freee_partner_id: partnerId }).eq("id", memberId);
+    if (error) console.warn("[freee-sync] freee_partner_id 保存エラー:", error);
+  };
+
+  const partnersByNormalizedName = new Map<string, number>();
+  try {
+    const pageLimit = 100;
+    for (let offset = 0; ; offset += pageLimit) {
+      const page = await freeeRequest<{ partners?: { id: number; name: string }[] }>(
+        access.accessToken,
+        "GET",
+        `/api/1/partners?company_id=${access.companyId}&limit=${pageLimit}&offset=${offset}`
+      );
+      const list = page.partners ?? [];
+      for (const p of list) {
+        partnersByNormalizedName.set(normalizeMemberName(p.name), p.id);
+      }
+      if (list.length < pageLimit) break;
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      error: `freee の既存取引先一覧を取得できません: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+
+  for (const m of targets) {
+    const payload = buildFreeePartnerPayload(m, access.companyId);
+    try {
+      if (m.freeePartnerId != null) {
+        await freeeRequest(access.accessToken, "PUT", `/api/1/partners/${m.freeePartnerId}`, payload);
+        updated++;
+        results.push({ name: m.name, action: "updated" });
+        continue;
+      }
+      const existingId = partnersByNormalizedName.get(normalizeMemberName(m.name));
+      if (existingId != null) {
+        await freeeRequest(access.accessToken, "PUT", `/api/1/partners/${existingId}`, payload);
+        await savePartnerId(m.id, existingId);
+        updated++;
+        results.push({ name: m.name, action: "updated", detail: "freee側の既存取引先に自動紐付けしました" });
+        continue;
+      }
+      const createdRes = await freeeRequest<{ partner?: { id: number } }>(
+        access.accessToken,
+        "POST",
+        "/api/1/partners",
+        payload
+      );
+      const newId = createdRes.partner?.id;
+      if (newId != null) await savePartnerId(m.id, newId);
+      created++;
+      results.push({ name: m.name, action: "created" });
+    } catch (e) {
+      results.push({ name: m.name, action: "error", detail: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  return {
+    ok: true,
+    companyName: access.companyName,
+    created,
+    updated,
+    errors: results.filter((x) => x.action === "error"),
+    linked: results.filter((x) => x.detail != null && x.action !== "error"),
+  };
 }
