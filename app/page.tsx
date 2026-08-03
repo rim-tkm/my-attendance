@@ -9850,6 +9850,8 @@ export default function DashboardPage() {
   /** 姓名分離の収集（税理士要望）: 姓・名が未登録のメンバーはモーダルで本人に確認する */
   const [confirmSei, setConfirmSei] = useState("");
   const [confirmMei, setConfirmMei] = useState("");
+  /** フリガナ未登録のメンバーはモーダルで収集（freee のカナ名称に使用） */
+  const [confirmFurigana, setConfirmFurigana] = useState("");
   const profileConfirmNameSeededRef = useRef<string | null>(null);
 
   const invokeKpiMissingNotifyImmediate = useCallback(async () => {
@@ -10937,6 +10939,8 @@ export default function DashboardPage() {
 
   /** 姓・名が未登録で、モーダルでの本人確認が必要か */
   const needsNameSplitConfirm = currentMember != null && (currentMember.lastName ?? "").trim() === "";
+  /** フリガナが未登録で、モーダルでの入力が必要か */
+  const needsFuriganaConfirm = currentMember != null && (currentMember.furigana ?? "").trim() === "";
 
   // モーダル表示時に姓・名の初期値をセット（表示名にスペースがあれば分割、なければ姓に全体）
   useEffect(() => {
@@ -10948,17 +10952,24 @@ export default function DashboardPage() {
       : splitMemberName(currentMember.name) ?? { lastName: currentMember.name, firstName: "" };
     setConfirmSei(split.lastName);
     setConfirmMei(split.firstName);
+    setConfirmFurigana(currentMember.furigana ?? "");
   }, [currentMember]);
 
-  /** モーダルの姓名入力が有効か（姓名確認が必要なときのみ必須） */
-  const nameSplitInputsValid = !needsNameSplitConfirm || (confirmSei.trim() !== "" && confirmMei.trim() !== "");
+  /** モーダルの姓名・フリガナ入力が有効か（それぞれ未登録のときのみ必須） */
+  const nameSplitInputsValid =
+    (!needsNameSplitConfirm || (confirmSei.trim() !== "" && confirmMei.trim() !== "")) &&
+    (!needsFuriganaConfirm || confirmFurigana.trim() !== "");
 
-  /** 姓名（必要時）を確認記録と一緒にサーバーへ送る */
+
+  /** 姓名・フリガナ（必要時）を確認記録と一緒にサーバーへ送る */
   const postConfirmProfile = async () => {
     const body: Record<string, string> = {};
     if (needsNameSplitConfirm) {
       body.lastName = confirmSei.trim();
       body.firstName = confirmMei.trim();
+    }
+    if (needsFuriganaConfirm) {
+      body.furigana = confirmFurigana.trim();
     }
     const res = await fetch("/api/member/confirm-profile", {
       method: "POST",
@@ -11027,6 +11038,52 @@ export default function DashboardPage() {
     (memberMissingProfileItems.length > 0 ||
       needsNameSplitConfirm ||
       (currentMember.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7));
+
+  /** 明らかに間違っていそうな登録値の警告（形式チェック＋銀行・支店のマスタ照合）。行キー→警告文 */
+  const [profileWarnings, setProfileWarnings] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!showMonthlyProfileConfirm || !currentMember) return;
+    const digitsOf = (s: string) => s.normalize("NFKC").replace(/\D/g, "");
+    const w: Record<string, string> = {};
+    const zip = (currentMember.postalCode ?? "").trim();
+    if (zip !== "" && digitsOf(zip).length !== 7) w.address = "郵便番号は7桁です（例: 123-4567）。表記をご確認ください";
+    const phone = (currentMember.phoneNumber ?? "").trim();
+    const phoneDigits = digitsOf(phone);
+    if (phone !== "" && (phoneDigits.length < 10 || phoneDigits.length > 11)) {
+      w.phone = "電話番号の桁数が正しくない可能性があります";
+    }
+    const acc = (currentMember.accountNumber ?? "").trim();
+    const accDigits = digitsOf(acc);
+    if (acc !== "" && (accDigits.length === 0 || accDigits.length > 8)) {
+      w.account = "口座番号が正しくない可能性があります（通常は7桁以内。ゆうちょは通帳の「番号」8桁でも可）";
+    }
+    const invReg = (currentMember.invoiceRegistrationNumber ?? "").trim();
+    if (invReg !== "" && !/^T[1-9][0-9]{12}$/.test(invReg.normalize("NFKC").replace(/[\s　-]/g, ""))) {
+      w.invoice = "インボイス登録番号は「T＋13桁の数字」の形式です。ご確認ください";
+    }
+    setProfileWarnings(w);
+    const bankName = (currentMember.bankName ?? "").trim();
+    if (bankName === "") return;
+    const branchName = (currentMember.branchName ?? "").trim();
+    const params = new URLSearchParams({ validateBank: bankName, validateBranch: branchName });
+    void fetch(`/api/bank-master?${params.toString()}`)
+      .then((r) => r.json())
+      .then((d: { bank?: unknown; branch?: unknown }) => {
+        setProfileWarnings((prev) => {
+          const next = { ...prev };
+          if (!d.bank) {
+            next.bank = "この銀行名は銀行マスタで確認できません。正式な銀行名かご確認ください";
+          } else if (branchName !== "" && !d.branch) {
+            next.branch = "この支店名は銀行のマスタで確認できません。通帳・アプリで正式な支店名をご確認ください";
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        /* 照合できないだけで確認は続行できる */
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMonthlyProfileConfirm, currentMember?.id]);
 
   if (!mounted) {
     return (
@@ -11260,47 +11317,76 @@ export default function DashboardPage() {
                 <span className="mt-1 block font-medium text-slate-700">確認が完了するまで打刻・シフト提出はできません。</span>
               </p>
             )}
-            {needsNameSplitConfirm && (
+            {(needsNameSplitConfirm || needsFuriganaConfirm) && (
               <div className="mb-4 rounded-lg border border-slate-200 bg-white p-3">
                 <p className="mb-2 text-xs font-medium text-slate-700">
-                  お名前の「姓」と「名」を確認させてください（経理システムの表記統一のためです）
+                  お名前の表記を確認させてください（経理システムの表記統一のためです）
                 </p>
-                <div className="flex gap-2">
+                {needsNameSplitConfirm && (
+                  <div className="mb-2 flex gap-2">
+                    <input
+                      type="text"
+                      value={confirmSei}
+                      onChange={(e) => setConfirmSei(e.target.value)}
+                      placeholder="姓（例: 山田）"
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    />
+                    <input
+                      type="text"
+                      value={confirmMei}
+                      onChange={(e) => setConfirmMei(e.target.value)}
+                      placeholder="名（例: 太郎）"
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    />
+                  </div>
+                )}
+                {needsFuriganaConfirm && (
                   <input
                     type="text"
-                    value={confirmSei}
-                    onChange={(e) => setConfirmSei(e.target.value)}
-                    placeholder="姓（例: 山田）"
+                    value={confirmFurigana}
+                    onChange={(e) => setConfirmFurigana(e.target.value)}
+                    placeholder="フリガナ（例: ヤマダ タロウ）"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
                   />
-                  <input
-                    type="text"
-                    value={confirmMei}
-                    onChange={(e) => setConfirmMei(e.target.value)}
-                    placeholder="名（例: 太郎）"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                  />
-                </div>
+                )}
                 {!nameSplitInputsValid && (
-                  <p className="mt-1 text-[11px] text-red-600">姓と名の両方を入力してください</p>
+                  <p className="mt-1 text-[11px] text-red-600">
+                    {needsNameSplitConfirm ? "姓・名" : ""}
+                    {needsNameSplitConfirm && needsFuriganaConfirm ? "と" : ""}
+                    {needsFuriganaConfirm ? "フリガナ" : ""}を入力してください
+                  </p>
                 )}
               </div>
             )}
             <dl className="mb-5 space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-4 text-sm">
               {[
-                ["住所", `〒${currentMember.postalCode ?? "未登録"} ${currentMember.address ?? ""}${currentMember.address2 ? ` ${currentMember.address2}` : ""}`],
-                ["電話番号", currentMember.phoneNumber ?? "未登録"],
-                ["銀行", currentMember.bankName ?? "未登録"],
-                ["支店", currentMember.branchName ?? "未登録"],
-                ["口座", `${currentMember.accountType ?? "普通"} ${currentMember.accountNumber ?? "未登録"}`],
-                ["口座名義", currentMember.accountHolder ?? "未登録"],
-                ["インボイス登録番号", currentMember.invoiceRegistrationNumber || "なし（未登録）"],
-              ].map(([label, value]) => (
-                <div key={label} className="flex gap-3">
-                  <dt className="w-28 shrink-0 text-xs font-medium text-slate-500">{label}</dt>
-                  <dd className="min-w-0 break-all text-slate-800">{value}</dd>
-                </div>
-              ))}
+                ["name", "氏名", currentMember.lastName ? buildMemberDisplayName(currentMember.lastName, currentMember.firstName ?? "") : currentMember.name],
+                ["furigana", "フリガナ", currentMember.furigana ?? "未登録（上で入力してください）"],
+                ["address", "住所", `〒${currentMember.postalCode ?? "未登録"} ${currentMember.address ?? ""}${currentMember.address2 ? ` ${currentMember.address2}` : ""}`],
+                ["phone", "電話番号", currentMember.phoneNumber ?? "未登録"],
+                ["bank", "銀行", currentMember.bankName ?? "未登録"],
+                ["branch", "支店", currentMember.branchName ?? "未登録"],
+                ["account", "口座", `${currentMember.accountType ?? "普通"} ${currentMember.accountNumber ?? "未登録"}`],
+                ["holder", "口座名義", currentMember.accountHolder ?? "未登録"],
+                ["invoice", "インボイス登録番号", currentMember.invoiceRegistrationNumber || "なし（未登録）"],
+              ].map(([key, label, value]) => {
+                const warning = profileWarnings[key];
+                return (
+                  <div key={key}>
+                    <div className="flex gap-3">
+                      <dt className="w-28 shrink-0 text-xs font-medium text-slate-500">{label}</dt>
+                      <dd className={`min-w-0 break-all ${warning ? "font-medium text-red-600" : "text-slate-800"}`}>
+                        {value}
+                      </dd>
+                    </div>
+                    {warning && (
+                      <p className="ml-[7.75rem] mt-0.5 text-[11px] font-medium leading-relaxed text-red-600">
+                        ⚠️ {warning}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
             </dl>
             <div className="flex flex-col gap-2">
               {memberMissingProfileItems.length > 0 ? (

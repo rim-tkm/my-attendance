@@ -22,9 +22,14 @@ export async function POST(req: Request) {
   if (!supabase) {
     return NextResponse.json({ error: "データベースに接続できません" }, { status: 500 });
   }
-  const body = (await req.json().catch(() => ({}))) as { lastName?: unknown; firstName?: unknown };
+  const body = (await req.json().catch(() => ({}))) as {
+    lastName?: unknown;
+    firstName?: unknown;
+    furigana?: unknown;
+  };
   const lastName = typeof body.lastName === "string" ? body.lastName.trim().replace(/[\s　]+/g, "") : "";
   const firstName = typeof body.firstName === "string" ? body.firstName.trim().replace(/[\s　]+/g, "") : "";
+  const furigana = typeof body.furigana === "string" ? body.furigana.trim() : "";
 
   const currentMonth = getTodayJstDateString().slice(0, 7);
   const updates: Record<string, unknown> = { profile_confirmed_month: currentMonth };
@@ -32,6 +37,9 @@ export async function POST(req: Request) {
     updates.last_name = lastName;
     updates.first_name = firstName;
     updates.name = buildMemberDisplayName(lastName, firstName);
+  }
+  if (furigana !== "") {
+    updates.furigana = furigana;
   }
   const { error } = await supabase.from("users").update(updates).eq("id", userId).eq("is_active", true);
   if (error) {

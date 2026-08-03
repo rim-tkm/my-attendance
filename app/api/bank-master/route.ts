@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
-import { bankMasterDisplayName, bankMasterUpdatedAt, searchBanks, searchBranches } from "@/lib/bank-master";
+import {
+  bankMasterDisplayName,
+  bankMasterUpdatedAt,
+  matchBankByName,
+  matchBranchByName,
+  searchBanks,
+  searchBranches,
+} from "@/lib/bank-master";
 
 /**
  * 銀行・支店マスタ検索（全銀協オープンデータのスナップショット・公開マスタのため認証不要）。
@@ -10,6 +17,18 @@ import { bankMasterDisplayName, bankMasterUpdatedAt, searchBanks, searchBranches
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
+  // 検証モード: 登録済みの銀行名・支店名がマスタと照合できるか（本人確認モーダルの赤字警告用）
+  const validateBank = url.searchParams.get("validateBank");
+  if (validateBank != null) {
+    const bankHit = validateBank.trim() !== "" ? matchBankByName(validateBank) : null;
+    const validateBranch = (url.searchParams.get("validateBranch") ?? "").trim();
+    const branchHit = bankHit && validateBranch !== "" ? matchBranchByName(bankHit.code, validateBranch) : null;
+    return NextResponse.json({
+      ok: true,
+      bank: bankHit ? { code: bankHit.code, name: bankMasterDisplayName(bankHit.name) } : null,
+      branch: branchHit ? { code: branchHit.code, name: branchHit.name } : null,
+    });
+  }
   const q = url.searchParams.get("q") ?? "";
   const bank = (url.searchParams.get("bank") ?? "").trim();
   if (bank !== "") {
