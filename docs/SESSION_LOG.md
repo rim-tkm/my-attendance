@@ -7,6 +7,22 @@
 
 ---
 
+## 2026-08-03（第9弾: 毎日自動同期・建物名分離・月次本人確認）
+
+- **依頼**: ①同期を自動化したい（口座変更が自動でfreeeに反映）②freeeでカナ・銀行番号が空のメンバーがいる③建物名を分けたい④毎月1回ログイン時に本人へ登録情報の確認を出したい。
+
+- **変更**:
+  - **毎日自動同期Cron**（590f644）: [/api/cron/freee-sync-partners](../app/api/cron/freee-sync-partners/route.ts)（毎朝5:30 JST・CRON_SECRET認証）。同期コアを `syncAllMembersToFreee` として [lib/freee-partner-sync.ts](../lib/freee-partner-sync.ts) に抽出し手動ボタンと共通化。失敗・エラーがある日のみ SLACK_WEBHOOK_URL へ通知。
+  - **銀行コード自動判定**: 同期・CSV時に users のコードが未確定なら銀行名・支店名からマスタ照合（`resolveBankCodesForFreee`）。「一括補完」ボタン未実行でもカナ・番号が出る。
+  - **建物名分離**: `users.address2` 追加。本人・管理者の両編集フォームに「建物名・部屋番号」欄。freee の street_name2 と CSVの建物名列に反映。address2 未入力の既存データは「番地の後の空白区切り」のみ自動分割（`splitBuildingFromStreet`・誤分割防止のため空白なしは分割しない）。
+  - **月次本人確認**: `users.profile_confirmed_month`（YYYY-MM）追加。月が変わって最初のログインでメンバー画面に確認モーダル（住所・電話・口座・インボイスの要約）。[この内容で間違いない]→ [/api/member/confirm-profile](../app/api/member/confirm-profile/route.ts) で当月を記録、[変更がある]→ 振込先フォーム（#member-billing-profile）へスクロール。フォーム保存でも当月確認扱い。変更は翌朝のCronでfreeeへ自動反映。
+
+- **検証**: `npx tsc --noEmit` ✅ / `npm run build` ✅
+
+- **申し送り**: **Supabase SQL 実行が必要** — supabase-migration-users-address2-profile-confirmed.sql（`ALTER TABLE public.users ADD COLUMN IF NOT EXISTS address2 TEXT; ADD COLUMN IF NOT EXISTS profile_confirmed_month TEXT;`）。未実行の間は確認モーダルの記録・建物名保存がエラーになる（他機能は無影響）。Cron の CRON_SECRET は既存設定を流用。
+
+---
+
 ## 2026-08-03（第8弾: freee連携の本番疎通・実データ対応）
 
 - **経緯**: ユーザーがfreeeアプリ登録（プライベートアプリ・取引先の参照/更新権限・コールバックURL設定）とVercel環境変数を設定し、OAuth接続に成功（事業所: 株式会社RIM）。初回同期で実データ起因の問題を2件修正。

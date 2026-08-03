@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
 import { validateQualifiedInvoiceRegistrationNumber } from "@/lib/invoice-registration-number";
+import { getTodayJstDateString } from "@/lib/export-schedule";
 import { coerceMemberSelfBankProfileBody } from "@/lib/member-bank-profile-api";
 import { getSupabase } from "@/lib/supabase";
 import { updateMemberSelfBankProfileOrThrow } from "@/lib/supabase-data";
@@ -92,14 +93,23 @@ export async function POST(req: Request) {
       accountHolder: accHolder,
       phoneNumber: phone,
       invoiceRegistrationNumber: invRegCheck.value,
-      // 銀行コード・支店コード（候補選択で自動確定。列未作成環境を考慮し指定時のみ）
+      // 銀行コード・支店コード・建物名（列未作成環境を考慮し指定時のみ）
       ...(updates.bankCode !== undefined ? { bankCode: updates.bankCode } : {}),
       ...(updates.branchCode !== undefined ? { branchCode: updates.branchCode } : {}),
+      ...(updates.address2 !== undefined ? { address2: updates.address2 } : {}),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 400 });
   }
+
+  // 保存できた＝本人が内容を確認した扱いにして、当月の確認モーダルを閉じる（列未作成環境では警告のみ）
+  const currentMonth = getTodayJstDateString().slice(0, 7);
+  const { error: confirmErr } = await supabase
+    .from("users")
+    .update({ profile_confirmed_month: currentMonth })
+    .eq("id", userId);
+  if (confirmErr) console.warn("[bank-profile] profile_confirmed_month 更新スキップ:", confirmErr.message);
 
   return NextResponse.json({ ok: true });
 }

@@ -18,8 +18,10 @@ export interface Member {
   hourlyRate?: number;
   /** 郵便番号 */
   postalCode?: string;
-  /** 住所 */
+  /** 住所（都道府県〜番地） */
   address?: string;
+  /** 建物名・部屋番号など（freee 取引先の建物名欄に対応する分離欄） */
+  address2?: string;
   /** 銀行名 */
   bankName?: string;
   /** 銀行コード（全銀協4桁・freee連携用。名称から自動確定） */
@@ -44,6 +46,8 @@ export interface Member {
   slackId?: string | null;
   /** freee の取引先ID（同期済みなら設定。未同期は undefined） */
   freeePartnerId?: number | null;
+  /** 本人が登録情報を確認した月（YYYY-MM）。月が変わると再確認モーダルを表示する */
+  profileConfirmedMonth?: string;
   /** 有効フラグ。false の場合は論理削除（一覧非表示・ログイン不可）。未設定は true 扱い */
   isActive?: boolean;
   /** 初回稼働日（YYYY-MM-DD）。未設定は undefined / null */

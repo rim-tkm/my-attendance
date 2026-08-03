@@ -22,6 +22,7 @@ function coerceMemberUpdates(raw: Record<string, unknown>): MemberUpdatePayload 
   if (typeof raw.hourlyRate === "number" && Number.isFinite(raw.hourlyRate)) out.hourlyRate = raw.hourlyRate;
   if (typeof raw.postalCode === "string") out.postalCode = raw.postalCode;
   if (typeof raw.address === "string") out.address = raw.address;
+  if (typeof raw.address2 === "string") out.address2 = raw.address2;
   if (typeof raw.bankName === "string") out.bankName = raw.bankName;
   if (typeof raw.bankCode === "string") out.bankCode = raw.bankCode;
   if (typeof raw.branchName === "string") out.branchName = raw.branchName;

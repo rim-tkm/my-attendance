@@ -22,6 +22,7 @@ export function coerceMemberSelfBankProfileBody(raw: unknown): MemberUpdatePaylo
   const out: MemberUpdatePayload = {};
   if (typeof o.postalCode === "string") out.postalCode = o.postalCode;
   if (typeof o.address === "string") out.address = o.address;
+  if (typeof o.address2 === "string") out.address2 = o.address2;
   if (typeof o.bankName === "string") out.bankName = o.bankName;
   if (typeof o.bankCode === "string") out.bankCode = o.bankCode;
   if (typeof o.branchName === "string") out.branchName = o.branchName;

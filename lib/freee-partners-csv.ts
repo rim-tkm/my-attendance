@@ -1,5 +1,5 @@
 import type { Member } from "@/lib/attendance";
-import { bankByCode, branchByCode } from "@/lib/bank-master";
+import { bankByCode, branchByCode, matchBankByName, matchBranchByName } from "@/lib/bank-master";
 import postalPrefecture from "@/lib/postal-prefecture.json";
 
 /**
@@ -104,6 +104,37 @@ export function resolveJpAddress(address: string, postalCode: string): { prefect
   return { prefecture: prefectureFromPostalCode(postalCode), rest };
 }
 
+/**
+ * 住所の末尾から建物名・部屋番号を分離する（address2 が未入力の既存データ用のヒューリスティック）。
+ * 誤分割を避けるため「番地の数字の後に空白区切りがある」場合のみ分割する
+ * （例: 「郡山市喜久田町23-144 サンリット寺久保201」→ 番地=…23-144 / 建物=サンリット寺久保201）。
+ * 空白なしで建物名が続く住所はそのまま返す（新規入力は建物名欄が分かれているため今後は発生しない）。
+ */
+export function splitBuildingFromStreet(street: string): { street: string; building: string } {
+  const t = street.trim();
+  const m = /^(.*?[0-9０-９][0-9０-９\-−ー－]*(?:号室?|番地?)?)[\s　]+(\S.*)$/.exec(t);
+  if (m) return { street: m[1].trim(), building: m[2].trim() };
+  return { street: t, building: "" };
+}
+
+/** freee 出力用の銀行コード・支店コード。アプリで未確定なら銀行名・支店名からマスタ照合して自動判定する */
+export function resolveBankCodesForFreee(member: {
+  bankName?: string;
+  bankCode?: string;
+  branchName?: string;
+  branchCode?: string;
+}): { bankCode: string; branchCode: string } {
+  let bankCode = (member.bankCode ?? "").trim();
+  if (bankCode === "" && (member.bankName ?? "").trim() !== "") {
+    bankCode = matchBankByName((member.bankName ?? "").trim())?.code ?? "";
+  }
+  let branchCode = (member.branchCode ?? "").trim();
+  if (branchCode === "" && bankCode !== "" && (member.branchName ?? "").trim() !== "") {
+    branchCode = matchBranchByName(bankCode, (member.branchName ?? "").trim())?.code ?? "";
+  }
+  return { bankCode, branchCode };
+}
+
 /** 支店名を freee 表記に（末尾が支店・営業部・出張所・本店・支所以外なら「支店」を付ける） */
 export function branchNameForFreee(branchName: string): string {
   const t = branchName.trim();
@@ -146,8 +177,9 @@ export function buildFreeePartnersCsv(members: Member[]): string {
   );
   for (const m of targets) {
     const { prefecture, rest } = resolveJpAddress(m.address ?? "", m.postalCode ?? "");
-    const bankCode = (m.bankCode ?? "").trim();
-    const branchCode = (m.branchCode ?? "").trim();
+    const address2 = (m.address2 ?? "").trim();
+    const split = address2 !== "" ? { street: rest, building: address2 } : splitBuildingFromStreet(rest);
+    const { bankCode, branchCode } = resolveBankCodesForFreee(m);
     const bankMaster = bankCode !== "" ? bankByCode(bankCode) : null;
     const branchMaster = bankCode !== "" && branchCode !== "" ? branchByCode(bankCode, branchCode) : null;
     const invReg = (m.invoiceRegistrationNumber ?? "").trim();
@@ -157,8 +189,8 @@ export function buildFreeePartnersCsv(members: Member[]): string {
       "国内",
       (m.postalCode ?? "").trim(),
       prefecture,
-      rest,
-      "", // 建物名は住所から機械分割できないため空（freee 側では市区町村・番地に含めて問題ない）
+      split.street,
+      split.building,
       "使用する",
       (m.bankName ?? "").trim(),
       bankMaster ? toHalfWidthKana(bankMaster.kana) : "",

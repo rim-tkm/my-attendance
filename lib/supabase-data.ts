@@ -88,6 +88,8 @@ export type DbUser = {
   zip_code?: string | number | null;
   postal_code?: string | null;
   address?: string | null;
+  address2?: string | null;
+  profile_confirmed_month?: string | null;
   bank_name?: string | null;
   bank_code?: string | null;
   branch_name?: string | null;
@@ -191,6 +193,9 @@ export function toMember(r: DbUser): Member {
     hourlyRate: typeof r.hourly_rate === "number" && r.hourly_rate >= 0 ? r.hourly_rate : DEFAULT_HOURLY_RATE,
     postalCode: zip !== "" ? zip : undefined,
     address: addr !== "" ? addr : undefined,
+    address2: normStr(r.address2 ?? "") !== "" ? normStr(r.address2 ?? "") : undefined,
+    profileConfirmedMonth:
+      normStr(r.profile_confirmed_month ?? "") !== "" ? normStr(r.profile_confirmed_month ?? "") : undefined,
     bankName: bank !== "" ? bank : undefined,
     bankCode: normStr(r.bank_code ?? "") !== "" ? normStr(r.bank_code ?? "") : undefined,
     branchName: branch !== "" ? branch : undefined,
@@ -390,6 +395,7 @@ function usersUpsertRowFromMember(m: Member): Record<string, unknown> {
     hourly_rate: m.hourlyRate ?? DEFAULT_HOURLY_RATE,
     zip_code: m.postalCode ?? "",
     address: m.address ?? "",
+    ...(m.address2 !== undefined ? { address2: m.address2 } : {}),
     bank_name: m.bankName ?? "",
     branch_name: m.branchName ?? "",
     // 銀行コード・支店コードは列未作成の環境でも upsert が通るよう、値があるときのみ含める
@@ -569,6 +575,7 @@ export type MemberUpdatePayload = Partial<
     | "hourlyRate"
     | "postalCode"
     | "address"
+    | "address2"
     | "bankName"
     | "bankCode"
     | "branchName"
@@ -605,6 +612,7 @@ export type MemberSelfBankProfilePayload = Pick<
   MemberUpdatePayload,
   | "postalCode"
   | "address"
+  | "address2"
   | "bankName"
   | "bankCode"
   | "branchName"
@@ -635,9 +643,10 @@ export async function updateMemberSelfBankProfileOrThrow(
   if (updates.invoiceRegistrationNumber !== undefined) {
     body.invoice_registration_number = updates.invoiceRegistrationNumber;
   }
-  // 銀行コード・支店コードは列未作成の環境でも本体更新が通るよう、指定時のみ含める
+  // 銀行コード・支店コード・建物名は列未作成の環境でも本体更新が通るよう、指定時のみ含める
   if (updates.bankCode !== undefined) body.bank_code = (updates.bankCode ?? "").trim();
   if (updates.branchCode !== undefined) body.branch_code = (updates.branchCode ?? "").trim();
+  if (updates.address2 !== undefined) body.address2 = (updates.address2 ?? "").trim();
   const { error } = await supabase.from("users").update(body).eq("id", memberId);
   if (error) {
     const m = error.message ?? String(error);
@@ -663,6 +672,7 @@ export async function updateMemberOrThrow(
   if (updates.hourlyRate !== undefined) body.hourly_rate = updates.hourlyRate;
   if (updates.postalCode !== undefined) body.zip_code = updates.postalCode;
   if (updates.address !== undefined) body.address = updates.address;
+  if (updates.address2 !== undefined) body.address2 = (updates.address2 ?? "").trim();
   if (updates.bankName !== undefined) body.bank_name = updates.bankName;
   if (updates.bankCode !== undefined) body.bank_code = (updates.bankCode ?? "").trim();
   if (updates.branchCode !== undefined) body.branch_code = (updates.branchCode ?? "").trim();

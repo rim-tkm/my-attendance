@@ -4,7 +4,9 @@ import { freeeRequest, getFreeeAccess } from "@/lib/freee-api";
 import {
   accountNumberForTransfer,
   branchNameForFreee,
+  resolveBankCodesForFreee,
   resolveJpAddress,
+  splitBuildingFromStreet,
   toHalfWidthKana,
 } from "@/lib/freee-partners-csv";
 import { getSupabase } from "@/lib/supabase";
@@ -37,8 +39,9 @@ export type FreeePartnerPayload = Record<string, unknown>;
 /** 取引先の作成・更新に使う共通ペイロード（company_id は呼び出し側で付与） */
 export function buildFreeePartnerPayload(member: Member, companyId: number): FreeePartnerPayload {
   const { prefecture, rest } = resolveJpAddress(member.address ?? "", member.postalCode ?? "");
-  const bankCode = (member.bankCode ?? "").trim();
-  const branchCode = (member.branchCode ?? "").trim();
+  const address2 = (member.address2 ?? "").trim();
+  const split = address2 !== "" ? { street: rest, building: address2 } : splitBuildingFromStreet(rest);
+  const { bankCode, branchCode } = resolveBankCodesForFreee(member);
   const bankMaster = bankCode !== "" ? bankByCode(bankCode) : null;
   const branchMaster = bankCode !== "" && branchCode !== "" ? branchByCode(bankCode, branchCode) : null;
   const invReg = (member.invoiceRegistrationNumber ?? "").trim();
@@ -61,8 +64,8 @@ export function buildFreeePartnerPayload(member: Member, companyId: number): Fre
     payload.address_attributes = {
       zipcode: (member.postalCode ?? "").trim(),
       prefecture_code: prefectureCode(prefecture),
-      street_name1: rest,
-      street_name2: "",
+      street_name1: split.street,
+      street_name2: split.building,
     };
   }
   if ((member.bankName ?? "").trim() !== "") {

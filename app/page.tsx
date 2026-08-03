@@ -1832,6 +1832,7 @@ function AdminDashboard(props: {
   const [editRate, setEditRate] = useState(DEFAULT_HOURLY_RATE);
   const [editPostalCode, setEditPostalCode] = useState("");
   const [editAddress, setEditAddress] = useState("");
+  const [editAddress2, setEditAddress2] = useState("");
   const [editBankName, setEditBankName] = useState("");
   const [editBankCode, setEditBankCode] = useState("");
   const [editBranchName, setEditBranchName] = useState("");
@@ -2828,6 +2829,7 @@ function AdminDashboard(props: {
     setEditRate(member.hourlyRate ?? DEFAULT_HOURLY_RATE);
     setEditPostalCode(member.postalCode ?? "");
     setEditAddress(member.address ?? "");
+    setEditAddress2(member.address2 ?? "");
     setEditBankName(member.bankName ?? "");
     setEditBankCode(member.bankCode ?? "");
     setEditBranchName(member.branchName ?? "");
@@ -2907,6 +2909,7 @@ function AdminDashboard(props: {
       hourlyRate: detailIsIntern ? 0 : editRate >= 0 ? editRate : DEFAULT_HOURLY_RATE,
       postalCode: zip,
       address: addr,
+      address2: editAddress2.trim(),
       bankName: bank,
       bankCode: editBankCode.trim(),
       branchName: branch,
@@ -8252,6 +8255,10 @@ function AdminDashboard(props: {
                   <label className="mb-0.5 block text-xs text-slate-500">住所</label>
                   <input type="text" value={editAddress} onChange={(e) => setEditAddress(e.target.value)} placeholder="住所" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
                 </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-0.5 block text-xs text-slate-500">建物名・部屋番号など</label>
+                  <input type="text" value={editAddress2} onChange={(e) => setEditAddress2(e.target.value)} placeholder="例: 〇〇マンション201" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                </div>
                 <BankMasterAutocompleteField
                   label="銀行名"
                   name={editBankName}
@@ -9608,6 +9615,7 @@ function KpiTab(props: {
 type MemberSelfBankDraft = {
   postalCode: string;
   address: string;
+  address2: string;
   bankName: string;
   bankCode: string;
   branchName: string;
@@ -9622,6 +9630,7 @@ type MemberSelfBankDraft = {
 const EMPTY_MEMBER_SELF_BANK_DRAFT: MemberSelfBankDraft = {
   postalCode: "",
   address: "",
+  address2: "",
   bankName: "",
   bankCode: "",
   branchName: "",
@@ -9803,6 +9812,9 @@ export default function DashboardPage() {
   }));
   const [memberSelfBankProfileBusy, setMemberSelfBankProfileBusy] = useState(false);
   const memberSelfBankProfileSeededForUserIdRef = useRef<string | null>(null);
+  /** 月次の本人情報確認モーダル: 「変更する」を選んだ後などはセッション内で再表示しない */
+  const [profileConfirmDismissed, setProfileConfirmDismissed] = useState(false);
+  const [profileConfirmBusy, setProfileConfirmBusy] = useState(false);
 
   const invokeKpiMissingNotifyImmediate = useCallback(async () => {
     try {
@@ -10083,6 +10095,7 @@ export default function DashboardPage() {
     setMemberSelfBankDraft({
       postalCode: m.postalCode ?? "",
       address: m.address ?? "",
+      address2: m.address2 ?? "",
       bankName: m.bankName ?? "",
       bankCode: m.bankCode ?? "",
       branchName: m.branchName ?? "",
@@ -10827,6 +10840,7 @@ export default function DashboardPage() {
         body: JSON.stringify({
           postalCode: zip,
           address: addr,
+          address2: memberSelfBankDraft.address2.trim(),
           bankName: bank,
           bankCode: memberSelfBankDraft.bankCode.trim(),
           branchName: branch,
@@ -10852,6 +10866,40 @@ export default function DashboardPage() {
       setMemberSelfBankProfileBusy(false);
     }
   };
+
+  /** 月次確認モーダル: 「この内容で間違いない」→ 当月確認として記録 */
+  const handleConfirmProfileNoChange = async () => {
+    setProfileConfirmBusy(true);
+    try {
+      const res = await fetch("/api/member/confirm-profile", { method: "POST", credentials: "include" });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "確認の記録に失敗しました");
+      await refresh();
+      setMemberDataToast({ message: "登録情報の確認ありがとうございました！", isError: false });
+    } catch (e) {
+      setMemberDataToast({ message: e instanceof Error ? e.message : String(e), isError: true });
+    } finally {
+      setProfileConfirmDismissed(true);
+      setProfileConfirmBusy(false);
+    }
+  };
+
+  /** 月次確認モーダル: 「変更する」→ モーダルを閉じて振込先フォームへスクロール（保存で当月確認扱いになる） */
+  const handleConfirmProfileEdit = () => {
+    setProfileConfirmDismissed(true);
+    setTab("home");
+    window.setTimeout(() => {
+      document.getElementById("member-billing-profile")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  };
+
+  /** 月が変わって最初のログインで、本人に登録情報の確認を求める（管理者・未ログイン・確認済みの月は出さない） */
+  const showMonthlyProfileConfirm =
+    !isAdminMode &&
+    !isAdminUser &&
+    currentMember != null &&
+    !profileConfirmDismissed &&
+    (currentMember.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7);
 
   if (!mounted) {
     return (
@@ -11065,6 +11113,53 @@ export default function DashboardPage() {
                 キャンセル
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {showMonthlyProfileConfirm && currentMember && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4 print:hidden">
+          <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl bg-white p-5 shadow-xl sm:p-6">
+            <h2 className="mb-1 text-base font-semibold text-slate-800">登録情報の月次確認</h2>
+            <p className="mb-4 text-xs leading-relaxed text-slate-600">
+              月に一度、お支払いに使う登録情報の確認をお願いしています。以下の内容に変更がないかご確認ください。
+            </p>
+            <dl className="mb-5 space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-4 text-sm">
+              {[
+                ["住所", `〒${currentMember.postalCode ?? "未登録"} ${currentMember.address ?? ""}${currentMember.address2 ? ` ${currentMember.address2}` : ""}`],
+                ["電話番号", currentMember.phoneNumber ?? "未登録"],
+                ["銀行", currentMember.bankName ?? "未登録"],
+                ["支店", currentMember.branchName ?? "未登録"],
+                ["口座", `${currentMember.accountType ?? "普通"} ${currentMember.accountNumber ?? "未登録"}`],
+                ["口座名義", currentMember.accountHolder ?? "未登録"],
+                ["インボイス登録番号", currentMember.invoiceRegistrationNumber || "なし（未登録）"],
+              ].map(([label, value]) => (
+                <div key={label} className="flex gap-3">
+                  <dt className="w-28 shrink-0 text-xs font-medium text-slate-500">{label}</dt>
+                  <dd className="min-w-0 break-all text-slate-800">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => void handleConfirmProfileNoChange()}
+                disabled={profileConfirmBusy}
+                className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {profileConfirmBusy ? "記録中…" : "この内容で間違いありません"}
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmProfileEdit}
+                disabled={profileConfirmBusy}
+                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                変更がある（入力画面へ）
+              </button>
+            </div>
+            <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+              変更した内容は自動で経理システムにも反映されます。
+            </p>
           </div>
         </div>
       )}
@@ -11302,11 +11397,21 @@ export default function DashboardPage() {
                       />
                     </div>
                     <div className="sm:col-span-2">
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">住所</label>
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">住所（都道府県〜番地）</label>
                       <input
                         type="text"
                         value={memberSelfBankDraft.address}
                         onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, address: e.target.value }))}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">建物名・部屋番号など（任意）</label>
+                      <input
+                        type="text"
+                        value={memberSelfBankDraft.address2}
+                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, address2: e.target.value }))}
+                        placeholder="例: 〇〇マンション201"
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
                       />
                     </div>
