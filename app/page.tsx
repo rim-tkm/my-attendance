@@ -2111,6 +2111,8 @@ function AdminDashboard(props: {
   const [attendanceTodaySort, setAttendanceTodaySort] = useState<AdminTableSortState<AttendanceTodaySortKey> | null>(null);
   const [shiftScheduleSort, setShiftScheduleSort] = useState<ShiftScheduleSortState>(null);
   const [kpiDailySort, setKpiDailySort] = useState<AdminTableSortState<AdminKpiDailySortKey> | null>(null);
+  /** KPI日別テーブル: true で稼働のないメンバーも含めて全員表示（既定はその日の稼働メンバーのみ） */
+  const [kpiDailyShowAll, setKpiDailyShowAll] = useState(false);
   const [adminDailyActualSort, setAdminDailyActualSort] = useState<
     Partial<Record<string, AdminTableSortState<DailyActualSortKey>>>
   >({});
@@ -3578,7 +3580,17 @@ function AdminDashboard(props: {
   }, [dailyActualBlocks, adminDailyActualSort]);
 
   const kpiDailyRowsGeneral = useMemo(() => {
-    const rows = dashboardMemberSplit.general.map((mem) => {
+    // 既定はその日に「シフト予定・打刻実績・KPI入力」のいずれかがある稼働メンバーのみ表示
+    // （予定外稼働や打刻忘れの入力代行も漏らさない）。「全員表示」チェックで解除できる。
+    const members = kpiDailyShowAll
+      ? dashboardMemberSplit.general
+      : dashboardMemberSplit.general.filter((mem) => {
+          if (getKpiForDate(getKpiForUser(allKpiRecords, mem.id), kpiDate)) return true;
+          const shift = canonicalShiftForUserDate(allShifts, mem.id, kpiDate);
+          if (shift && shiftHasPlannedWorkHours(shift)) return true;
+          return getRecordsForUserAndDate(allRecords, mem.id, kpiDate).length > 0;
+        });
+    const rows = members.map((mem) => {
       const dayKpi = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), kpiDate);
       const rates = dayKpi
         ? getKpiRates(dayKpi)
@@ -3589,7 +3601,7 @@ function AdminDashboard(props: {
     const { key, dir } = kpiDailySort;
     rows.sort((a, b) => compareAdminKpiDailyRows(a, b, key, dir === "desc"));
     return rows;
-  }, [dashboardMemberSplit.general, allKpiRecords, kpiDate, kpiDailySort]);
+  }, [dashboardMemberSplit.general, allKpiRecords, kpiDate, kpiDailySort, kpiDailyShowAll, allShifts, allRecords]);
 
   const kpiDailyRowsIntern = useMemo(() => {
     const rows = dashboardMemberSplit.intern.map((mem) => {
@@ -5389,7 +5401,7 @@ function AdminDashboard(props: {
           <p className="mb-3 max-w-3xl text-xs text-slate-500">
             時給制メンバーのみ表示しています。行をクリックすると KPI 入力フォームが開きます。インターン生は下部の確定数一覧を参照してください。
           </p>
-          <div className="mb-4 flex flex-wrap items-center gap-4">
+          <div className="mb-4 flex flex-wrap items-end gap-4">
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-slate-600">表示日付</span>
               <input
@@ -5398,6 +5410,15 @@ function AdminDashboard(props: {
                 onChange={(e) => setKpiDate(e.target.value)}
                 className="rounded border border-slate-300 px-3 py-2 text-sm"
               />
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 pb-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={kpiDailyShowAll}
+                onChange={(e) => setKpiDailyShowAll(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              全員表示（この日に稼働のないメンバーも含める）
             </label>
           </div>
           <div className="overflow-x-auto">
@@ -5477,6 +5498,13 @@ function AdminDashboard(props: {
                 </tr>
               </thead>
               <tbody>
+                {kpiDailyRowsGeneral.length === 0 && (
+                  <tr>
+                    <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
+                      この日に稼働（シフト・打刻・KPI）のあるメンバーはいません。全員に表示を切り替えるには「全員表示」にチェックを入れてください。
+                    </td>
+                  </tr>
+                )}
                 {kpiDailyRowsGeneral.map(({ mem, dayKpi, rates }) => {
                   const openAdminKpiModal = () =>
                     setAdminKpiModalTarget({ userId: mem.id, dateYmd: kpiDate, memberName: mem.name, isIntern: mem.isIntern === true });

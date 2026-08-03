@@ -15,6 +15,7 @@ import {
   mergeUserKpiPreserveExistingByDate,
   mergeUserShiftsPreserveExistingByDate,
   normalizeKpiStartTime,
+  normalizeMemberName,
 } from "@/lib/attendance";
 import {
   appendKpiChangeHistoryForSlots,
@@ -469,7 +470,7 @@ export async function addMember(
   const id = crypto.randomUUID();
   const newMember: Member = {
     id,
-    name: name.trim() || id,
+    name: normalizeMemberName(name) || id,
     loginAccount: options?.loginAccount?.trim() ?? "",
     password: options?.password ?? "",
     hourlyRate:
@@ -636,7 +637,7 @@ export async function updateMemberOrThrow(
   const supabase = getSupabase();
   if (!supabase) throw new Error("データベースに接続できません");
   const body: Record<string, unknown> = {};
-  if (updates.name !== undefined) body.name = updates.name;
+  if (updates.name !== undefined) body.name = normalizeMemberName(updates.name);
   if (updates.furigana !== undefined) body.furigana = updates.furigana;
   if (updates.loginAccount !== undefined) {
     const t = updates.loginAccount.trim();

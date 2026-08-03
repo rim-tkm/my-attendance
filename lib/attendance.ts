@@ -1316,6 +1316,14 @@ export function getMondayOfCalendarWeekForYmd(ymd: string): string {
   return toLocalDateString(mon);
 }
 
+/**
+ * メンバー表示名の正規化: 空白（半角・全角・タブ等）をすべて除去してスペースなし表記に統一する。
+ * Google フォーム由来の「加藤　みゆき」「七瀬 元愛」等の表記ゆれを吸収する（全書き込み経路で適用）。
+ */
+export function normalizeMemberName(raw: string): string {
+  return raw.replace(/[\s　]+/g, "");
+}
+
 /** 会社休業日（お盆・年末年始など）。管理者が期間で登録し、期間内の日はシフト提出不可（稼働予定なし固定） */
 export interface CompanyHoliday {
   id: string;
