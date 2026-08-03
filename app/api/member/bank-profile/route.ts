@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import { validateQualifiedInvoiceRegistrationNumber } from "@/lib/invoice-registration-number";
 import { getTodayJstDateString } from "@/lib/export-schedule";
 import { coerceMemberSelfBankProfileBody } from "@/lib/member-bank-profile-api";
+import { appendProfileConfirmationLog } from "@/lib/profile-confirmation-log";
 import { getSupabase } from "@/lib/supabase";
 import { updateMemberSelfBankProfileOrThrow } from "@/lib/supabase-data";
 
@@ -110,6 +111,8 @@ export async function POST(req: Request) {
     .update({ profile_confirmed_month: currentMonth })
     .eq("id", userId);
   if (confirmErr) console.warn("[bank-profile] profile_confirmed_month 更新スキップ:", confirmErr.message);
+  // エビデンス: 本人が変更・保存した時点の登録内容スナップショットを記録
+  await appendProfileConfirmationLog(supabase, userId, "updated");
 
   return NextResponse.json({ ok: true });
 }

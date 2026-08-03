@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { buildMemberDisplayName } from "@/lib/attendance";
 import { authOptions } from "@/lib/auth";
 import { getTodayJstDateString } from "@/lib/export-schedule";
+import { appendProfileConfirmationLog } from "@/lib/profile-confirmation-log";
 import { getSupabase } from "@/lib/supabase";
 
 /**
@@ -36,5 +37,7 @@ export async function POST(req: Request) {
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+  // エビデンス: 確認時点の登録内容スナップショットを記録（失敗しても確認自体は成立させる）
+  await appendProfileConfirmationLog(supabase, userId, "no_change");
   return NextResponse.json({ ok: true, month: currentMonth });
 }
