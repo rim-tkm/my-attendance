@@ -118,6 +118,18 @@ export function matchBranchByName(bankCode: string, rawName: string): BankMaster
     (e) => normalizeForMatch(e.n).startsWith(q) || normalizeForMatch(e.h).startsWith(q)
   );
   if (prefix.length === 1) return { code: prefix[0].c, name: prefix[0].n, kana: prefix[0].k };
+  if (prefix.length > 1) return null;
+  // 最後の砦: 種別語（出張所・営業部など）を除いた「核」同士の前方一致が1件のときだけ採用。
+  // 例:「高砂出張所」（登録）と「高砂町出張所」（正式）— 誤採用を防ぐため候補が一意の場合に限る。
+  const coreOf = (s: string) => normalizeForMatch(s).replace(/(支店|出張所|営業部|支所)$/, "");
+  const qCore = coreOf(q);
+  if (qCore === "") return null;
+  const loose = entries.filter((e) => {
+    const n = coreOf(e.n);
+    const h = coreOf(e.h);
+    return n.startsWith(qCore) || qCore.startsWith(n) || h.startsWith(qCore) || qCore.startsWith(h);
+  });
+  if (loose.length === 1) return { code: loose[0].c, name: loose[0].n, kana: loose[0].k };
   return null;
 }
 

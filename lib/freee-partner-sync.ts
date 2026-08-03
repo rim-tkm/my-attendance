@@ -1,5 +1,5 @@
 import { normalizeMemberName, type Member } from "@/lib/attendance";
-import { bankByCode, branchByCode } from "@/lib/bank-master";
+import { bankByCode, bankMasterDisplayName, branchByCode } from "@/lib/bank-master";
 import { freeeRequest, getFreeeAccess } from "@/lib/freee-api";
 import {
   accountNumberForTransfer,
@@ -77,10 +77,11 @@ export function buildFreeePartnerPayload(member: Member, companyId: number): Fre
   }
   if ((member.bankName ?? "").trim() !== "") {
     payload.partner_bank_account_attributes = {
-      bank_name: (member.bankName ?? "").trim(),
+      // マスタでコード確定できた場合は正式名称で送る（「高砂出張所」→「高砂町出張所」等の表記ゆれ補正）
+      bank_name: bankMaster ? bankMasterDisplayName(bankMaster.name) : (member.bankName ?? "").trim(),
       bank_name_kana: bankMaster ? toHalfWidthKana(bankMaster.kana) : "",
       bank_code: bankCode,
-      branch_name: branchNameForFreee(member.branchName ?? ""),
+      branch_name: branchNameForFreee(branchMaster ? branchMaster.name : (member.branchName ?? "")),
       branch_kana: branchMaster ? toHalfWidthKana(branchMaster.kana) : "",
       branch_code: branchCode,
       account_type: accountType,

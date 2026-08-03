@@ -1,5 +1,11 @@
 import type { Member } from "@/lib/attendance";
-import { bankByCode, branchByCode, matchBankByName, matchBranchByName } from "@/lib/bank-master";
+import {
+  bankByCode,
+  bankMasterDisplayName,
+  branchByCode,
+  matchBankByName,
+  matchBranchByName,
+} from "@/lib/bank-master";
 import postalPrefecture from "@/lib/postal-prefecture.json";
 
 /**
@@ -192,10 +198,10 @@ export function buildFreeePartnersCsv(members: Member[]): string {
       split.street,
       split.building,
       "使用する",
-      (m.bankName ?? "").trim(),
+      bankMaster ? bankMasterDisplayName(bankMaster.name) : (m.bankName ?? "").trim(),
       bankMaster ? toHalfWidthKana(bankMaster.kana) : "",
       stripLeadingZeros(bankCode),
-      branchNameForFreee(m.branchName ?? ""),
+      branchNameForFreee(branchMaster ? branchMaster.name : (m.branchName ?? "")),
       branchMaster ? toHalfWidthKana(branchMaster.kana) : "",
       stripLeadingZeros(branchCode),
       (m.accountType ?? "普通").trim() || "普通",
