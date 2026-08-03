@@ -102,6 +102,7 @@ export type DbUser = {
   account_holder?: string | null;
   invoice_number?: string | number | null;
   invoice_registration_number?: string | null;
+  invoice_registration_intent?: string | null;
   phone_number?: string | null;
   slack_id?: string | null;
   freee_partner_id?: number | null;
@@ -210,6 +211,8 @@ export function toMember(r: DbUser): Member {
     accountHolder: accHolder !== "" ? accHolder : undefined,
     invoiceNumber: invNum !== "" ? invNum : undefined,
     invoiceRegistrationNumber: invReg !== "" ? invReg : undefined,
+    invoiceRegistrationIntent:
+      normStr(r.invoice_registration_intent ?? "") !== "" ? normStr(r.invoice_registration_intent ?? "") : undefined,
     phoneNumber: phone !== "" ? phone : undefined,
     slackId: normStr(r.slack_id ?? "") !== "" ? normStr(r.slack_id ?? "") : undefined,
     freeePartnerId: typeof r.freee_partner_id === "number" ? r.freee_partner_id : undefined,

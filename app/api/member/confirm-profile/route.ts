@@ -26,10 +26,15 @@ export async function POST(req: Request) {
     lastName?: unknown;
     firstName?: unknown;
     furigana?: unknown;
+    invoiceIntent?: unknown;
   };
   const lastName = typeof body.lastName === "string" ? body.lastName.trim().replace(/[\s　]+/g, "") : "";
   const firstName = typeof body.firstName === "string" ? body.firstName.trim().replace(/[\s　]+/g, "") : "";
   const furigana = typeof body.furigana === "string" ? body.furigana.trim() : "";
+  const invoiceIntent =
+    typeof body.invoiceIntent === "string" && ["yes", "no", "unknown"].includes(body.invoiceIntent)
+      ? body.invoiceIntent
+      : "";
 
   const currentMonth = getTodayJstDateString().slice(0, 7);
   const updates: Record<string, unknown> = { profile_confirmed_month: currentMonth };
@@ -40,6 +45,9 @@ export async function POST(req: Request) {
   }
   if (furigana !== "") {
     updates.furigana = furigana;
+  }
+  if (invoiceIntent !== "") {
+    updates.invoice_registration_intent = invoiceIntent;
   }
   const { error } = await supabase.from("users").update(updates).eq("id", userId).eq("is_active", true);
   if (error) {

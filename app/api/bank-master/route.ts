@@ -25,8 +25,8 @@ export async function GET(req: Request) {
     const branchHit = bankHit && validateBranch !== "" ? matchBranchByName(bankHit.code, validateBranch) : null;
     return NextResponse.json({
       ok: true,
-      bank: bankHit ? { code: bankHit.code, name: bankMasterDisplayName(bankHit.name) } : null,
-      branch: branchHit ? { code: branchHit.code, name: branchHit.name } : null,
+      bank: bankHit ? { code: bankHit.code, name: bankMasterDisplayName(bankHit.name), kana: bankHit.kana } : null,
+      branch: branchHit ? { code: branchHit.code, name: branchHit.name, kana: branchHit.kana } : null,
     });
   }
   const q = url.searchParams.get("q") ?? "";

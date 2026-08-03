@@ -8349,6 +8349,16 @@ function AdminDashboard(props: {
                   <p className="mt-0.5 text-[11px] text-slate-500">
                     任意。入力する場合は T + 13桁（例: T1234567890123）。未入力の場合は請求書に表示しません。
                   </p>
+                  {(() => {
+                    const intent = members.find((m) => m.id === detailId)?.invoiceRegistrationIntent;
+                    const label =
+                      intent === "yes" ? "対応できる（登録する）" : intent === "no" ? "対応できない" : intent === "unknown" ? "わからない・検討中" : "未回答";
+                    return (
+                      <p className="mt-1 text-[11px] text-slate-600">
+                        インボイス必須化への対応可否（本人アンケート回答）: <span className="font-medium">{label}</span>
+                      </p>
+                    );
+                  })()}
                 </div>
                 <div>
                   <label className="mb-0.5 block text-xs text-slate-500">電話番号</label>
@@ -9850,8 +9860,9 @@ export default function DashboardPage() {
   /** 姓名分離の収集（税理士要望）: 姓・名が未登録のメンバーはモーダルで本人に確認する */
   const [confirmSei, setConfirmSei] = useState("");
   const [confirmMei, setConfirmMei] = useState("");
-  /** フリガナ未登録のメンバーはモーダルで収集（freee のカナ名称に使用） */
-  const [confirmFurigana, setConfirmFurigana] = useState("");
+  /** フリガナ未登録のメンバーはモーダルで収集（セイ・メイ別入力→「セイ メイ」で保存。freee のカナ名称に使用） */
+  const [confirmFuriganaSei, setConfirmFuriganaSei] = useState("");
+  const [confirmFuriganaMei, setConfirmFuriganaMei] = useState("");
   const profileConfirmNameSeededRef = useRef<string | null>(null);
 
   const invokeKpiMissingNotifyImmediate = useCallback(async () => {
@@ -10941,6 +10952,13 @@ export default function DashboardPage() {
   const needsNameSplitConfirm = currentMember != null && (currentMember.lastName ?? "").trim() === "";
   /** フリガナが未登録で、モーダルでの入力が必要か */
   const needsFuriganaConfirm = currentMember != null && (currentMember.furigana ?? "").trim() === "";
+  /** インボイス未登録かつアンケート未回答で、モーダルでの回答が必要か */
+  const needsInvoiceIntentConfirm =
+    currentMember != null &&
+    (currentMember.invoiceRegistrationNumber ?? "").trim() === "" &&
+    (currentMember.invoiceRegistrationIntent ?? "").trim() === "";
+  /** インボイス対応可否アンケートの選択値（yes/no/unknown。空=未選択） */
+  const [confirmInvoiceIntent, setConfirmInvoiceIntent] = useState("");
 
   // モーダル表示時に姓・名の初期値をセット（表示名にスペースがあれば分割、なければ姓に全体）
   useEffect(() => {
@@ -10952,14 +10970,16 @@ export default function DashboardPage() {
       : splitMemberName(currentMember.name) ?? { lastName: currentMember.name, firstName: "" };
     setConfirmSei(split.lastName);
     setConfirmMei(split.firstName);
-    setConfirmFurigana(currentMember.furigana ?? "");
+    const furiganaSplit = splitMemberName(currentMember.furigana ?? "");
+    setConfirmFuriganaSei(furiganaSplit?.lastName ?? (currentMember.furigana ?? ""));
+    setConfirmFuriganaMei(furiganaSplit?.firstName ?? "");
   }, [currentMember]);
 
-  /** モーダルの姓名・フリガナ入力が有効か（それぞれ未登録のときのみ必須） */
+  /** モーダルの姓名・フリガナ・アンケート入力が有効か（それぞれ未登録のときのみ必須） */
   const nameSplitInputsValid =
     (!needsNameSplitConfirm || (confirmSei.trim() !== "" && confirmMei.trim() !== "")) &&
-    (!needsFuriganaConfirm || confirmFurigana.trim() !== "");
-
+    (!needsFuriganaConfirm || (confirmFuriganaSei.trim() !== "" && confirmFuriganaMei.trim() !== "")) &&
+    (!needsInvoiceIntentConfirm || confirmInvoiceIntent !== "");
 
   /** 姓名・フリガナ（必要時）を確認記録と一緒にサーバーへ送る */
   const postConfirmProfile = async () => {
@@ -10969,7 +10989,10 @@ export default function DashboardPage() {
       body.firstName = confirmMei.trim();
     }
     if (needsFuriganaConfirm) {
-      body.furigana = confirmFurigana.trim();
+      body.furigana = `${confirmFuriganaSei.trim()} ${confirmFuriganaMei.trim()}`.trim();
+    }
+    if (needsInvoiceIntentConfirm && confirmInvoiceIntent !== "") {
+      body.invoiceIntent = confirmInvoiceIntent;
     }
     const res = await fetch("/api/member/confirm-profile", {
       method: "POST",
@@ -11037,10 +11060,18 @@ export default function DashboardPage() {
     !profileConfirmDismissed &&
     (memberMissingProfileItems.length > 0 ||
       needsNameSplitConfirm ||
+      needsInvoiceIntentConfirm ||
       (currentMember.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7));
 
   /** 明らかに間違っていそうな登録値の警告（形式チェック＋銀行・支店のマスタ照合）。行キー→警告文 */
   const [profileWarnings, setProfileWarnings] = useState<Record<string, string>>({});
+  /** マスタ照合で確定した銀行・支店のコードとカナ（モーダルでの確認表示用） */
+  const [resolvedBankInfo, setResolvedBankInfo] = useState<{
+    bankCode?: string;
+    bankKana?: string;
+    branchCode?: string;
+    branchKana?: string;
+  }>({});
   useEffect(() => {
     if (!showMonthlyProfileConfirm || !currentMember) return;
     const digitsOf = (s: string) => s.normalize("NFKC").replace(/\D/g, "");
@@ -11068,17 +11099,28 @@ export default function DashboardPage() {
     const params = new URLSearchParams({ validateBank: bankName, validateBranch: branchName });
     void fetch(`/api/bank-master?${params.toString()}`)
       .then((r) => r.json())
-      .then((d: { bank?: unknown; branch?: unknown }) => {
-        setProfileWarnings((prev) => {
-          const next = { ...prev };
-          if (!d.bank) {
-            next.bank = "この銀行名は銀行マスタで確認できません。正式な銀行名かご確認ください";
-          } else if (branchName !== "" && !d.branch) {
-            next.branch = "この支店名は銀行のマスタで確認できません。通帳・アプリで正式な支店名をご確認ください";
-          }
-          return next;
-        });
-      })
+      .then(
+        (d: {
+          bank?: { code: string; name: string; kana: string } | null;
+          branch?: { code: string; name: string; kana: string } | null;
+        }) => {
+          setResolvedBankInfo({
+            bankCode: d.bank?.code,
+            bankKana: d.bank?.kana,
+            branchCode: d.branch?.code,
+            branchKana: d.branch?.kana,
+          });
+          setProfileWarnings((prev) => {
+            const next = { ...prev };
+            if (!d.bank) {
+              next.bank = "この銀行名は銀行マスタで確認できません。正式な銀行名かご確認ください";
+            } else if (branchName !== "" && !d.branch) {
+              next.branch = "この支店名は銀行のマスタで確認できません。通帳・アプリで正式な支店名をご確認ください";
+            }
+            return next;
+          });
+        }
+      )
       .catch(() => {
         /* 照合できないだけで確認は続行できる */
       });
@@ -11341,13 +11383,22 @@ export default function DashboardPage() {
                   </div>
                 )}
                 {needsFuriganaConfirm && (
-                  <input
-                    type="text"
-                    value={confirmFurigana}
-                    onChange={(e) => setConfirmFurigana(e.target.value)}
-                    placeholder="フリガナ（例: ヤマダ タロウ）"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={confirmFuriganaSei}
+                      onChange={(e) => setConfirmFuriganaSei(e.target.value)}
+                      placeholder="セイ（例: ヤマダ）"
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    />
+                    <input
+                      type="text"
+                      value={confirmFuriganaMei}
+                      onChange={(e) => setConfirmFuriganaMei(e.target.value)}
+                      placeholder="メイ（例: タロウ）"
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    />
+                  </div>
                 )}
                 {!nameSplitInputsValid && (
                   <p className="mt-1 text-[11px] text-red-600">
@@ -11362,10 +11413,19 @@ export default function DashboardPage() {
               {[
                 ["name", "氏名", currentMember.lastName ? buildMemberDisplayName(currentMember.lastName, currentMember.firstName ?? "") : currentMember.name],
                 ["furigana", "フリガナ", currentMember.furigana ?? "未登録（上で入力してください）"],
-                ["address", "住所", `〒${currentMember.postalCode ?? "未登録"} ${currentMember.address ?? ""}${currentMember.address2 ? ` ${currentMember.address2}` : ""}`],
+                ["address", "住所", `〒${currentMember.postalCode ?? "未登録"} ${currentMember.address ?? ""}`],
+                ["building", "建物名・部屋番号", currentMember.address2 ?? "なし"],
                 ["phone", "電話番号", currentMember.phoneNumber ?? "未登録"],
-                ["bank", "銀行", currentMember.bankName ?? "未登録"],
-                ["branch", "支店", currentMember.branchName ?? "未登録"],
+                [
+                  "bank",
+                  "銀行",
+                  `${currentMember.bankName ?? "未登録"}${resolvedBankInfo.bankCode ? `（コード ${resolvedBankInfo.bankCode}・${resolvedBankInfo.bankKana ?? ""}）` : ""}`,
+                ],
+                [
+                  "branch",
+                  "支店",
+                  `${currentMember.branchName ?? "未登録"}${resolvedBankInfo.branchCode ? `（コード ${resolvedBankInfo.branchCode}・${resolvedBankInfo.branchKana ?? ""}）` : ""}`,
+                ],
                 ["account", "口座", `${currentMember.accountType ?? "普通"} ${currentMember.accountNumber ?? "未登録"}`],
                 ["holder", "口座名義", currentMember.accountHolder ?? "未登録"],
                 ["invoice", "インボイス登録番号", currentMember.invoiceRegistrationNumber || "なし（未登録）"],
@@ -11388,6 +11448,26 @@ export default function DashboardPage() {
                 );
               })}
             </dl>
+            {needsInvoiceIntentConfirm && (
+              <div className="mb-4 rounded-lg border border-slate-200 bg-white p-3">
+                <p className="mb-2 text-xs font-medium text-slate-700">
+                  【アンケート】将来、インボイス（適格請求書発行事業者）への登録が必須になった場合、対応（登録）できますか？
+                </p>
+                <select
+                  value={confirmInvoiceIntent}
+                  onChange={(e) => setConfirmInvoiceIntent(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+                >
+                  <option value="">選択してください</option>
+                  <option value="yes">対応できる（登録する）</option>
+                  <option value="no">対応できない</option>
+                  <option value="unknown">わからない・検討中</option>
+                </select>
+                {needsInvoiceIntentConfirm && confirmInvoiceIntent === "" && (
+                  <p className="mt-1 text-[11px] text-red-600">いずれかを選択してください</p>
+                )}
+              </div>
+            )}
             <div className="flex flex-col gap-2">
               {memberMissingProfileItems.length > 0 ? (
                 <>

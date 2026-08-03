@@ -44,6 +44,8 @@ export interface Member {
   invoiceNumber?: string | null;
   /** 適格請求書発行事業者登録番号（T+…・DB: invoice_registration_number） */
   invoiceRegistrationNumber?: string;
+  /** インボイス必須化時に対応（登録）できるかの本人回答（yes/no/unknown。未回答は undefined） */
+  invoiceRegistrationIntent?: string;
   /** 電話番号 */
   phoneNumber?: string;
   /** Slack メンバーID（例: U0123…）。シフト催促で <@…> メンションに使用 */
