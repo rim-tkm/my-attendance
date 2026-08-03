@@ -10260,6 +10260,16 @@ export default function DashboardPage() {
         }
         return;
       }
+      // 月次の登録情報確認（姓名入力含む）が未完了の間は稼働（開始打刻）不可。確認モーダルを再表示する
+      const meIsAdminAccount = ((me?.loginAccount ?? "").toLowerCase() === "admin");
+      if (me && !meIsAdminAccount && (me.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7)) {
+        setPunchSubmitPhase("idle");
+        if (typeof window !== "undefined") {
+          window.alert("打刻の前に、「登録情報の確認」を完了してください（月に一度、お支払い情報の確認をお願いしています）。");
+        }
+        setProfileConfirmDismissed(false);
+        return;
+      }
       let openFromDb: OpenRecord | null = null;
       try {
         openFromDb = await loadMemberOpenRecordFromDb(uid);
@@ -10630,6 +10640,12 @@ export default function DashboardPage() {
         window.setTimeout(() => {
           document.getElementById("member-billing-profile")?.scrollIntoView({ behavior: "smooth", block: "start" });
         }, 100);
+        return false;
+      }
+      // 月次の登録情報確認（姓名入力含む）が未完了の間はシフト提出も不可。確認モーダルを再表示する
+      if (me && !isAdminAccount && (me.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7)) {
+        alert("シフト提出の前に、「登録情報の確認」を完了してください（月に一度、お支払い情報の確認をお願いしています）。");
+        setProfileConfirmDismissed(false);
         return false;
       }
     }
@@ -11241,6 +11257,7 @@ export default function DashboardPage() {
             ) : (
               <p className="mb-4 text-xs leading-relaxed text-slate-600">
                 月に一度、お支払いに使う登録情報の確認をお願いしています。以下の内容に変更がないかご確認ください。
+                <span className="mt-1 block font-medium text-slate-700">確認が完了するまで打刻・シフト提出はできません。</span>
               </p>
             )}
             {needsNameSplitConfirm && (
