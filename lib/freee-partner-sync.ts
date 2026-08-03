@@ -155,21 +155,47 @@ export async function syncAllMembersToFreee(): Promise<FreeeSyncSummary> {
     };
   }
 
+  /** 更新後に freee 側へ口座が本当に入ったか検証。未反映なら口座含む最小ペイロードで1回リトライ */
+  const ensureBankAccountApplied = async (partnerId: number, payload: FreeePartnerPayload): Promise<string | null> => {
+    if (payload.partner_bank_account_attributes == null) return null; // 口座未登録メンバーは対象外
+    const fetchBank = async () => {
+      const res = await freeeRequest<{
+        partner?: { partner_bank_account_attributes?: { bank_name?: string | null; account_number?: string | null } | null };
+      }>(access.accessToken, "GET", `/api/1/partners/${partnerId}?company_id=${access.companyId}`);
+      const b = res.partner?.partner_bank_account_attributes;
+      return !!b && (((b.bank_name ?? "") !== "") || ((b.account_number ?? "") !== ""));
+    };
+    if (await fetchBank()) return null;
+    await freeeRequest(access.accessToken, "PUT", `/api/1/partners/${partnerId}`, {
+      company_id: access.companyId,
+      name: payload.name,
+      partner_bank_account_attributes: payload.partner_bank_account_attributes,
+    });
+    if (await fetchBank()) return "口座情報は再送信で反映されました";
+    return "⚠️ 口座情報がfreeeに反映されていません（要確認）";
+  };
+
   for (const m of targets) {
     const payload = buildFreeePartnerPayload(m, access.companyId);
     try {
       if (m.freeePartnerId != null) {
         await freeeRequest(access.accessToken, "PUT", `/api/1/partners/${m.freeePartnerId}`, payload);
+        const bankNote = await ensureBankAccountApplied(m.freeePartnerId, payload);
         updated++;
-        results.push({ name: m.name, action: "updated" });
+        results.push({ name: m.name, action: "updated", ...(bankNote ? { detail: bankNote } : {}) });
         continue;
       }
       const existingId = partnersByNormalizedName.get(normalizeMemberName(m.name));
       if (existingId != null) {
         await freeeRequest(access.accessToken, "PUT", `/api/1/partners/${existingId}`, payload);
         await savePartnerId(m.id, existingId);
+        const bankNote = await ensureBankAccountApplied(existingId, payload);
         updated++;
-        results.push({ name: m.name, action: "updated", detail: "freee側の既存取引先に自動紐付けしました" });
+        results.push({
+          name: m.name,
+          action: "updated",
+          detail: bankNote ?? "freee側の既存取引先に自動紐付けしました",
+        });
         continue;
       }
       const createdRes = await freeeRequest<{ partner?: { id: number } }>(
