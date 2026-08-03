@@ -7,6 +7,22 @@
 
 ---
 
+## 2026-08-03（第2弾: 休業日の自動提案カード）
+
+- **依頼**: 年数回の長期休み（GW・お盆・年末年始）を管理者に自動提案してほしい。「来月は連休がありますがどうしますか？」→登録するか「今回は不要」で消えるかを選べる形（仕様確認: 祝日連休＋慣習休み／管理ダッシュボードにカード表示／却下はDB記録で全端末共通・翌年は再提案）。
+
+- **変更**:
+  - **lib**: 新規 [company-holiday-suggestions.ts](../lib/company-holiday-suggestions.ts)。日本の祝日をアプリ内計算（固定日・ハッピーマンデー・春分秋分近似式・振替休日・国民の休日）し、連続する平日祝日は連休にまとめて提案（GW期間は「ゴールデンウィーク」命名）。お盆=8/13〜8/16・年末年始=12/29〜1/3 は慣習期間として毎年提案。開始60日前から表示。2026/2027の祝日で計算結果を検証済み。
+  - **DB**: 新テーブル `company_holiday_suggestion_dismissals`（suggestion_key UNIQUE）。マイグレーション [supabase-migration-company-holiday-suggestion-dismissals.sql](../supabase-migration-company-holiday-suggestion-dismissals.sql)。
+  - **管理画面**: ダッシュボード上部に「🗓 休業日の提案」カード。[休業日として登録]は手動登録と共通化した `registerCompanyHolidayPeriod`（既存シフト件数確認→削除→登録）、[今回は不要]は却下キーをupsert。登録済み期間でカバーされた提案・却下済みは非表示。
+  - ADR-012 を [DECISIONS.md](DECISIONS.md) に追記。
+
+- **検証**: `npx tsc --noEmit` ✅ / `npm run build` ✅ / 祝日計算はscratchpadスクリプトで2026・2027年の官報祝日と全件一致を確認。
+
+- **申し送り**: **Supabase SQL Editor で `supabase-migration-company-holiday-suggestion-dismissals.sql` の実行が必要**（未実行だと「今回は不要」がエラーになるだけで提案表示と登録は動く）。今日(8/3)時点の表示想定は「山の日 8/11」「連休（敬老の日〜秋分の日）9/21〜9/23」の2枚（お盆はカバー済みのため非表示）。
+
+---
+
 ## 2026-08-03（会社休業日のシフト提出ブロック＋Slack0人スキップ＋KPIにKC数）
 
 - **依頼**: ①お盆など会社休業日は管理者設定でシフト提出不可にしたい（Slackスレッドの「12〜15日の稼働希望を出せないように」が発端。仕様確認の結果: シフト提出のみブロック／期間で登録／登録時に既存シフトを確認のうえ削除）②稼働予定者がいない日はSlack朝通知を送らない ③業務委託KPIの期間集計に「KC数」を表示（中野さんのSlack依頼）。

@@ -168,12 +168,18 @@ import {
   deleteCompanyHoliday,
   loadShiftsInDateRange,
   deleteShiftsInDateRange,
+  loadCompanyHolidaySuggestionDismissals,
+  addCompanyHolidaySuggestionDismissal,
   type PlanActualGapResolution,
   exportAllDataFromSupabase,
   importAllDataToSupabase,
   deleteAttendanceRecordById,
 } from "@/lib/supabase-data";
 import { shiftHasPlannedWorkHours } from "@/lib/shift-planned-work";
+import {
+  buildCompanyHolidaySuggestions,
+  type CompanyHolidaySuggestion,
+} from "@/lib/company-holiday-suggestions";
 import { persistOpenRecordClientBackup, readOpenRecordClientBackup } from "@/lib/open-record-client-backup";
 import { withNetworkRetry } from "@/lib/network-retry";
 import { parseStartInstantJstOnWorkDate } from "@/lib/punch-jst-time";
@@ -1509,6 +1515,49 @@ function AdminDashboard(props: {
     null
   );
 
+  /**
+   * 休業日登録の共通処理（管理設定の手動フォームとダッシュボードの提案カードの両方から使用）。
+   * 既存シフトは登録直前に DB から取り直して件数を出す（props の allShifts が古い場合に備える）。
+   * 確認ダイアログでキャンセルされたら null を返す。
+   */
+  const registerCompanyHolidayPeriod = async (
+    name: string,
+    startDate: string,
+    endDate: string
+  ): Promise<{ ok: boolean; message: string } | null> => {
+    const existingShifts = await loadShiftsInDateRange(startDate, endDate);
+    const plannedCount = existingShifts.filter((s) => shiftHasPlannedWorkHours(s)).length;
+    const periodLabel = startDate === endDate ? startDate : `${startDate} 〜 ${endDate}`;
+    const confirmMessage =
+      plannedCount > 0
+        ? `${periodLabel} を休業日「${name}」として登録します。\nこの期間に登録済みの稼働予定が ${plannedCount} 件あります。該当期間のシフトをすべて削除して登録しますか？`
+        : `${periodLabel} を休業日「${name}」として登録します。この期間はシフト提出ができなくなります。よろしいですか？`;
+    if (!window.confirm(confirmMessage)) return null;
+    if (existingShifts.length > 0) {
+      const deleted = await deleteShiftsInDateRange(startDate, endDate);
+      if (!deleted) {
+        return { ok: false, message: "既存シフトの削除に失敗しました。休業日は登録していません。" };
+      }
+    }
+    const created = await addCompanyHoliday({ name, startDate, endDate });
+    if (!created) {
+      return {
+        ok: false,
+        message:
+          "休業日の登録に失敗しました。Supabase に company_holidays テーブルが作成済みか確認してください（supabase-migration-company-holidays.sql）。",
+      };
+    }
+    setCompanyHolidays((prev) => [...prev, created].sort((a, b) => a.startDate.localeCompare(b.startDate)));
+    if (existingShifts.length > 0) onRefresh();
+    return {
+      ok: true,
+      message:
+        plannedCount > 0
+          ? `休業日「${created.name}」を登録し、期間内のシフト ${plannedCount} 件を削除しました。`
+          : `休業日「${created.name}」を登録しました。`,
+    };
+  };
+
   const handleAddCompanyHoliday = async () => {
     const name = holidayName.trim();
     if (!name) {
@@ -1526,45 +1575,14 @@ function AdminDashboard(props: {
     setHolidayBusy(true);
     setHolidayFeedback(null);
     try {
-      // 既存シフトは登録直前に DB から取り直して件数を出す（props の allShifts が古い場合に備える）
-      const existingShifts = await loadShiftsInDateRange(holidayStart, holidayEnd);
-      const plannedCount = existingShifts.filter((s) => shiftHasPlannedWorkHours(s)).length;
-      const periodLabel = holidayStart === holidayEnd ? holidayStart : `${holidayStart} 〜 ${holidayEnd}`;
-      const confirmMessage =
-        plannedCount > 0
-          ? `${periodLabel} を休業日「${name}」として登録します。\nこの期間に登録済みの稼働予定が ${plannedCount} 件あります。該当期間のシフトをすべて削除して登録しますか？`
-          : `${periodLabel} を休業日「${name}」として登録します。この期間はシフト提出ができなくなります。よろしいですか？`;
-      if (!window.confirm(confirmMessage)) return;
-      if (existingShifts.length > 0) {
-        const deleted = await deleteShiftsInDateRange(holidayStart, holidayEnd);
-        if (!deleted) {
-          setHolidayFeedback({ variant: "error", message: "既存シフトの削除に失敗しました。休業日は登録していません。" });
-          return;
-        }
+      const result = await registerCompanyHolidayPeriod(name, holidayStart, holidayEnd);
+      if (result == null) return; // キャンセル
+      setHolidayFeedback({ variant: result.ok ? "success" : "error", message: result.message });
+      if (result.ok) {
+        setHolidayName("");
+        setHolidayStart("");
+        setHolidayEnd("");
       }
-      const created = await addCompanyHoliday({ name, startDate: holidayStart, endDate: holidayEnd });
-      if (!created) {
-        setHolidayFeedback({
-          variant: "error",
-          message:
-            "休業日の登録に失敗しました。Supabase に company_holidays テーブルが作成済みか確認してください（supabase-migration-company-holidays.sql）。",
-        });
-        return;
-      }
-      setCompanyHolidays((prev) =>
-        [...prev, created].sort((a, b) => a.startDate.localeCompare(b.startDate))
-      );
-      setHolidayName("");
-      setHolidayStart("");
-      setHolidayEnd("");
-      setHolidayFeedback({
-        variant: "success",
-        message:
-          plannedCount > 0
-            ? `休業日「${created.name}」を登録し、期間内のシフト ${plannedCount} 件を削除しました。`
-            : `休業日「${created.name}」を登録しました。`,
-      });
-      if (existingShifts.length > 0) onRefresh();
     } finally {
       setHolidayBusy(false);
     }
@@ -1591,6 +1609,68 @@ function AdminDashboard(props: {
       setHolidayFeedback({ variant: "success", message: `休業日「${holiday.name}」を削除しました。` });
     } finally {
       setHolidayBusy(false);
+    }
+  };
+
+  /** 休業日提案: 却下済みキー（null はロード中。ロード完了まで提案カードは出さない） */
+  const [suggestionDismissedKeys, setSuggestionDismissedKeys] = useState<Set<string> | null>(null);
+  const [suggestionBusyKey, setSuggestionBusyKey] = useState<string | null>(null);
+  const [suggestionFeedback, setSuggestionFeedback] = useState<{ ok: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void loadCompanyHolidaySuggestionDismissals().then((keys) => {
+      if (alive) setSuggestionDismissedKeys(new Set(keys));
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const holidaySuggestions = useMemo(
+    () =>
+      suggestionDismissedKeys == null
+        ? []
+        : buildCompanyHolidaySuggestions({
+            todayYmd: getTodayJstDateString(),
+            registered: companyHolidays,
+            dismissedKeys: suggestionDismissedKeys,
+          }),
+    [suggestionDismissedKeys, companyHolidays]
+  );
+
+  const handleRegisterHolidaySuggestion = async (s: CompanyHolidaySuggestion) => {
+    setSuggestionBusyKey(s.key);
+    setSuggestionFeedback(null);
+    try {
+      const result = await registerCompanyHolidayPeriod(s.name, s.startDate, s.endDate);
+      if (result != null) setSuggestionFeedback(result);
+      // 登録成功時はカード自体が「登録済みでカバー」判定になり自動で消える
+    } finally {
+      setSuggestionBusyKey(null);
+    }
+  };
+
+  const handleDismissHolidaySuggestion = async (s: CompanyHolidaySuggestion) => {
+    setSuggestionBusyKey(s.key);
+    setSuggestionFeedback(null);
+    try {
+      const ok = await addCompanyHolidaySuggestionDismissal(s.key);
+      if (!ok) {
+        setSuggestionFeedback({
+          ok: false,
+          message:
+            "提案の非表示に失敗しました。Supabase に company_holiday_suggestion_dismissals テーブルが作成済みか確認してください（supabase-migration-company-holiday-suggestion-dismissals.sql）。",
+        });
+        return;
+      }
+      setSuggestionDismissedKeys((prev) => {
+        const next = new Set(prev ?? []);
+        next.add(s.key);
+        return next;
+      });
+    } finally {
+      setSuggestionBusyKey(null);
     }
   };
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -4039,6 +4119,59 @@ function AdminDashboard(props: {
 
       {adminSection === "dashboard" && (
         <div className="space-y-6">
+          {(holidaySuggestions.length > 0 || suggestionFeedback != null) && (
+            <section className="rounded-xl border-2 border-sky-300 bg-sky-50 p-5 shadow-sm">
+              <h2 className="mb-2 text-sm font-semibold text-sky-900">🗓 休業日の提案</h2>
+              <p className="mb-3 text-xs text-sky-800">
+                連休・お盆・年末年始が近づいています。休業日として登録すると、期間内のシフト提出をブロックします（登録時に提出済みシフトがあれば件数を確認のうえ削除します）。不要なら「今回は不要」で非表示にできます（翌年はまた提案されます）。
+              </p>
+              <div className="space-y-2">
+                {holidaySuggestions.map((s) => (
+                  <div
+                    key={s.key}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-200 bg-white px-4 py-3"
+                  >
+                    <div className="min-w-0 text-sm text-slate-800">
+                      <span className="font-medium">{s.name}</span>
+                      <span className="ml-2 text-xs text-slate-500">
+                        {s.startDate === s.endDate
+                          ? formatDisplayDate(s.startDate)
+                          : `${formatDisplayDate(s.startDate)} 〜 ${formatDisplayDate(s.endDate)}`}
+                      </span>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleRegisterHolidaySuggestion(s)}
+                        disabled={suggestionBusyKey != null}
+                        className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+                      >
+                        {suggestionBusyKey === s.key ? "処理中…" : "休業日として登録"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleDismissHolidaySuggestion(s)}
+                        disabled={suggestionBusyKey != null}
+                        className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        今回は不要
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {suggestionFeedback != null && (
+                <div
+                  className={`mt-3 min-w-0 max-w-xl whitespace-pre-wrap text-sm font-medium ${
+                    suggestionFeedback.ok ? "text-green-700" : "text-red-600"
+                  }`}
+                  role="status"
+                >
+                  {suggestionFeedback.message}
+                </div>
+              )}
+            </section>
+          )}
           {isPastDeadlineForTargetWeek && membersWithoutEntryThisWeek.length > 0 && (
             <section className="rounded-xl border-2 border-amber-300 bg-amber-50 p-5 shadow-sm">
               <h2 className="mb-2 text-sm font-semibold text-amber-900">稼働予定が未登録のメンバーがいます</h2>

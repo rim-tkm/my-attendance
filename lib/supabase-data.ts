@@ -1117,6 +1117,43 @@ export async function deleteCompanyHoliday(id: string): Promise<boolean> {
   }
 }
 
+/** 休業日提案の却下済みキー一覧（テーブル未作成・未設定環境では空配列） */
+export async function loadCompanyHolidaySuggestionDismissals(): Promise<string[]> {
+  const supabase = getSupabase();
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from("company_holiday_suggestion_dismissals")
+      .select("suggestion_key");
+    if (error) {
+      console.warn("loadCompanyHolidaySuggestionDismissals error:", error);
+      return [];
+    }
+    return ((data ?? []) as { suggestion_key: string }[]).map((r) => String(r.suggestion_key));
+  } catch {
+    return [];
+  }
+}
+
+/** 休業日提案を「今回は不要」として記録（同一キーは upsert で冪等） */
+export async function addCompanyHolidaySuggestionDismissal(suggestionKey: string): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase
+      .from("company_holiday_suggestion_dismissals")
+      .upsert({ suggestion_key: suggestionKey }, { onConflict: "suggestion_key" });
+    if (error) {
+      console.warn("addCompanyHolidaySuggestionDismissal error:", error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("addCompanyHolidaySuggestionDismissal error:", e);
+    return false;
+  }
+}
+
 /** 指定期間（YYYY-MM-DD 含む）のシフト行を全ユーザー分削除（休業日登録時の既存シフト整理用） */
 export async function deleteShiftsInDateRange(start: string, end: string): Promise<boolean> {
   const supabase = getSupabase();
