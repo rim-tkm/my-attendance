@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import type { Member, WorkRecord, OpenRecord, Shift, KpiRecord } from "@/lib/attendance";
+import type { CompanyHoliday, Member, WorkRecord, OpenRecord, Shift, KpiRecord } from "@/lib/attendance";
 import {
   assertWorkRecordsDurationWithinHardCap,
   canonicalShiftForUserDate,
@@ -1036,6 +1036,102 @@ export async function saveShifts(shifts: Shift[], opts?: SaveDataOptions): Promi
     return true;
   } catch (e) {
     console.warn("saveShifts error:", e);
+    return false;
+  }
+}
+
+type DbCompanyHoliday = {
+  id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+};
+
+function toCompanyHoliday(r: DbCompanyHoliday): CompanyHoliday {
+  return {
+    id: r.id,
+    name: (r.name ?? "").trim(),
+    startDate: String(r.start_date),
+    endDate: String(r.end_date),
+  };
+}
+
+/** 会社休業日を全件取得（開始日昇順）。テーブル未作成・未設定環境では空配列 */
+export async function loadCompanyHolidays(): Promise<CompanyHoliday[]> {
+  const supabase = getSupabase();
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from("company_holidays")
+      .select("id, name, start_date, end_date")
+      .order("start_date", { ascending: true });
+    if (error) {
+      console.warn("loadCompanyHolidays error:", error);
+      return [];
+    }
+    return ((data ?? []) as DbCompanyHoliday[]).map(toCompanyHoliday);
+  } catch {
+    return [];
+  }
+}
+
+/** 会社休業日を1件登録し、作成された行を返す（失敗時 null） */
+export async function addCompanyHoliday(input: {
+  name: string;
+  startDate: string;
+  endDate: string;
+}): Promise<CompanyHoliday | null> {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from("company_holidays")
+      .insert({ name: input.name, start_date: input.startDate, end_date: input.endDate })
+      .select("id, name, start_date, end_date")
+      .single();
+    if (error || !data) {
+      console.warn("addCompanyHoliday error:", error);
+      return null;
+    }
+    return toCompanyHoliday(data as DbCompanyHoliday);
+  } catch (e) {
+    console.warn("addCompanyHoliday error:", e);
+    return null;
+  }
+}
+
+/** 会社休業日を削除（シフト提出が再び可能になる） */
+export async function deleteCompanyHoliday(id: string): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase.from("company_holidays").delete().eq("id", id);
+    if (error) {
+      console.warn("deleteCompanyHoliday error:", error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("deleteCompanyHoliday error:", e);
+    return false;
+  }
+}
+
+/** 指定期間（YYYY-MM-DD 含む）のシフト行を全ユーザー分削除（休業日登録時の既存シフト整理用） */
+export async function deleteShiftsInDateRange(start: string, end: string): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase) return false;
+  const a = start <= end ? start : end;
+  const b = start <= end ? end : start;
+  try {
+    const { error } = await supabase.from("shifts").delete().gte("date", a).lte("date", b);
+    if (error) {
+      console.warn("deleteShiftsInDateRange error:", error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("deleteShiftsInDateRange error:", e);
     return false;
   }
 }

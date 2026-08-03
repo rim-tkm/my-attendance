@@ -1316,6 +1316,22 @@ export function getMondayOfCalendarWeekForYmd(ymd: string): string {
   return toLocalDateString(mon);
 }
 
+/** 会社休業日（お盆・年末年始など）。管理者が期間で登録し、期間内の日はシフト提出不可（稼働予定なし固定） */
+export interface CompanyHoliday {
+  id: string;
+  name: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+}
+
+/** ymd がいずれかの会社休業日期間に含まれればその休業日を返す（なければ null） */
+export function findCompanyHolidayForYmd(holidays: CompanyHoliday[], ymd: string): CompanyHoliday | null {
+  for (const h of holidays) {
+    if (h.startDate <= ymd && ymd <= h.endDate) return h;
+  }
+  return null;
+}
+
 /** YYYY-MM-DD の暦上が土曜・日曜か（getMondayOfCalendarWeekForYmd と同じ日付解釈） */
 export function isWeekendYmd(ymd: string): boolean {
   const [y, m, d] = ymd.split("-").map(Number);

@@ -7,7 +7,21 @@
 
 ---
 
-## 2026-08-02（7月営業実績の分析資料作成・コード変更なし）
+## 2026-08-03（会社休業日のシフト提出ブロック＋Slack0人スキップ＋KPIにKC数）
+
+- **依頼**: ①お盆など会社休業日は管理者設定でシフト提出不可にしたい（Slackスレッドの「12〜15日の稼働希望を出せないように」が発端。仕様確認の結果: シフト提出のみブロック／期間で登録／登録時に既存シフトを確認のうえ削除）②稼働予定者がいない日はSlack朝通知を送らない ③業務委託KPIの期間集計に「KC数」を表示（中野さんのSlack依頼）。
+
+- **変更**:
+  - **DB**: 新テーブル `company_holidays`（id/name/start_date/end_date）。マイグレーション [supabase-migration-company-holidays.sql](../supabase-migration-company-holidays.sql)。
+  - **lib**: [attendance.ts](../lib/attendance.ts) に `CompanyHoliday` 型＋`findCompanyHolidayForYmd`。[supabase-data.ts](../lib/supabase-data.ts) に `loadCompanyHolidays`/`addCompanyHoliday`/`deleteCompanyHoliday`/`deleteShiftsInDateRange`。
+  - **メンバー画面**: `ShiftTab` が `companyHolidays` を受け取り、休業日は土日と同じ「稼働予定なし」固定（フォーム初期化・前週コピー・保存・描画の全経路）。行には「会社休業日（名称）のため登録できません」を表示。
+  - **管理画面**: 管理設定に「会社休業日」カード（名称＋開始日＋終了日で登録／一覧＋削除）。登録時に期間内の登録済みシフトを DB から取り直して件数提示→confirm→`deleteShiftsInDateRange` で削除→登録。削除も confirm 付き。
+  - **Slack**: [slack-daily.ts](../lib/slack-daily.ts) 稼働予定者0人の日は `skipReason:"noWorkers"` でスキップ（休業日かに関係なく）。手動テスト（`bypassWeekendSkip:true`）は従来どおり送信。
+  - **KPI**: 業務委託KPIの期間指定カスタム集計に「KC数」タイル（`rangeTotals.kcCount`・総有効コール数の隣）。
+
+- **検証**: `npx tsc --noEmit` ✅ / `npm run build` ✅。
+
+- **申し送り**: **Supabase SQL Editor で `supabase-migration-company-holidays.sql` の実行が必要**（未実行だと休業日登録がエラーメッセージで失敗するだけで他機能には影響なし）。管理者による稼働予定管理（代理編集）は休業日をブロックしない仕様（管理者の裁量を残すため・依頼スコープA）。
 
 - **依頼**: 「明日のFB面談用に、7月1ヶ月分の営業データをサブエージェント総動員で分析し、メンバー別評価・会社課題・外部ベンチマーク・8月受注100件超えの逆算まで入った資料を作って」。
 

@@ -13,7 +13,7 @@ export async function slackDailyTestAction(dateStr?: string): Promise<{
   detail?: string;
   date?: string;
   skipped?: boolean;
-  skipReason?: "weekend";
+  skipReason?: "weekend" | "noWorkers";
   /** テストで土日を回避せず送った場合 true（画面上の説明用） */
   weekendTestSend?: boolean;
 }> {

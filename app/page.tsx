@@ -42,6 +42,8 @@ import {
   getDateStringsInclusive,
   SHIFT_ENTRY_NONE,
   isWeekendYmd,
+  findCompanyHolidayForYmd,
+  type CompanyHoliday,
   getKpiRates,
   safeRatePercent,
   getTotalMinutesForMonthByUser,
@@ -161,11 +163,17 @@ import {
   saveKpiForUser,
   loginUser,
   loadPlanActualGapApprovalsDetailed,
+  loadCompanyHolidays,
+  addCompanyHoliday,
+  deleteCompanyHoliday,
+  loadShiftsInDateRange,
+  deleteShiftsInDateRange,
   type PlanActualGapResolution,
   exportAllDataFromSupabase,
   importAllDataToSupabase,
   deleteAttendanceRecordById,
 } from "@/lib/supabase-data";
+import { shiftHasPlannedWorkHours } from "@/lib/shift-planned-work";
 import { persistOpenRecordClientBackup, readOpenRecordClientBackup } from "@/lib/open-record-client-backup";
 import { withNetworkRetry } from "@/lib/network-retry";
 import { parseStartInstantJstOnWorkDate } from "@/lib/punch-jst-time";
@@ -1426,6 +1434,9 @@ function AdminDashboard(props: {
   allKpiRecords: KpiRecord[];
   members: Member[];
   setMembers: (v: Member[] | ((prev: Member[]) => Member[])) => void;
+  /** 会社休業日（管理設定で登録・削除。メンバーのシフト提出を期間内ブロック） */
+  companyHolidays: CompanyHoliday[];
+  setCompanyHolidays: (v: CompanyHoliday[] | ((prev: CompanyHoliday[]) => CompanyHoliday[])) => void;
   onRefresh: () => void;
   onSaveMemberRecords: (memberId: string, records: WorkRecord[]) => Promise<void>;
   onSaveMemberShifts: (memberId: string, shifts: Shift[]) => Promise<void>;
@@ -1453,6 +1464,8 @@ function AdminDashboard(props: {
     allKpiRecords,
     members,
     setMembers,
+    companyHolidays,
+    setCompanyHolidays,
     onRefresh,
     onSaveMemberRecords,
     onSaveMemberShifts,
@@ -1487,6 +1500,99 @@ function AdminDashboard(props: {
   const [newMemberAdding, setNewMemberAdding] = useState(false);
   const [memberDetailSaveError, setMemberDetailSaveError] = useState<string | null>(null);
   const [invoiceSaveHint, setInvoiceSaveHint] = useState<string | null>(null);
+  /** 会社休業日の登録フォーム（名称・開始日・終了日）と処理状態 */
+  const [holidayName, setHolidayName] = useState("");
+  const [holidayStart, setHolidayStart] = useState("");
+  const [holidayEnd, setHolidayEnd] = useState("");
+  const [holidayBusy, setHolidayBusy] = useState(false);
+  const [holidayFeedback, setHolidayFeedback] = useState<{ variant: "success" | "error"; message: string } | null>(
+    null
+  );
+
+  const handleAddCompanyHoliday = async () => {
+    const name = holidayName.trim();
+    if (!name) {
+      setHolidayFeedback({ variant: "error", message: "休業日の名称を入力してください（例: お盆休み）。" });
+      return;
+    }
+    if (!holidayStart || !holidayEnd) {
+      setHolidayFeedback({ variant: "error", message: "開始日と終了日を両方指定してください。" });
+      return;
+    }
+    if (holidayStart > holidayEnd) {
+      setHolidayFeedback({ variant: "error", message: "終了日は開始日以降の日付を指定してください。" });
+      return;
+    }
+    setHolidayBusy(true);
+    setHolidayFeedback(null);
+    try {
+      // 既存シフトは登録直前に DB から取り直して件数を出す（props の allShifts が古い場合に備える）
+      const existingShifts = await loadShiftsInDateRange(holidayStart, holidayEnd);
+      const plannedCount = existingShifts.filter((s) => shiftHasPlannedWorkHours(s)).length;
+      const periodLabel = holidayStart === holidayEnd ? holidayStart : `${holidayStart} 〜 ${holidayEnd}`;
+      const confirmMessage =
+        plannedCount > 0
+          ? `${periodLabel} を休業日「${name}」として登録します。\nこの期間に登録済みの稼働予定が ${plannedCount} 件あります。該当期間のシフトをすべて削除して登録しますか？`
+          : `${periodLabel} を休業日「${name}」として登録します。この期間はシフト提出ができなくなります。よろしいですか？`;
+      if (!window.confirm(confirmMessage)) return;
+      if (existingShifts.length > 0) {
+        const deleted = await deleteShiftsInDateRange(holidayStart, holidayEnd);
+        if (!deleted) {
+          setHolidayFeedback({ variant: "error", message: "既存シフトの削除に失敗しました。休業日は登録していません。" });
+          return;
+        }
+      }
+      const created = await addCompanyHoliday({ name, startDate: holidayStart, endDate: holidayEnd });
+      if (!created) {
+        setHolidayFeedback({
+          variant: "error",
+          message:
+            "休業日の登録に失敗しました。Supabase に company_holidays テーブルが作成済みか確認してください（supabase-migration-company-holidays.sql）。",
+        });
+        return;
+      }
+      setCompanyHolidays((prev) =>
+        [...prev, created].sort((a, b) => a.startDate.localeCompare(b.startDate))
+      );
+      setHolidayName("");
+      setHolidayStart("");
+      setHolidayEnd("");
+      setHolidayFeedback({
+        variant: "success",
+        message:
+          plannedCount > 0
+            ? `休業日「${created.name}」を登録し、期間内のシフト ${plannedCount} 件を削除しました。`
+            : `休業日「${created.name}」を登録しました。`,
+      });
+      if (existingShifts.length > 0) onRefresh();
+    } finally {
+      setHolidayBusy(false);
+    }
+  };
+
+  const handleDeleteCompanyHoliday = async (holiday: CompanyHoliday) => {
+    const periodLabel =
+      holiday.startDate === holiday.endDate ? holiday.startDate : `${holiday.startDate} 〜 ${holiday.endDate}`;
+    if (
+      !window.confirm(
+        `休業日「${holiday.name}」（${periodLabel}）を削除しますか？\n削除するとこの期間のシフト提出が再びできるようになります。`
+      )
+    ) {
+      return;
+    }
+    setHolidayBusy(true);
+    try {
+      const ok = await deleteCompanyHoliday(holiday.id);
+      if (!ok) {
+        setHolidayFeedback({ variant: "error", message: "休業日の削除に失敗しました。" });
+        return;
+      }
+      setCompanyHolidays((prev) => prev.filter((h) => h.id !== holiday.id));
+      setHolidayFeedback({ variant: "success", message: `休業日「${holiday.name}」を削除しました。` });
+    } finally {
+      setHolidayBusy(false);
+    }
+  };
   const [detailId, setDetailId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editLogin, setEditLogin] = useState("");
@@ -5120,6 +5226,10 @@ function AdminDashboard(props: {
                     <div className="text-2xl font-bold">{rangeTotals.validCalls}</div>
                   </div>
                   <div className="rounded-lg bg-slate-700 p-4 text-white">
+                    <div className="text-xs text-slate-300">KC数</div>
+                    <div className="text-2xl font-bold">{rangeTotals.kcCount}</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-700 p-4 text-white">
                     <div className="text-xs text-slate-300">決裁者アポ数</div>
                     <div className="text-2xl font-bold">{rangeTotals.decisionMakerApo}</div>
                   </div>
@@ -6990,7 +7100,7 @@ function AdminDashboard(props: {
               </div>
             )}
             <p className="text-xs text-slate-500">
-              自動送信は <code className="rounded bg-slate-200 px-1">/api/slack-daily</code>（GET）のみ。Cron では土曜・日曜（JST の当日）は送信しません。手動で土日に送る場合は{" "}
+              自動送信は <code className="rounded bg-slate-200 px-1">/api/slack-daily</code>（GET）のみ。Cron では土曜・日曜（JST の当日）と稼働予定者が0人の日は送信しません。手動で土日・0人の日に送る場合は{" "}
               <code className="rounded bg-slate-200 px-1">?test=true</code> 付き GET または POST の{" "}
               <code className="rounded bg-slate-200 px-1">{`{"test":true}`}</code>。上のテストは<strong className="font-medium text-slate-700">選択した日付</strong>の予定一覧を土日も含め送信します。環境変数{" "}
               <code className="rounded bg-slate-200 px-1">SLACK_WEBHOOK_URL</code>（共通）または日次通知専用{" "}
@@ -6998,6 +7108,87 @@ function AdminDashboard(props: {
               <code className="rounded bg-slate-200 px-1">CRON_SECRET</code> を Vercel に設定してください。他の Slack 通知は{" "}
               <code className="rounded bg-slate-200 px-1">.env.example</code> の用途別 Webhook を参照してください。
             </p>
+          </div>
+
+          <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+            <span className="text-xs font-medium text-slate-600">
+              会社休業日（お盆・年末年始など。期間内はメンバーのシフト提出を「稼働予定なし」固定でブロックします）
+            </span>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end sm:gap-3">
+              <label className="flex min-w-0 flex-col gap-1 sm:max-w-[12rem]">
+                <span className="text-xs font-medium text-slate-600">名称</span>
+                <input
+                  type="text"
+                  value={holidayName}
+                  onChange={(e) => setHolidayName(e.target.value)}
+                  placeholder="例: お盆休み"
+                  className="rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+                />
+              </label>
+              <label className="flex min-w-0 flex-col gap-1 sm:max-w-[11rem]">
+                <span className="text-xs font-medium text-slate-600">開始日</span>
+                <input
+                  type="date"
+                  value={holidayStart}
+                  onChange={(e) => setHolidayStart(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+                />
+              </label>
+              <label className="flex min-w-0 flex-col gap-1 sm:max-w-[11rem]">
+                <span className="text-xs font-medium text-slate-600">終了日</span>
+                <input
+                  type="date"
+                  value={holidayEnd}
+                  onChange={(e) => setHolidayEnd(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void handleAddCompanyHoliday()}
+                disabled={holidayBusy}
+                className="w-fit rounded bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-500 disabled:opacity-50"
+              >
+                {holidayBusy ? "処理中…" : "休業日を登録"}
+              </button>
+            </div>
+            {holidayFeedback != null && (
+              <div
+                className={`min-w-0 max-w-xl whitespace-pre-wrap text-sm font-medium ${
+                  holidayFeedback.variant === "success" ? "text-green-700" : "text-red-600"
+                }`}
+                role="status"
+              >
+                {holidayFeedback.message}
+              </div>
+            )}
+            <p className="text-xs text-slate-500">
+              1日だけの休業日は開始日と終了日に同じ日付を指定してください。登録時にその期間の登録済みシフトがあれば、件数を確認のうえ削除します。土日はもともと提出できないため登録不要です。
+            </p>
+            {companyHolidays.length === 0 ? (
+              <p className="text-xs text-slate-500">登録済みの休業日はありません。</p>
+            ) : (
+              <div className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+                {companyHolidays.map((h) => (
+                  <div key={h.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                    <div className="min-w-0 text-sm text-slate-800">
+                      <span className="font-medium">{h.name}</span>
+                      <span className="ml-2 text-xs text-slate-500">
+                        {h.startDate === h.endDate ? h.startDate : `${h.startDate} 〜 ${h.endDate}`}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleDeleteCompanyHoliday(h)}
+                      disabled={holidayBusy}
+                      className="rounded border border-red-200 bg-white px-3 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      削除
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-amber-50/40 p-4 ring-1 ring-amber-200/60">
@@ -8235,6 +8426,8 @@ function ShiftTab(props: {
   isAdminUser?: boolean;
   /** false のとき開始は 14:00 以降のみ（管理者ログインで編集する場合は指定しない／false） */
   restrictMorningStart?: boolean;
+  /** 会社休業日（期間内の日は土日と同様「稼働予定なし」固定で提出不可） */
+  companyHolidays?: CompanyHoliday[];
 }) {
   const {
     userId,
@@ -8245,7 +8438,9 @@ function ShiftTab(props: {
     guardKpiRecords = [],
     isAdminUser = false,
     restrictMorningStart = false,
+    companyHolidays = [],
   } = props;
+  const holidayFor = (dateStr: string) => findCompanyHolidayForYmd(companyHolidays, dateStr);
   const [weekStart, setWeekStart] = useState("");
   const [weekForm, setWeekForm] = useState<WeekFormState>({});
   const [weekSaveLoading, setWeekSaveLoading] = useState(false);
@@ -8287,14 +8482,14 @@ function ShiftTab(props: {
   const memberShiftWeekCanSubmit = useMemo(() => {
     if (!targetStart || weekDates.length === 0) return true;
     return weekDates.every((dateStr) => {
-      if (isWeekendYmd(dateStr)) return true;
+      if (isWeekendYmd(dateStr) || findCompanyHolidayForYmd(companyHolidays, dateStr)) return true;
       if (isViewingWeekContainingTodayJst && dateStr <= todayJstYmd) return true;
       if (dateStr < todayJstYmd) return true;
       const f =
         weekForm[dateStr] || { s1: SHIFT_WEEKDAY_DEFAULT_START, e1: SHIFT_WEEKDAY_DEFAULT_END, s2: "", e2: "" };
       return adminShiftDayCanSave(f, restrictMorningStart);
     });
-  }, [targetStart, weekDates, weekForm, isViewingWeekContainingTodayJst, todayJstYmd, restrictMorningStart]);
+  }, [targetStart, weekDates, weekForm, isViewingWeekContainingTodayJst, todayJstYmd, restrictMorningStart, companyHolidays]);
 
   useEffect(() => {
     if (!targetStart) return;
@@ -8304,7 +8499,7 @@ function ShiftTab(props: {
     const map = getShiftsByDateForWeek(shifts, targetStart, userId);
     const next: WeekFormState = {};
     dates.forEach((dateStr) => {
-      if (isWeekendYmd(dateStr)) {
+      if (isWeekendYmd(dateStr) || findCompanyHolidayForYmd(companyHolidays, dateStr)) {
         next[dateStr] = shiftFormWeekendNone();
         return;
       }
@@ -8335,7 +8530,7 @@ function ShiftTab(props: {
     setWeekForm((prev) => {
       const merged: WeekFormState = { ...next, ...prev };
       dates.forEach((d) => {
-        if (isWeekendYmd(d)) merged[d] = shiftFormWeekendNone();
+        if (isWeekendYmd(d) || findCompanyHolidayForYmd(companyHolidays, d)) merged[d] = shiftFormWeekendNone();
         else if (viewingContainsTodayJst && d <= todayJstYmd) {
           const s = map.get(d);
           if (s) {
@@ -8353,7 +8548,7 @@ function ShiftTab(props: {
       });
       return merged;
     });
-  }, [targetStart, shifts, todayJstYmd, userId, guardWorkRecords, guardKpiRecords]);
+  }, [targetStart, shifts, todayJstYmd, userId, guardWorkRecords, guardKpiRecords, companyHolidays]);
 
   const updateDay = (dateStr: string, field: "s1" | "e1" | "s2" | "e2", value: string) => {
     if ((field === "s1" || field === "e1") && value === ENTRY_NONE) {
@@ -8393,7 +8588,7 @@ function ShiftTab(props: {
     setWeekForm((prev) => {
       const next = { ...prev };
       curDates.forEach((dateStr, i) => {
-        if (isWeekendYmd(dateStr)) {
+        if (isWeekendYmd(dateStr) || holidayFor(dateStr)) {
           next[dateStr] = shiftFormWeekendNone();
           return;
         }
@@ -8419,7 +8614,7 @@ function ShiftTab(props: {
     const otherShifts = shifts.filter((s) => s.userId === userId && !weekDates.includes(s.date));
     const newShifts: Shift[] = weekDates.flatMap((dateStr) => {
       const existing = byDate.get(dateStr);
-      if (isWeekendYmd(dateStr)) {
+      if (isWeekendYmd(dateStr) || holidayFor(dateStr)) {
         return [
           {
             id: existing ? existing.id : crypto.randomUUID(),
@@ -8561,7 +8756,8 @@ function ShiftTab(props: {
               const primaryEndOpts = buildShiftPrimaryPlannedEndSelectOptions(f.e1, f.s1);
               const secondaryStartOpts = buildShiftSecondaryPlannedStartSelectOptions(f.s2, morningStartOpts);
               const secondaryEndOpts = buildShiftSecondaryPlannedEndSelectOptions(f.e2, f.s2);
-              const weekend = isWeekendYmd(dateStr);
+              const holiday = holidayFor(dateStr);
+              const weekend = isWeekendYmd(dateStr) || holiday != null;
               const lockedThisWeekPast =
                 isViewingWeekContainingTodayJst && !weekend && dateStr <= todayJstYmd;
               const lockedOtherPast =
@@ -8599,7 +8795,11 @@ function ShiftTab(props: {
                     )}
                   </div>
                   {weekend && (
-                    <p className="text-xs font-medium text-slate-600">土曜・日曜は登録できません（稼働予定なし固定）。</p>
+                    <p className="text-xs font-medium text-slate-600">
+                      {holiday
+                        ? `会社休業日（${holiday.name}）のため登録できません（稼働予定なし固定）。`
+                        : "土曜・日曜は登録できません（稼働予定なし固定）。"}
+                    </p>
                   )}
                   {!weekend && lockedThisWeekPast && actualGuard && (
                     <p className="text-xs text-sky-800">
@@ -9044,6 +9244,7 @@ export default function DashboardPage() {
   const [allOpenRecords, setAllOpenRecords] = useState<OpenRecord[]>([]);
   const [allShifts, setAllShifts] = useState<Shift[]>([]);
   const [allKpiRecords, setAllKpiRecords] = useState<KpiRecord[]>([]);
+  const [companyHolidays, setCompanyHolidays] = useState<CompanyHoliday[]>([]);
   const [selectedMonth, setSelectedMonth] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(false);
@@ -9179,19 +9380,21 @@ export default function DashboardPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [records, openRecs, shifts, kpis, mems, gapDetailed] = await Promise.all([
+      const [records, openRecs, shifts, kpis, mems, gapDetailed, holidays] = await Promise.all([
         loadRecords(),
         loadOpenRecords(),
         loadShifts(),
         loadKpi(),
         loadMembers(),
         loadPlanActualGapApprovalsDetailed(),
+        loadCompanyHolidays(),
       ]);
       setAllRecords(records);
       setAllOpenRecords(openRecs);
       setAllShifts(shifts);
       setAllKpiRecords(kpis);
       setMembers(mems ?? []);
+      setCompanyHolidays(holidays);
       setPlanActualGapApprovedKeys(new Set(gapDetailed.map((r) => planActualGapApprovalKey(r.userId, r.date))));
       setPlanActualGapResolutionByKey(
         new Map(gapDetailed.map((r) => [planActualGapApprovalKey(r.userId, r.date), r.resolution]))
@@ -9265,17 +9468,19 @@ export default function DashboardPage() {
         setIsAdminMode(true);
       }
       setSessionChecked(true);
-      const [records, openRecs, shifts, kpis, gapDetailed0] = await Promise.all([
+      const [records, openRecs, shifts, kpis, gapDetailed0, holidays0] = await Promise.all([
         loadRecords(),
         loadOpenRecords(),
         loadShifts(),
         loadKpi(),
         loadPlanActualGapApprovalsDetailed(),
+        loadCompanyHolidays(),
       ]);
       setAllRecords(records);
       setAllOpenRecords(openRecs);
       setAllShifts(shifts);
       setAllKpiRecords(kpis);
+      setCompanyHolidays(holidays0);
       setPlanActualGapApprovedKeys(new Set(gapDetailed0.map((r) => planActualGapApprovalKey(r.userId, r.date))));
       setPlanActualGapResolutionByKey(
         new Map(gapDetailed0.map((r) => [planActualGapApprovalKey(r.userId, r.date), r.resolution]))
@@ -10397,6 +10602,8 @@ export default function DashboardPage() {
             allKpiRecords={allKpiRecords}
             members={members}
             setMembers={setMembers}
+            companyHolidays={companyHolidays}
+            setCompanyHolidays={setCompanyHolidays}
             onRefresh={refresh}
             deepLinkMemberId={adminEditMemberFromUrl}
             onAdminDeepLinkConsumed={clearAdminEditDeepLink}
@@ -10831,6 +11038,7 @@ export default function DashboardPage() {
             guardKpiRecords={kpiRecords}
             isAdminUser={isAdminUser}
             restrictMorningStart={!isAdminUser && currentMember?.canWorkMorning !== true}
+            companyHolidays={companyHolidays}
           />
         ) : (
           <KpiTab userId={currentUserId} kpiRecords={kpiRecords} currentYearMonth={currentYearMonth} isIntern={currentMember?.isIntern === true} onSave={handleSaveKpi} />

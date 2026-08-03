@@ -28,18 +28,19 @@ export { getTodayJstDateString } from "@/lib/export-schedule";
 
 export type SlackDailyResult =
   | { ok: true; date: string; sent: true }
-  | { ok: true; date: string; sent: false; skipReason: "weekend" }
+  | { ok: true; date: string; sent: false; skipReason: "weekend" | "noWorkers" }
   | { ok: false; error: string; detail?: string };
 
 export type SendSlackDailyOptions = {
-  /** true のとき土日でも送信する（管理画面テスト・?test=true の手動実行用）。Cron 本番では付けない。 */
+  /** true のとき土日・稼働予定者0人でも送信する（管理画面テスト・?test=true の手動実行用）。Cron 本番では付けない。 */
   bypassWeekendSkip?: boolean;
 };
 
 /**
  * Supabase の shifts（稼働予定）から指定日に実際の予定があるユーザーを抽出し、Slack に送信する。
  * 本番 Cron は日本時間 朝 8:00 前後（その日の稼働予定を朝に共有する想定）を想定。
- * 土日（対象日の暦）では既定では送信しない（稼働がない前提）。`bypassWeekendSkip` で回避可。
+ * 土日（対象日の暦）と稼働予定者が0人の日は既定では送信しない（会社休業日・全員休みの日に
+ * 「稼働予定者はいません」だけの通知を流さないため）。`bypassWeekendSkip` で回避可。
  */
 export async function sendSlackDailyForDate(dateStr: string, options?: SendSlackDailyOptions): Promise<SlackDailyResult> {
   if (!options?.bypassWeekendSkip && isWeekendYmd(dateStr)) {
@@ -81,6 +82,10 @@ export async function sendSlackDailyForDate(dateStr: string, options?: SendSlack
   const generalRows = plannedList.filter((r) => r.isIntern !== true);
   const internRows = plannedList.filter((r) => r.isIntern === true);
   const totalCount = plannedList.length;
+
+  if (!options?.bypassWeekendSkip && totalCount === 0) {
+    return { ok: true, date: dateStr, sent: false, skipReason: "noWorkers" };
+  }
 
   const header = "お疲れ様です。";
   const summaryLine = `👥 本日（${dateStr}）の稼働予定：合計 ${totalCount}名（一般 ${generalRows.length}名 / インターン ${internRows.length}名）`;
