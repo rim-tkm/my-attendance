@@ -1,5 +1,6 @@
 import type { Member } from "@/lib/attendance";
 import { bankByCode, branchByCode } from "@/lib/bank-master";
+import postalPrefecture from "@/lib/postal-prefecture.json";
 
 /**
  * freee の「取引先マスタインポートフォーマット」CSV を生成する（サーバー側のみ。bank-master 経由で全銀マスタを参照）。
@@ -72,6 +73,37 @@ export function splitJpAddress(address: string): { prefecture: string; rest: str
   return { prefecture: m[1], rest: m[2].trim() };
 }
 
+/** JIS都道府県コード（1〜47）→ 名称。postal-prefecture.json の値と対応 */
+const JIS_PREFECTURE_NAMES = [
+  "", "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
+  "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
+  "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県",
+  "静岡県", "愛知県", "三重県", "滋賀県", "京都府", "大阪府", "兵庫県",
+  "奈良県", "和歌山県", "鳥取県", "島根県", "岡山県", "広島県", "山口県",
+  "徳島県", "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県",
+  "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
+];
+
+/**
+ * 郵便番号から都道府県名を判定（日本郵便データ由来の3桁プレフィックス表＋県境の7桁例外表）。
+ * 住所が「厚木市…」のように都道府県なしで登録されていても、freee の都道府県を自動設定するために使う。
+ * 7桁として解釈できない場合は空文字。
+ */
+export function prefectureFromPostalCode(zipRaw: string): string {
+  const digits = zipRaw.normalize("NFKC").replace(/\D/g, "");
+  if (digits.length !== 7) return "";
+  const data = postalPrefecture as { prefixes: Record<string, number>; exceptions: Record<string, number> };
+  const code = data.exceptions[digits] ?? data.prefixes[digits.slice(0, 3)];
+  return code != null ? (JIS_PREFECTURE_NAMES[code] ?? "") : "";
+}
+
+/** 住所の都道府県（先頭にあればそれを、なければ郵便番号から判定）と残りを返す */
+export function resolveJpAddress(address: string, postalCode: string): { prefecture: string; rest: string } {
+  const { prefecture, rest } = splitJpAddress(address);
+  if (prefecture !== "") return { prefecture, rest };
+  return { prefecture: prefectureFromPostalCode(postalCode), rest };
+}
+
 /** 支店名を freee 表記に（末尾が支店・営業部・出張所・本店・支所以外なら「支店」を付ける） */
 export function branchNameForFreee(branchName: string): string {
   const t = branchName.trim();
@@ -113,7 +145,7 @@ export function buildFreeePartnersCsv(members: Member[]): string {
     (m) => m.isActive !== false && (m.loginAccount ?? "").trim().toLowerCase() !== "admin"
   );
   for (const m of targets) {
-    const { prefecture, rest } = splitJpAddress(m.address ?? "");
+    const { prefecture, rest } = resolveJpAddress(m.address ?? "", m.postalCode ?? "");
     const bankCode = (m.bankCode ?? "").trim();
     const branchCode = (m.branchCode ?? "").trim();
     const bankMaster = bankCode !== "" ? bankByCode(bankCode) : null;

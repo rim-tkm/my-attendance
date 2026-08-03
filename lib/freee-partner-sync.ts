@@ -3,7 +3,7 @@ import { bankByCode, branchByCode } from "@/lib/bank-master";
 import {
   accountNumberForTransfer,
   branchNameForFreee,
-  splitJpAddress,
+  resolveJpAddress,
   toHalfWidthKana,
 } from "@/lib/freee-partners-csv";
 
@@ -33,7 +33,7 @@ export type FreeePartnerPayload = Record<string, unknown>;
 
 /** 取引先の作成・更新に使う共通ペイロード（company_id は呼び出し側で付与） */
 export function buildFreeePartnerPayload(member: Member, companyId: number): FreeePartnerPayload {
-  const { prefecture, rest } = splitJpAddress(member.address ?? "");
+  const { prefecture, rest } = resolveJpAddress(member.address ?? "", member.postalCode ?? "");
   const bankCode = (member.bankCode ?? "").trim();
   const branchCode = (member.branchCode ?? "").trim();
   const bankMaster = bankCode !== "" ? bankByCode(bankCode) : null;
