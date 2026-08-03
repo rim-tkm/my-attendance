@@ -1514,6 +1514,31 @@ function AdminDashboard(props: {
   const [holidayFeedback, setHolidayFeedback] = useState<{ variant: "success" | "error"; message: string } | null>(
     null
   );
+  /** freee 取引先 CSV ダウンロードの処理状態 */
+  const [freeeCsvBusy, setFreeeCsvBusy] = useState(false);
+
+  const handleDownloadFreeePartnersCsv = async () => {
+    setFreeeCsvBusy(true);
+    try {
+      const res = await fetch("/api/admin/freee-partners-csv", { credentials: "include" });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(typeof data.error === "string" ? data.error : "CSVの生成に失敗しました");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `freee取引先_${getTodayJstDateString()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFreeeCsvBusy(false);
+    }
+  };
+
   /** 銀行コード一括補完（管理設定）の処理状態と結果表示 */
   const [bankBackfillBusy, setBankBackfillBusy] = useState(false);
   const [bankBackfillResult, setBankBackfillResult] = useState<{ variant: "success" | "error"; message: string } | null>(
@@ -7410,14 +7435,28 @@ function AdminDashboard(props: {
             <p className="text-xs text-slate-500">
               登録済みの銀行名・支店名からコードを自動で補完します。新規入力時は候補選択で自動確定するため、このボタンは既存メンバーの初回補完用です。照合できなかったメンバーは各メンバーの編集画面で候補から選び直してください。
             </p>
-            <button
-              type="button"
-              onClick={() => void handleBackfillBankCodes()}
-              disabled={bankBackfillBusy}
-              className="w-fit rounded bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-500 disabled:opacity-50"
-            >
-              {bankBackfillBusy ? "照合中…" : "銀行コードを一括補完"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleBackfillBankCodes()}
+                disabled={bankBackfillBusy}
+                className="w-fit rounded bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-500 disabled:opacity-50"
+              >
+                {bankBackfillBusy ? "照合中…" : "銀行コードを一括補完"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDownloadFreeePartnersCsv()}
+                disabled={freeeCsvBusy}
+                className="w-fit rounded bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-50"
+              >
+                {freeeCsvBusy ? "生成中…" : "freee取引先CSVをダウンロード"}
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              freee取引先CSVは「取引先マスタインポートフォーマット」形式（有効メンバー・管理者除く）。freeeの
+              [設定] → [取引先] → [インポート] からそのまま取り込めます。支払条件は全員共通（末日締め・翌月15日払い・当方負担・支払元 GMOあおぞらネット銀行）で出力します。
+            </p>
             {bankBackfillResult != null && (
               <div
                 className={`min-w-0 max-w-xl whitespace-pre-wrap text-sm font-medium ${

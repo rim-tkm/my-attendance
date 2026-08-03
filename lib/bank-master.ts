@@ -121,6 +121,21 @@ export function matchBranchByName(bankCode: string, rawName: string): BankMaster
   return null;
 }
 
+/** 銀行コード（4桁）から銀行を取得（freee 取引先 CSV のカナ出力用） */
+export function bankByCode(code: string): BankMasterHit | null {
+  const c = code.trim().padStart(4, "0");
+  const e = data.banks.find((b) => b.c === c);
+  return e ? { code: e.c, name: e.n, kana: e.k } : null;
+}
+
+/** 支店コード（3桁）から支店を取得（freee 取引先 CSV のカナ出力用） */
+export function branchByCode(bankCode: string, branchCode: string): BankMasterHit | null {
+  const entries = data.branches[bankCode.trim().padStart(4, "0")] ?? [];
+  const c = branchCode.trim().padStart(3, "0");
+  const e = entries.find((b) => b.c === c);
+  return e ? { code: e.c, name: e.n, kana: e.k } : null;
+}
+
 /** マスタの更新日（YYYYMMDD 文字列。UI の注記用） */
 export function bankMasterUpdatedAt(): string {
   return data.updatedAt;
