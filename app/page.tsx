@@ -10581,6 +10581,22 @@ export default function DashboardPage() {
 
   const handleSaveShifts = async (newShifts: Shift[]): Promise<boolean> => {
     if (!currentUserId) return false;
+    // 開始打刻と同じルール: お支払いに必要な登録情報が未入力の間はシフト提出（稼働）をさせない
+    {
+      const me = members.find((m) => m.id === currentUserId);
+      const isAdminAccount = (me?.loginAccount ?? "").toLowerCase() === "admin";
+      const missingProfile = me && !isAdminAccount ? getMissingBillingProfileFields(me) : [];
+      if (missingProfile.length > 0) {
+        alert(
+          `シフト提出の前に、お支払いに必要な登録情報の入力が必要です。\n\n未入力の項目：${missingProfile.join("、")}\n\n「活動記録」タブの「振込先・インボイス設定」から入力・保存してください。`
+        );
+        setTab("home");
+        window.setTimeout(() => {
+          document.getElementById("member-billing-profile")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 100);
+        return false;
+      }
+    }
     const thisMon = getMondayOfCalendarWeekForYmd(getTodayJstDateString());
     const [subW1, subW2] = getSubmittableShiftWeekMondays(thisMon);
     const normalized = newShifts.map((s) => {
@@ -11174,13 +11190,9 @@ export default function DashboardPage() {
                   >
                     今すぐ入力する
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setProfileConfirmDismissed(true)}
-                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
-                  >
-                    あとで（次回ログイン時に再表示）
-                  </button>
+                  <p className="text-center text-[11px] text-slate-500">
+                    入力が完了するまで打刻・シフト提出はできません
+                  </p>
                 </>
               ) : (
                 <>
