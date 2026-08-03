@@ -48,6 +48,7 @@ export function buildFreeePartnerPayload(member: Member, companyId: number): Fre
   const accountType = ((member.accountType ?? "普通").trim() || "普通") === "当座" ? "checking" : "ordinary";
   const accountHolderKana = (member.accountHolder ?? "").trim() || (member.furigana ?? "").trim();
 
+  const login = (member.loginAccount ?? "").trim();
   const payload: FreeePartnerPayload = {
     company_id: companyId,
     name: member.name,
@@ -55,8 +56,14 @@ export function buildFreeePartnerPayload(member: Member, companyId: number): Fre
     country_code: "JP",
     phone: (member.phoneNumber ?? "").trim(),
     qualified_invoice_issuer: invReg !== "",
+    transfer_fee_handling_side: "payer", // 振込手数料は当方負担（CSV・支払設定と同じ運用値）
     payment_term_attributes: { cutoff_day: 32, additional_months: 1, fixed_day: 15 },
   };
+  const kana = (member.furigana ?? "").trim();
+  if (kana !== "") payload.name_kana = kana;
+  // 取引先担当者: メンバー本人（ログインIDがメール形式のときのみメールを設定）
+  payload.contact_name = member.name;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login)) payload.email = login;
   if (invReg !== "" && /^T[1-9][0-9]{12}$/.test(invReg)) {
     payload.invoice_registration_number = invReg;
   }
