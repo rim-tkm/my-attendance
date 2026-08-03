@@ -10893,13 +10893,29 @@ export default function DashboardPage() {
     }, 100);
   };
 
-  /** 月が変わって最初のログインで、本人に登録情報の確認を求める（管理者・未ログイン・確認済みの月は出さない） */
+  /** freee 連動（支払い）に必要な項目のうち、本人の登録で不足しているもの（不足がある間はログインごとに入力を促す） */
+  const memberMissingProfileItems =
+    !isAdminMode && !isAdminUser && currentMember != null
+      ? getMissingBillingProfileFields({
+          postalCode: currentMember.postalCode,
+          address: currentMember.address,
+          bankName: currentMember.bankName,
+          branchName: currentMember.branchName,
+          accountNumber: currentMember.accountNumber,
+          accountHolder: currentMember.accountHolder,
+          phoneNumber: currentMember.phoneNumber,
+        })
+      : [];
+
+  /** 月が変わって最初のログインで、本人に登録情報の確認を求める（管理者・未ログイン・確認済みの月は出さない）。
+   *  不足項目がある場合は月次確認済みでも表示する（不足の回収を優先） */
   const showMonthlyProfileConfirm =
     !isAdminMode &&
     !isAdminUser &&
     currentMember != null &&
     !profileConfirmDismissed &&
-    (currentMember.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7);
+    (memberMissingProfileItems.length > 0 ||
+      (currentMember.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7));
 
   if (!mounted) {
     return (
@@ -11119,10 +11135,19 @@ export default function DashboardPage() {
       {showMonthlyProfileConfirm && currentMember && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 p-4 print:hidden">
           <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl bg-white p-5 shadow-xl sm:p-6">
-            <h2 className="mb-1 text-base font-semibold text-slate-800">登録情報の月次確認</h2>
-            <p className="mb-4 text-xs leading-relaxed text-slate-600">
-              月に一度、お支払いに使う登録情報の確認をお願いしています。以下の内容に変更がないかご確認ください。
-            </p>
+            <h2 className="mb-1 text-base font-semibold text-slate-800">
+              {memberMissingProfileItems.length > 0 ? "登録情報の入力のお願い" : "登録情報の月次確認"}
+            </h2>
+            {memberMissingProfileItems.length > 0 ? (
+              <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900">
+                お支払いに必要な以下の項目が未登録です。入力をお願いします。
+                <p className="mt-1 font-semibold">{memberMissingProfileItems.join("・")}</p>
+              </div>
+            ) : (
+              <p className="mb-4 text-xs leading-relaxed text-slate-600">
+                月に一度、お支払いに使う登録情報の確認をお願いしています。以下の内容に変更がないかご確認ください。
+              </p>
+            )}
             <dl className="mb-5 space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-4 text-sm">
               {[
                 ["住所", `〒${currentMember.postalCode ?? "未登録"} ${currentMember.address ?? ""}${currentMember.address2 ? ` ${currentMember.address2}` : ""}`],
@@ -11140,25 +11165,46 @@ export default function DashboardPage() {
               ))}
             </dl>
             <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => void handleConfirmProfileNoChange()}
-                disabled={profileConfirmBusy}
-                className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {profileConfirmBusy ? "記録中…" : "この内容で間違いありません"}
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmProfileEdit}
-                disabled={profileConfirmBusy}
-                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                変更がある（入力画面へ）
-              </button>
+              {memberMissingProfileItems.length > 0 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleConfirmProfileEdit}
+                    className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600"
+                  >
+                    今すぐ入力する
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProfileConfirmDismissed(true)}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    あとで（次回ログイン時に再表示）
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleConfirmProfileNoChange()}
+                    disabled={profileConfirmBusy}
+                    className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {profileConfirmBusy ? "記録中…" : "この内容で間違いありません"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmProfileEdit}
+                    disabled={profileConfirmBusy}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    変更がある（入力画面へ）
+                  </button>
+                </>
+              )}
             </div>
             <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-              変更した内容は自動で経理システムにも反映されます。
+              入力・変更した内容は自動で経理システムにも反映されます。
             </p>
           </div>
         </div>
