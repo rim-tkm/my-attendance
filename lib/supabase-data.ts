@@ -15,7 +15,8 @@ import {
   mergeUserKpiPreserveExistingByDate,
   mergeUserShiftsPreserveExistingByDate,
   normalizeKpiStartTime,
-  normalizeMemberName,
+  collapseMemberNameSpaces,
+  splitMemberName,
 } from "@/lib/attendance";
 import {
   appendKpiChangeHistoryForSlots,
@@ -89,6 +90,8 @@ export type DbUser = {
   postal_code?: string | null;
   address?: string | null;
   address2?: string | null;
+  last_name?: string | null;
+  first_name?: string | null;
   profile_confirmed_month?: string | null;
   bank_name?: string | null;
   bank_code?: string | null;
@@ -187,6 +190,8 @@ export function toMember(r: DbUser): Member {
   return {
     id: r.id,
     name: (r.name ?? "").trim(),
+    lastName: normStr(r.last_name ?? "") !== "" ? normStr(r.last_name ?? "") : undefined,
+    firstName: normStr(r.first_name ?? "") !== "" ? normStr(r.first_name ?? "") : undefined,
     furigana: furigana !== "" ? furigana : undefined,
     loginAccount: (r.login_account ?? "").trim(),
     password: r.password ?? "",
@@ -389,6 +394,8 @@ function usersUpsertRowFromMember(m: Member): Record<string, unknown> {
   return {
     id: m.id,
     name: m.name,
+    ...(m.lastName !== undefined ? { last_name: m.lastName } : {}),
+    ...(m.firstName !== undefined ? { first_name: m.firstName } : {}),
     furigana: m.furigana ?? "",
     login_account: login === "" ? null : login,
     password: m.password ?? "",
@@ -485,7 +492,7 @@ export async function addMember(
   const id = crypto.randomUUID();
   const newMember: Member = {
     id,
-    name: normalizeMemberName(name) || id,
+    name: collapseMemberNameSpaces(name) || id,
     loginAccount: options?.loginAccount?.trim() ?? "",
     password: options?.password ?? "",
     hourlyRate:
@@ -524,9 +531,12 @@ export async function addMember(
   const nextInvoiceNumber = await allocateNextInvoiceManagementNumber();
   newMember.invoiceNumber = nextInvoiceNumber;
 
+  const nameSplit = splitMemberName(newMember.name);
   const insertRow = {
     id: newMember.id,
     name: newMember.name,
+    // 「姓 名」形式で入力された場合は姓・名も保存（列未作成環境を考慮し分割できた時のみ）
+    ...(nameSplit ? { last_name: nameSplit.lastName, first_name: nameSplit.firstName } : {}),
     login_account: loginNorm === "" ? null : (newMember.loginAccount ?? "").trim(),
     password: await hashPasswordForStorage(newMember.password),
     hourly_rate: newMember.hourlyRate,
@@ -569,6 +579,8 @@ export type MemberUpdatePayload = Partial<
   Pick<
     Member,
     | "name"
+    | "lastName"
+    | "firstName"
     | "furigana"
     | "loginAccount"
     | "password"
@@ -662,7 +674,10 @@ export async function updateMemberOrThrow(
   const supabase = getSupabase();
   if (!supabase) throw new Error("データベースに接続できません");
   const body: Record<string, unknown> = {};
-  if (updates.name !== undefined) body.name = normalizeMemberName(updates.name);
+  if (updates.name !== undefined) body.name = collapseMemberNameSpaces(updates.name);
+  // 姓・名（列未作成の環境でも他項目の更新が通るよう指定時のみ）
+  if (updates.lastName !== undefined) body.last_name = (updates.lastName ?? "").trim();
+  if (updates.firstName !== undefined) body.first_name = (updates.firstName ?? "").trim();
   if (updates.furigana !== undefined) body.furigana = updates.furigana;
   if (updates.loginAccount !== undefined) {
     const t = updates.loginAccount.trim();

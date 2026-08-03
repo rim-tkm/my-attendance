@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { DEFAULT_CAN_WORK_MORNING_FOR_NEW_MEMBER, DEFAULT_HOURLY_RATE, normalizeMemberName } from "@/lib/attendance";
+import { collapseMemberNameSpaces, DEFAULT_CAN_WORK_MORNING_FOR_NEW_MEMBER, DEFAULT_HOURLY_RATE } from "@/lib/attendance";
 import {
   contractTypeToIsIntern,
   parseGoogleFormJpRegisterPayload,
@@ -57,7 +57,7 @@ export function buildGoogleFormUserInsertRow(
 
   return {
     id,
-    name: normalizeMemberName(payload.name),
+    name: collapseMemberNameSpaces(payload.name),
     furigana: payload.furigana,
     login_account: payload.email,
     password: passwordHash,

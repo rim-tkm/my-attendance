@@ -43,6 +43,8 @@ import {
   SHIFT_ENTRY_NONE,
   isWeekendYmd,
   findCompanyHolidayForYmd,
+  splitMemberName,
+  buildMemberDisplayName,
   type CompanyHoliday,
   getKpiRates,
   safeRatePercent,
@@ -1827,6 +1829,8 @@ function AdminDashboard(props: {
   };
   const [detailId, setDetailId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [editLastNameField, setEditLastNameField] = useState("");
+  const [editFirstNameField, setEditFirstNameField] = useState("");
   const [editLogin, setEditLogin] = useState("");
   const [editPass, setEditPass] = useState("");
   const [editRate, setEditRate] = useState(DEFAULT_HOURLY_RATE);
@@ -2824,6 +2828,14 @@ function AdminDashboard(props: {
     setInvoiceSaveHint(null);
     setDetailId(member.id);
     setEditName(member.name);
+    {
+      // 姓・名が未分離の既存メンバーは表示名から推定分割（分割できなければ姓に全体を入れる）
+      const split = member.lastName
+        ? { lastName: member.lastName, firstName: member.firstName ?? "" }
+        : splitMemberName(member.name) ?? { lastName: member.name, firstName: "" };
+      setEditLastNameField(split.lastName);
+      setEditFirstNameField(split.firstName);
+    }
     setEditLogin(member.loginAccount ?? "");
     setEditPass("");
     setEditRate(member.hourlyRate ?? DEFAULT_HOURLY_RATE);
@@ -2872,10 +2884,13 @@ function AdminDashboard(props: {
   const saveDetail = async () => {
     if (!detailId) return;
     setMemberDetailSaveError(null);
-    if (!editName.trim()) {
-      setMemberDetailSaveError("名前を入力してください。");
+    const seiTrim = editLastNameField.trim();
+    const meiTrim = editFirstNameField.trim();
+    if (!seiTrim) {
+      setMemberDetailSaveError("姓を入力してください。");
       return;
     }
+    const displayName = buildMemberDisplayName(seiTrim, meiTrim);
     const loginTrim = editLogin.trim();
     if (loginTrim) {
       const clash = members.some(
@@ -2904,7 +2919,9 @@ function AdminDashboard(props: {
     const detailMember = members.find((m) => m.id === detailId);
     const detailIsIntern = detailMember?.isIntern === true;
     const updates: Record<string, unknown> = {
-      name: editName.trim(),
+      name: displayName,
+      lastName: seiTrim,
+      firstName: meiTrim,
       loginAccount: editLogin,
       hourlyRate: detailIsIntern ? 0 : editRate >= 0 ? editRate : DEFAULT_HOURLY_RATE,
       postalCode: zip,
@@ -2945,9 +2962,9 @@ function AdminDashboard(props: {
       if (!res.ok) throw new Error(data.error || "保存に失敗しました");
       await onRefresh();
       if (invNum === "") {
-        console.warn("[admin] メンバー保存: 請求管理番号未入力", { memberId: detailId, name: editName.trim() });
+        console.warn("[admin] メンバー保存: 請求管理番号未入力", { memberId: detailId, name: displayName });
         setInvoiceSaveHint(
-          `「${editName.trim()}」は請求管理番号が未入力のまま保存しました。請求・帳票のため、登録を推奨します。`
+          `「${displayName}」は請求管理番号が未入力のまま保存しました。請求・帳票のため、登録を推奨します。`
         );
       } else {
         setInvoiceSaveHint(null);
@@ -8158,8 +8175,23 @@ function AdminDashboard(props: {
               )}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-0.5 block text-xs text-slate-500">名前</label>
-                  <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2 text-sm" />
+                  <label className="mb-0.5 block text-xs text-slate-500">姓・名（表示は「姓 名」・半角スペース区切り）</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={editLastNameField}
+                      onChange={(e) => setEditLastNameField(e.target.value)}
+                      placeholder="姓"
+                      className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                    />
+                    <input
+                      type="text"
+                      value={editFirstNameField}
+                      onChange={(e) => setEditFirstNameField(e.target.value)}
+                      placeholder="名"
+                      className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </div>
                 </div>
                 <div>
                   <label className="mb-0.5 block text-xs text-slate-500">ログイン用アカウント名</label>
@@ -9815,6 +9847,10 @@ export default function DashboardPage() {
   /** 月次の本人情報確認モーダル: 「変更する」を選んだ後などはセッション内で再表示しない */
   const [profileConfirmDismissed, setProfileConfirmDismissed] = useState(false);
   const [profileConfirmBusy, setProfileConfirmBusy] = useState(false);
+  /** 姓名分離の収集（税理士要望）: 姓・名が未登録のメンバーはモーダルで本人に確認する */
+  const [confirmSei, setConfirmSei] = useState("");
+  const [confirmMei, setConfirmMei] = useState("");
+  const profileConfirmNameSeededRef = useRef<string | null>(null);
 
   const invokeKpiMissingNotifyImmediate = useCallback(async () => {
     try {
@@ -10883,13 +10919,47 @@ export default function DashboardPage() {
     }
   };
 
-  /** 月次確認モーダル: 「この内容で間違いない」→ 当月確認として記録 */
+  /** 姓・名が未登録で、モーダルでの本人確認が必要か */
+  const needsNameSplitConfirm = currentMember != null && (currentMember.lastName ?? "").trim() === "";
+
+  // モーダル表示時に姓・名の初期値をセット（表示名にスペースがあれば分割、なければ姓に全体）
+  useEffect(() => {
+    if (!currentMember) return;
+    if (profileConfirmNameSeededRef.current === currentMember.id) return;
+    profileConfirmNameSeededRef.current = currentMember.id;
+    const split = currentMember.lastName
+      ? { lastName: currentMember.lastName, firstName: currentMember.firstName ?? "" }
+      : splitMemberName(currentMember.name) ?? { lastName: currentMember.name, firstName: "" };
+    setConfirmSei(split.lastName);
+    setConfirmMei(split.firstName);
+  }, [currentMember]);
+
+  /** モーダルの姓名入力が有効か（姓名確認が必要なときのみ必須） */
+  const nameSplitInputsValid = !needsNameSplitConfirm || (confirmSei.trim() !== "" && confirmMei.trim() !== "");
+
+  /** 姓名（必要時）を確認記録と一緒にサーバーへ送る */
+  const postConfirmProfile = async () => {
+    const body: Record<string, string> = {};
+    if (needsNameSplitConfirm) {
+      body.lastName = confirmSei.trim();
+      body.firstName = confirmMei.trim();
+    }
+    const res = await fetch("/api/member/confirm-profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(body),
+    });
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "確認の記録に失敗しました");
+  };
+
+  /** 月次確認モーダル: 「この内容で間違いない」→ 当月確認（＋必要なら姓名）を記録 */
   const handleConfirmProfileNoChange = async () => {
+    if (!nameSplitInputsValid) return;
     setProfileConfirmBusy(true);
     try {
-      const res = await fetch("/api/member/confirm-profile", { method: "POST", credentials: "include" });
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "確認の記録に失敗しました");
+      await postConfirmProfile();
       await refresh();
       setMemberDataToast({ message: "登録情報の確認ありがとうございました！", isError: false });
     } catch (e) {
@@ -10900,8 +10970,16 @@ export default function DashboardPage() {
     }
   };
 
-  /** 月次確認モーダル: 「変更する」→ モーダルを閉じて振込先フォームへスクロール（保存で当月確認扱いになる） */
+  /** 月次確認モーダル: 「変更する」→ 姓名（必要時）だけ先に記録してから振込先フォームへスクロール */
   const handleConfirmProfileEdit = () => {
+    if (!nameSplitInputsValid) return;
+    if (needsNameSplitConfirm) {
+      void postConfirmProfile()
+        .then(() => refresh())
+        .catch(() => {
+          /* 姓名の記録失敗は次回モーダルで再収集される */
+        });
+    }
     setProfileConfirmDismissed(true);
     setTab("home");
     window.setTimeout(() => {
@@ -10931,6 +11009,7 @@ export default function DashboardPage() {
     currentMember != null &&
     !profileConfirmDismissed &&
     (memberMissingProfileItems.length > 0 ||
+      needsNameSplitConfirm ||
       (currentMember.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7));
 
   if (!mounted) {
@@ -11164,6 +11243,32 @@ export default function DashboardPage() {
                 月に一度、お支払いに使う登録情報の確認をお願いしています。以下の内容に変更がないかご確認ください。
               </p>
             )}
+            {needsNameSplitConfirm && (
+              <div className="mb-4 rounded-lg border border-slate-200 bg-white p-3">
+                <p className="mb-2 text-xs font-medium text-slate-700">
+                  お名前の「姓」と「名」を確認させてください（経理システムの表記統一のためです）
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={confirmSei}
+                    onChange={(e) => setConfirmSei(e.target.value)}
+                    placeholder="姓（例: 山田）"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                  />
+                  <input
+                    type="text"
+                    value={confirmMei}
+                    onChange={(e) => setConfirmMei(e.target.value)}
+                    placeholder="名（例: 太郎）"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                  />
+                </div>
+                {!nameSplitInputsValid && (
+                  <p className="mt-1 text-[11px] text-red-600">姓と名の両方を入力してください</p>
+                )}
+              </div>
+            )}
             <dl className="mb-5 space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-4 text-sm">
               {[
                 ["住所", `〒${currentMember.postalCode ?? "未登録"} ${currentMember.address ?? ""}${currentMember.address2 ? ` ${currentMember.address2}` : ""}`],
@@ -11186,7 +11291,8 @@ export default function DashboardPage() {
                   <button
                     type="button"
                     onClick={handleConfirmProfileEdit}
-                    className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600"
+                    disabled={!nameSplitInputsValid}
+                    className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     今すぐ入力する
                   </button>
@@ -11199,7 +11305,7 @@ export default function DashboardPage() {
                   <button
                     type="button"
                     onClick={() => void handleConfirmProfileNoChange()}
-                    disabled={profileConfirmBusy}
+                    disabled={profileConfirmBusy || !nameSplitInputsValid}
                     className="w-full rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {profileConfirmBusy ? "記録中…" : "この内容で間違いありません"}
@@ -11207,7 +11313,7 @@ export default function DashboardPage() {
                   <button
                     type="button"
                     onClick={handleConfirmProfileEdit}
-                    disabled={profileConfirmBusy}
+                    disabled={profileConfirmBusy || !nameSplitInputsValid}
                     className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                   >
                     変更がある（入力画面へ）

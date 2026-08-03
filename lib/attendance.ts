@@ -8,6 +8,10 @@ import {
 export interface Member {
   id: string;
   name: string;
+  /** 姓（表示名は「姓 名」半角スペース区切り。未分離の既存メンバーは undefined→本人確認で収集） */
+  lastName?: string;
+  /** 名 */
+  firstName?: string;
   /** フリガナ */
   furigana?: string;
   /** ログイン用アカウント名 */
@@ -1327,11 +1331,32 @@ export function getMondayOfCalendarWeekForYmd(ymd: string): string {
 }
 
 /**
- * メンバー表示名の正規化: 空白（半角・全角・タブ等）をすべて除去してスペースなし表記に統一する。
- * Google フォーム由来の「加藤　みゆき」「七瀬 元愛」等の表記ゆれを吸収する（全書き込み経路で適用）。
+ * 名前の照合用正規化: 空白（半角・全角）をすべて除去。
+ * freee 取引先との同一人物判定など「表記ゆれを無視した比較」にのみ使う（保存用ではない）。
  */
 export function normalizeMemberName(raw: string): string {
   return raw.replace(/[\s　]+/g, "");
+}
+
+/**
+ * 表示名の保存用正規化: 前後の空白を除去し、連続する空白（全角含む）を半角スペース1つに統一する。
+ * 税理士要望により表示名は「姓 名」（半角スペース区切り）を正とする（スペースなし入力はそのまま）。
+ */
+export function collapseMemberNameSpaces(raw: string): string {
+  return raw.trim().replace(/[\s　]+/g, " ");
+}
+
+/** 姓・名から表示名（「姓 名」半角スペース区切り）を組み立てる。名が空なら姓のみ */
+export function buildMemberDisplayName(lastName: string, firstName: string): string {
+  return collapseMemberNameSpaces(`${lastName} ${firstName}`);
+}
+
+/** 表示名から姓・名を推定分割（空白があれば最初の区切りで分割。なければ null＝本人確認で収集） */
+export function splitMemberName(name: string): { lastName: string; firstName: string } | null {
+  const t = collapseMemberNameSpaces(name);
+  const i = t.indexOf(" ");
+  if (i <= 0) return null;
+  return { lastName: t.slice(0, i), firstName: t.slice(i + 1) };
 }
 
 /** 会社休業日（お盆・年末年始など）。管理者が期間で登録し、期間内の日はシフト提出不可（稼働予定なし固定） */
