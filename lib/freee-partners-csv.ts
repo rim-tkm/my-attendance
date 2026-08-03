@@ -79,6 +79,21 @@ export function branchNameForFreee(branchName: string): string {
   return /(支店|営業部|出張所|本店|支所)$/.test(t) ? t : `${t}支店`;
 }
 
+/**
+ * 振込用の口座番号に正規化する（freee は7桁まで・半角数字のみ）。
+ * - 全角数字は半角化し、数字以外（スペース・ハイフン等）は区切りとして扱い、最後の数字列を採用
+ *   （ゆうちょで「記号 番号」を続けて入力しているケースは番号側を取る）
+ * - ゆうちょ銀行の通帳の「番号」8桁（末尾は必ず1）は、公式ルールどおり末尾の1を除いた振込用7桁に変換
+ */
+export function accountNumberForTransfer(accountNumberRaw: string, bankName: string, bankCode: string): string {
+  const digitRuns = accountNumberRaw.normalize("NFKC").match(/\d+/g) ?? [];
+  if (digitRuns.length === 0) return "";
+  let num = digitRuns[digitRuns.length - 1];
+  const isYucho = bankCode.trim() === "9900" || bankName.includes("ゆうちょ");
+  if (isYucho && num.length === 8 && num.endsWith("1")) num = num.slice(0, 7);
+  return num;
+}
+
 /** コード文字列の先頭ゼロを除去（freee テンプレートは 0036 → 36 表記） */
 function stripLeadingZeros(code: string): string {
   const t = code.trim();
@@ -120,7 +135,7 @@ export function buildFreeePartnersCsv(members: Member[]): string {
       branchMaster ? toHalfWidthKana(branchMaster.kana) : "",
       stripLeadingZeros(branchCode),
       (m.accountType ?? "普通").trim() || "普通",
-      (m.accountNumber ?? "").trim(),
+      accountNumberForTransfer(m.accountNumber ?? "", (m.bankName ?? "").trim(), bankCode),
       m.name,
       (m.accountHolder ?? "").trim() || (m.furigana ?? "").trim(),
       "末日",

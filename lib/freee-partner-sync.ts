@@ -1,6 +1,11 @@
 import type { Member } from "@/lib/attendance";
 import { bankByCode, branchByCode } from "@/lib/bank-master";
-import { branchNameForFreee, splitJpAddress, toHalfWidthKana } from "@/lib/freee-partners-csv";
+import {
+  accountNumberForTransfer,
+  branchNameForFreee,
+  splitJpAddress,
+  toHalfWidthKana,
+} from "@/lib/freee-partners-csv";
 
 /**
  * freee 取引先（partner）API の作成・更新ペイロードをメンバーから組み立てる（サーバー専用）。
@@ -66,7 +71,7 @@ export function buildFreeePartnerPayload(member: Member, companyId: number): Fre
       branch_kana: branchMaster ? toHalfWidthKana(branchMaster.kana) : "",
       branch_code: branchCode,
       account_type: accountType,
-      account_number: (member.accountNumber ?? "").trim(),
+      account_number: accountNumberForTransfer(member.accountNumber ?? "", (member.bankName ?? "").trim(), bankCode),
       long_account_name: member.name,
       account_name: toHalfWidthKana(accountHolderKana),
     };
