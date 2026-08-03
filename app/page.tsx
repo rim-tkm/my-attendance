@@ -2431,14 +2431,21 @@ function AdminDashboard(props: {
     [activeMembers, allKpiRecords, dashboardDate]
   );
 
-  // 振込先情報が未登録のメンバー（銀行名・支店名・口座番号・口座名義の主要4項目を trim して判定し、4つ揃っていれば入力済みとする）
+  // 請求に必要な情報が未登録のメンバー（カードの文言どおり、振込先4項目＋請求管理番号＋電話番号で判定。管理者アカウントは除く）
   const trimVal = (v: string | number | null | undefined) => (v == null ? "" : String(v).trim());
-  const hasKeyBankInfo = (m: Member) =>
-    trimVal(m.bankName) !== "" &&
-    trimVal(m.branchName) !== "" &&
-    trimVal(m.accountNumber) !== "" &&
-    trimVal(m.accountHolder) !== "";
-  const membersWithMissingBankInfo = activeMembers.filter((m) => !hasKeyBankInfo(m));
+  const membersWithMissingBankInfo = activeMembers
+    .filter((m) => (m.loginAccount ?? "").trim().toLowerCase() !== "admin")
+    .map((m) => {
+      const missing: string[] = [];
+      if (trimVal(m.bankName) === "") missing.push("銀行名");
+      if (trimVal(m.branchName) === "") missing.push("支店名");
+      if (trimVal(m.accountNumber) === "") missing.push("口座番号");
+      if (trimVal(m.accountHolder) === "") missing.push("口座名義");
+      if (isMemberMissingInvoiceNumber(m)) missing.push("請求管理番号");
+      if (trimVal(m.phoneNumber) === "") missing.push("電話番号");
+      return { member: m, missing };
+    })
+    .filter((x) => x.missing.length > 0);
   const membersWithMissingInvoiceNumber = getActiveMembersMissingInvoiceNumber(members);
 
   /** ダッシュボード用：過去7日の予実乖離アーカイブ相当のうち、まだ予実確定していない件数（詳細画面の件数と一致） */
@@ -4203,13 +4210,13 @@ function AdminDashboard(props: {
               <h2 className="mb-2 text-sm font-semibold text-red-800">【重要】振込先情報が未登録のメンバーがいます</h2>
               <p className="mb-3 text-xs text-red-700">以下のメンバーは、振込先・請求管理番号・電話番号のいずれかが未登録です。請求書発行前に「今すぐ編集」から入力してください。</p>
               <p className="mb-4 text-sm text-slate-800">
-                {membersWithMissingBankInfo.map((m) => m.name).join("、")}
+                {membersWithMissingBankInfo.map((x) => `${x.member.name}（${x.missing.join("・")}）`).join("、")}
               </p>
               <button
                 type="button"
                 onClick={() => {
                   setAdminSection("settings");
-                  if (membersWithMissingBankInfo.length > 0) openDetail(membersWithMissingBankInfo[0]);
+                  if (membersWithMissingBankInfo.length > 0) openDetail(membersWithMissingBankInfo[0].member);
                 }}
                 className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
               >
