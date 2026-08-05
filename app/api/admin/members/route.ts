@@ -40,8 +40,12 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  // パスワード（ハッシュ）はクライアントに返さない
-  const members = ((data as DbUser[]) ?? []).map(toMember).map((m) => ({ ...m, password: "" }));
+  // パスワード（ハッシュ）はクライアントに返さない。「設定済みか」だけフラグで返す
+  const members = ((data as DbUser[]) ?? []).map((r) => ({
+    ...toMember(r),
+    password: "",
+    hasPassword: String(r.password ?? "").trim() !== "",
+  }));
   return NextResponse.json({ ok: true, count: members.length, members });
 }
 

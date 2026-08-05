@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { useCallback, useEffect, useState } from "react";
 import type { Member } from "@/lib/attendance";
-import { loadMembers, updateMember } from "@/lib/supabase-data";
+
 
 function isAdminSession(session: { user?: { loginId?: string } } | null): boolean {
   return (session?.user?.loginId ?? "").toLowerCase() === "admin";
@@ -15,10 +15,18 @@ export default function ArchivedMembersPage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // users への anon 直読み・直書きを廃止し、サーバAPI経由に統一（RLS移行フェーズ1）
   const refresh = useCallback(async () => {
-    const mems = await loadMembers();
-    setMembers(mems ?? []);
-    setLoadError(mems === null ? "メンバー一覧を読み込めませんでした。" : null);
+    try {
+      const res = await fetch("/api/admin/members", { credentials: "include" });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; members?: Member[] } | null;
+      if (!res.ok || !data?.ok || !Array.isArray(data.members)) throw new Error();
+      setMembers(data.members);
+      setLoadError(null);
+    } catch {
+      setMembers([]);
+      setLoadError("メンバー一覧を読み込めませんでした。");
+    }
   }, []);
 
   useEffect(() => {
@@ -87,7 +95,14 @@ export default function ArchivedMembersPage() {
                   type="button"
                   onClick={async () => {
                     try {
-                      await updateMember(mem.id, { isActive: true });
+                      const res = await fetch("/api/admin/member-update", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        credentials: "include",
+                        body: JSON.stringify({ memberId: mem.id, updates: { isActive: true } }),
+                      });
+                      const data = (await res.json().catch(() => ({}))) as { error?: string };
+                      if (!res.ok) throw new Error(data.error || "更新に失敗しました");
                       await refresh();
                     } catch (e) {
                       alert(e instanceof Error ? e.message : String(e));

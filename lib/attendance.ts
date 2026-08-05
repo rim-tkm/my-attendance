@@ -18,6 +18,8 @@ export interface Member {
   loginAccount?: string;
   /** パスワード（localStorage に平文保存・テスト用） */
   password?: string;
+  /** パスワード設定済みか（サーバAPIがハッシュ本体の代わりに返すフラグ。表示専用） */
+  hasPassword?: boolean;
   /** 委託料単価（円/時間）。未設定時は DEFAULT_HOURLY_RATE */
   hourlyRate?: number;
   /** 郵便番号 */

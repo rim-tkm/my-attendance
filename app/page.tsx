@@ -7974,7 +7974,7 @@ function AdminDashboard(props: {
               </thead>
               <tbody>
                 {sortedRowsForAdminMemberSettingsTable.map(({ mem, monthMin, pay, invDisplay }) => {
-                  const hasPassword = typeof mem.password === "string" && mem.password.length > 0;
+                  const hasPassword = mem.hasPassword === true;
                   const nameLine = invDisplay ? `${invDisplay} ${mem.name}` : mem.name;
                   const adminRow = isAdminAccountMember(mem);
                   const morningAllowed = mem.canWorkMorning === true;
