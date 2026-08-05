@@ -10477,6 +10477,15 @@ export default function DashboardPage() {
         }
         return;
       }
+      // 未確認の必読お知らせがある間は稼働開始不可。モーダルを再表示する
+      if (me && !meIsAdminAccount && memberAnnouncements.blocking.length > 0) {
+        setPunchSubmitPhase("idle");
+        if (typeof window !== "undefined") {
+          window.alert("稼働開始の前に、お知らせの確認をお願いします。");
+        }
+        setAnnouncementGateDismissed(false);
+        return;
+      }
       if (me && !meIsAdminAccount && (me.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7)) {
         setPunchSubmitPhase("idle");
         if (typeof window !== "undefined") {
@@ -10866,6 +10875,12 @@ export default function DashboardPage() {
       // 打刻押し忘れロック中はシフト提出も不可
       if (me && !isAdminAccount && isPunchMissLocked(me, memberPunchMissCount, getTodayJstDateString().slice(0, 7))) {
         alert("稼働開始・稼働終了の押し忘れが今月3回に達したため、アカウントがロックされています。規約に同意し、公式LINEへ報告のうえ管理者の解除をお待ちください。");
+        return false;
+      }
+      // 未確認の必読お知らせがある間はシフト提出も不可
+      if (me && !isAdminAccount && memberAnnouncements.blocking.length > 0) {
+        alert("シフト提出の前に、お知らせの確認をお願いします。");
+        setAnnouncementGateDismissed(false);
         return false;
       }
     }
