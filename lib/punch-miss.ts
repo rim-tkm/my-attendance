@@ -52,7 +52,7 @@ export function isPunchMissLocked(member: Member, monthCount: number, month: str
 /** ロック画面に表示する規約文面 */
 export const PUNCH_MISS_TERMS_TEXT = `【稼働記録に関する規約】
 
-1. 「稼働開始」「稼働終了」ボタンの操作は、稼働の事実を証明する唯一の記録であり、本人が必ず行うものとします。
+1. 「稼働開始」「稼働終了」ボタンの操作は、稼働の事実を証明する記録であり、本人が必ず行うものとします。
 
 2. 稼働開始・稼働終了の押し忘れ（いずれか一方でも）が1ヶ月に${PUNCH_MISS_LOCK_THRESHOLD}回に達した場合、アカウントはロックされ、本規約に同意のうえ公式LINEへ報告し、管理者がロックを解除するまで稼働（稼働開始・シフト提出）はできません。
 

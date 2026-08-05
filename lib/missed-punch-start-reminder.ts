@@ -9,11 +9,6 @@ import {
 } from "@/lib/attendance";
 import { getUsersDb, loadMembers, loadOpenRecordsOrThrow, loadRecordsOrThrow, loadShiftsOrThrow } from "@/lib/supabase-data";
 import { getSupabase } from "@/lib/supabase";
-import {
-  postSlackIncomingWebhook,
-  resolveSlackWebhookUrl,
-  slackWebhookMissingMessage,
-} from "@/lib/slack-webhook";
 
 function readGraceMinutes(): number {
   const v = process.env.MISSED_PUNCH_START_GRACE_MINUTES?.trim();
@@ -81,21 +76,6 @@ function openOverlapsSlotForEndAlert(open: OpenRecord, dateYmd: string, startMs:
   return openStart < endMs;
 }
 
-function buildSlotAlertText(params: {
-  memberName: string;
-  plannedStart: string;
-  plannedEnd: string;
-  situation: "開始忘れ" | "終了報告忘れ";
-}): string {
-  const { memberName, plannedStart, plannedEnd, situation } = params;
-  return `🚨 【未打刻アラート：15分経過】
-
-👤 ${memberName} さん
-・予定時間：${plannedStart} 〜 ${plannedEnd}
-・現在の状況：${situation}
-
-💡 状況を確認し、打刻を忘れている場合は速やかに操作するよう促してください。`;
-}
 
 type RowSent = { user_id: string; slot_kind: string };
 
@@ -288,8 +268,7 @@ function collectMissedPunchEndCandidates(
 async function sendStartAlertsAndPersist(
   supabase: NonNullable<ReturnType<typeof getSupabase>>,
   dateYmd: string,
-  candidates: StartCand[],
-  webhookUrl: string
+  candidates: StartCand[]
 ): Promise<{ ok: true; count: number } | { ok: false; error: string; detail?: string }> {
   let count = 0;
   for (const c of candidates) {
@@ -307,21 +286,6 @@ async function sendStartAlertsAndPersist(
       console.error("[missed-punch] reserve punch_start_reminder_sent failed:", reserveErr);
       return { ok: false, error: "DB write failed", detail: reserveErr.message };
     }
-    const text = buildSlotAlertText({
-      memberName: c.memberName,
-      plannedStart: c.plannedStart,
-      plannedEnd: c.plannedEnd,
-      situation: "開始忘れ",
-    });
-    const posted = await postSlackIncomingWebhook(webhookUrl, { text });
-    if (!posted.ok) {
-      // 送信失敗 → 予約を取り消し、次回再送できるようにする（未送達を握り潰さない）
-      await supabase
-        .from("punch_start_reminder_sent")
-        .delete()
-        .match({ user_id: c.userId, work_date: dateYmd, slot_kind: c.slotKind });
-      return { ok: false, error: posted.error, detail: posted.detail };
-    }
     count += 1;
   }
   return { ok: true, count };
@@ -330,8 +294,7 @@ async function sendStartAlertsAndPersist(
 async function sendEndAlertsAndPersist(
   supabase: NonNullable<ReturnType<typeof getSupabase>>,
   dateYmd: string,
-  candidates: EndCand[],
-  webhookUrl: string
+  candidates: EndCand[]
 ): Promise<{ ok: true; count: number } | { ok: false; error: string; detail?: string }> {
   let count = 0;
   for (const c of candidates) {
@@ -346,20 +309,6 @@ async function sendEndAlertsAndPersist(
       if (/duplicate key|unique|23505/i.test(reserveErr.message ?? "")) continue;
       console.error("[missed-punch] reserve punch_end_reminder_sent failed:", reserveErr);
       return { ok: false, error: "DB write failed", detail: reserveErr.message };
-    }
-    const text = buildSlotAlertText({
-      memberName: c.memberName,
-      plannedStart: c.plannedStart,
-      plannedEnd: c.plannedEnd,
-      situation: "終了報告忘れ",
-    });
-    const posted = await postSlackIncomingWebhook(webhookUrl, { text });
-    if (!posted.ok) {
-      await supabase
-        .from("punch_end_reminder_sent")
-        .delete()
-        .match({ user_id: c.userId, work_date: dateYmd, slot_kind: c.slotKind });
-      return { ok: false, error: posted.error, detail: posted.detail };
     }
     count += 1;
   }
@@ -451,28 +400,14 @@ export async function runMissedPunchSlotReminders(options?: {
     endSentSet
   );
 
-  const webhookUrl = resolveSlackWebhookUrl("missed_punch_start");
   const emptyStart: MissedPunchSliceResult = { sent: false, count: 0, skipReason: "no_candidates" };
   const emptyEnd: MissedPunchSliceResult = { sent: false, count: 0, skipReason: "no_candidates" };
 
   let startSlice: MissedPunchSliceResult = emptyStart;
   let endSlice: MissedPunchSliceResult = emptyEnd;
 
-  if (!webhookUrl) {
-    console.warn(
-      "[missed-punch] Webhook が未設定のため送信しません（" + slackWebhookMissingMessage("missed_punch_start") + ")"
-    );
-    if (startCandidates.length > 0) {
-      startSlice = { sent: false, count: startCandidates.length, skipReason: "no_webhook" };
-    }
-    if (endCandidates.length > 0) {
-      endSlice = { sent: false, count: endCandidates.length, skipReason: "no_webhook" };
-    }
-    return { ok: true, dateYmd, start: startSlice, end: endSlice };
-  }
-
   if (startCandidates.length > 0) {
-    const r = await sendStartAlertsAndPersist(supabase, dateYmd, startCandidates, webhookUrl);
+    const r = await sendStartAlertsAndPersist(supabase, dateYmd, startCandidates);
     if (!r.ok) {
       startSlice = {
         sent: false,
@@ -487,7 +422,7 @@ export async function runMissedPunchSlotReminders(options?: {
   }
 
   if (endCandidates.length > 0) {
-    const r = await sendEndAlertsAndPersist(supabase, dateYmd, endCandidates, webhookUrl);
+    const r = await sendEndAlertsAndPersist(supabase, dateYmd, endCandidates);
     if (!r.ok) {
       endSlice = {
         sent: false,
