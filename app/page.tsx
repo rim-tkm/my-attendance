@@ -11170,8 +11170,12 @@ export default function DashboardPage() {
     if (!showMonthlyProfileConfirm || !currentMember) return;
     const digitsOf = (s: string) => s.normalize("NFKC").replace(/\D/g, "");
     const w: Record<string, string> = {};
+    // 海外在住メンバー（英字主体の住所）は日本の郵便番号形式に当てはまらないため7桁チェックをしない
+    const looksOverseasAddress = /[a-zA-Z]{3,}/.test(currentMember.address ?? "");
     const zip = (currentMember.postalCode ?? "").trim();
-    if (zip !== "" && digitsOf(zip).length !== 7) w.address = "郵便番号は7桁です（例: 123-4567）。表記をご確認ください";
+    if (!looksOverseasAddress && zip !== "" && digitsOf(zip).length !== 7) {
+      w.address = "郵便番号は7桁です（例: 123-4567）。表記をご確認ください";
+    }
     const phone = (currentMember.phoneNumber ?? "").trim();
     const phoneDigits = digitsOf(phone);
     if (phone !== "" && (phoneDigits.length < 10 || phoneDigits.length > 11)) {
@@ -11192,6 +11196,11 @@ export default function DashboardPage() {
     const invReg = (currentMember.invoiceRegistrationNumber ?? "").trim();
     if (invReg !== "" && !/^T[1-9][0-9]{12}$/.test(invReg.normalize("NFKC").replace(/[\s　-]/g, ""))) {
       w.invoice = "インボイス登録番号は「T＋13桁の数字」の形式です。ご確認ください";
+    }
+    // 口座名義は銀行登録のカナ名義が正（漢字だと振込データの受取人カナに使えない）
+    const holder = (currentMember.accountHolder ?? "").trim();
+    if (holder !== "" && /[一-龠ぁ-ん]/.test(holder)) {
+      w.holder = "口座名義は通帳・アプリに記載のカタカナ名義で入力してください（例: ヤマダ タロウ）";
     }
     setProfileWarnings(w);
     const bankName = (currentMember.bankName ?? "").trim();
