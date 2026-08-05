@@ -182,6 +182,7 @@ import {
   buildCompanyHolidaySuggestions,
   type CompanyHolidaySuggestion,
 } from "@/lib/company-holiday-suggestions";
+import { buildFreeeDealsCsvRows } from "@/lib/freee-deals-csv";
 import { persistOpenRecordClientBackup, readOpenRecordClientBackup } from "@/lib/open-record-client-backup";
 import { withNetworkRetry } from "@/lib/network-retry";
 import { parseStartInstantJstOnWorkDate } from "@/lib/punch-jst-time";
@@ -1607,6 +1608,39 @@ function AdminDashboard(props: {
 
   /** freee 取引先 CSV ダウンロードの処理状態 */
   const [freeeCsvBusy, setFreeeCsvBusy] = useState(false);
+
+  /** freee 外注費CSV（取引インポート形式・税理士指定）: 対象月（既定は前月） */
+  const [freeeDealsMonth, setFreeeDealsMonth] = useState(() => {
+    const [y, m] = getTodayJstDateString().slice(0, 7).split("-").map(Number);
+    const prev = new Date(y, m - 2, 1);
+    return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
+  });
+
+  const handleDownloadFreeeDealsCsv = () => {
+    if (!/^\d{4}-\d{2}$/.test(freeeDealsMonth)) {
+      alert("対象月を選択してください");
+      return;
+    }
+    const rows = buildFreeeDealsCsvRows({
+      members,
+      records: allRecords,
+      kpiRecords: allKpiRecords,
+      yearMonth: freeeDealsMonth,
+      defaultHourlyRate: DEFAULT_HOURLY_RATE,
+    });
+    if (rows.length <= 1) {
+      alert(`${freeeDealsMonth} に支払いが発生するメンバーがいません。`);
+      return;
+    }
+    const csv = buildBomUtf8CsvContent(rows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `freee外注費_${freeeDealsMonth}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const handleDownloadFreeePartnersCsv = async () => {
     setFreeeCsvBusy(true);
@@ -7609,6 +7643,33 @@ function AdminDashboard(props: {
               freee取引先CSVは「取引先マスタインポートフォーマット」形式（有効メンバー・管理者除く）。freeeの
               [設定] → [取引先] → [インポート] からそのまま取り込めます。支払条件は全員共通（末日締め・翌月15日払い・当方負担・支払元 GMOあおぞらネット銀行）で出力します。
             </p>
+            <div className="mt-2 flex flex-col gap-2 border-t border-slate-200 pt-3">
+              <span className="text-xs font-medium text-slate-600">
+                freee外注費CSV（取引インポート形式・税理士指定フォーマット）
+              </span>
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="flex min-w-0 flex-col gap-1">
+                  <span className="text-xs font-medium text-slate-600">対象月</span>
+                  <input
+                    type="month"
+                    value={freeeDealsMonth}
+                    onChange={(e) => setFreeeDealsMonth(e.target.value)}
+                    className="rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={handleDownloadFreeeDealsCsv}
+                  className="rounded bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
+                >
+                  freee外注費CSVをダウンロード
+                </button>
+              </div>
+              <p className="text-xs text-slate-500">
+                対象月に支払いが発生するメンバーを1人1行で出力（発生日=月末・決済期日=翌月15日・勘定科目=外注費・金額は請求書と同じ税込計算）。税区分はインボイス登録の有無で
+                「課対仕入10%」／「課対仕入（控80）10%」を自動判定します。freeeの取引インポートから取り込んでください。
+              </p>
+            </div>
             {bankBackfillResult != null && (
               <div
                 className={`min-w-0 max-w-xl whitespace-pre-wrap text-sm font-medium ${
