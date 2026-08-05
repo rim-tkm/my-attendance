@@ -158,10 +158,19 @@ export async function POST(req: Request) {
     }
   }
 
+  const todayJst = getTodayJstDateString();
+
+  // 過去日の行は本人の保存では書き換え不可。予実乖離チェックや請求根拠になる
+  // 提出済みシフトを後から改ざんできてしまうため、保存対象から除外する
+  // （saveShiftsForUser は日付単位のマージ保存なので、除外した過去日は DB の値が残る）。
+  // 管理者の代理保存は例外対応の裁量を残すため従来どおり（監査指摘 2026-08-05）。
+  if (!isAdminSession(session)) {
+    normalized = normalized.filter((s) => s.date >= todayJst);
+  }
+
   // ルール検証は今日以降の行だけを対象にする。クライアントは全履歴を送ってくるため、
   // 過去に許可されていた条件（朝稼働許可など）で保存済みの古い行まで検証すると、
   // 設定を戻した瞬間に本人のシフト保存が全ロックされる（監査指摘 2026-08-05）。
-  const todayJst = getTodayJstDateString();
   const rowsToValidate = normalized.filter((s) => s.date >= todayJst);
 
   const windowRuleErr = validateShiftsPlannedOperatingWindow(rowsToValidate);
