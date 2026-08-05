@@ -174,6 +174,7 @@ import {
 } from "@/lib/supabase-data";
 import { shiftHasPlannedWorkHours } from "@/lib/shift-planned-work";
 import { AnnouncementGateModal } from "@/app/components/AnnouncementGateModal";
+import { AnnouncementsTab } from "@/app/components/AnnouncementsTab";
 import { useMemberAnnouncements } from "@/app/components/useMemberAnnouncements";
 import {
   buildPunchMissLineMessage,
@@ -761,7 +762,7 @@ function printMemberInvoice(
   }
 }
 
-type Tab = "home" | "shift" | "kpi";
+type Tab = "home" | "shift" | "kpi" | "announcements";
 type AdminSection =
   | "dashboard"
   | "attendance"
@@ -11908,6 +11909,17 @@ export default function DashboardPage() {
             >
               KPI入力
             </button>
+            <button
+              type="button"
+              disabled={punchFlowBusy}
+              onClick={() => !punchFlowBusy && setTab("announcements")}
+              className={`relative flex-1 px-3 py-3 text-sm font-medium transition sm:px-4 disabled:cursor-not-allowed disabled:opacity-40 ${tab === "announcements" ? "border-b-2 border-slate-700 text-slate-800" : "text-slate-500 hover:text-slate-700"}`}
+            >
+              お知らせ
+              {memberAnnouncements.unreadForModal.length > 0 && (
+                <span className="absolute right-1 top-2 h-2 w-2 rounded-full bg-red-600" aria-label="未確認あり" />
+              )}
+            </button>
           </div>
         </div>
       )}
@@ -12383,8 +12395,17 @@ export default function DashboardPage() {
             restrictMorningStart={!isAdminUser && currentMember?.canWorkMorning !== true}
             companyHolidays={companyHolidays}
           />
-        ) : (
+        ) : tab === "kpi" ? (
           <KpiTab userId={currentUserId} kpiRecords={kpiRecords} currentYearMonth={currentYearMonth} isIntern={currentMember?.isIntern === true} onSave={handleSaveKpi} />
+        ) : (
+          <AnnouncementsTab
+            announcements={memberAnnouncements.announcements}
+            busy={memberAnnouncements.busy}
+            error={memberAnnouncements.error}
+            onConfirm={(a) => {
+              void memberAnnouncements.confirm(a);
+            }}
+          />
         )}
       </main>
 
