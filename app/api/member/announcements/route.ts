@@ -13,6 +13,7 @@ import { getSupabaseAdmin } from "@/lib/supabase-admin";
  * ログイン中メンバーが対象のお知らせ一覧（公開中・終了の両方）を新しい順で返す。
  * readAt は「現在の版に対する本人の確認日時」。未確認は null。
  * announcements テーブルは RLS でポリシーを持たないため service_role でのみ読める。
+ * 取得失敗時は 500 を返す。呼び出し側は fail-open とし、稼働をブロックしないこと（設計書のエラー処理方針）。
  */
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -26,33 +27,35 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: "SUPABASE_SERVICE_ROLE_KEY が未設定です" }, { status: 500 });
   }
 
-  const { data: meRow, error: meErr } = await supabase
-    .from("users")
-    .select("is_intern, is_active, login_account")
-    .eq("id", userId)
-    .maybeSingle();
+  const [
+    { data: meRow, error: meErr },
+    { data: rows, error: listErr },
+    { data: readRows, error: readErr },
+  ] = await Promise.all([
+    supabase.from("users").select("is_intern, is_active, login_account").eq("id", userId).maybeSingle(),
+    supabase
+      .from("announcements")
+      .select("id, title, body, target, is_required, is_published, version, created_at, updated_at")
+      .order("created_at", { ascending: false }),
+    supabase.from("announcement_reads").select("announcement_id, version, read_at").eq("user_id", userId),
+  ]);
   if (meErr) {
     return NextResponse.json({ ok: false, error: meErr.message }, { status: 500 });
   }
   if (!meRow) {
     return NextResponse.json({ ok: false, error: "メンバーが見つかりません" }, { status: 404 });
   }
-  const member = {
-    isIntern: meRow.is_intern === true,
-    isActive: meRow.is_active !== false,
-    loginAccount: (meRow.login_account as string | null) ?? "",
-  };
-
-  const [{ data: rows, error: listErr }, { data: readRows, error: readErr }] = await Promise.all([
-    supabase.from("announcements").select("*").order("created_at", { ascending: false }),
-    supabase.from("announcement_reads").select("announcement_id, version, read_at").eq("user_id", userId),
-  ]);
   if (listErr) {
     return NextResponse.json({ ok: false, error: listErr.message }, { status: 500 });
   }
   if (readErr) {
     return NextResponse.json({ ok: false, error: readErr.message }, { status: 500 });
   }
+  const member = {
+    isIntern: meRow.is_intern === true,
+    isActive: meRow.is_active !== false,
+    loginAccount: (meRow.login_account as string | null) ?? "",
+  };
 
   const readMap = new Map<string, string>();
   for (const r of (readRows ?? []) as { announcement_id: string; version: number; read_at: string }[]) {

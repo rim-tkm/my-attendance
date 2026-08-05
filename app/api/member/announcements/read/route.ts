@@ -70,12 +70,11 @@ export async function POST(req: Request) {
     );
   }
 
-  const { error: insErr } = await supabase.from("announcement_reads").insert({
-    announcement_id: announcementId,
-    user_id: userId,
-    version: currentVersion,
-  });
-  if (insErr && !/duplicate key|unique|23505/i.test(insErr.message ?? "")) {
+  const { error: insErr } = await supabase.from("announcement_reads").upsert(
+    { announcement_id: announcementId, user_id: userId, version: currentVersion },
+    { onConflict: "announcement_id,user_id,version", ignoreDuplicates: true }
+  );
+  if (insErr) {
     return NextResponse.json({ ok: false, error: insErr.message }, { status: 500 });
   }
 

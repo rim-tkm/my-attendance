@@ -38,7 +38,10 @@ export async function GET() {
 
   const [{ data: rows, error: listErr }, { data: userRows, error: userErr }, { data: readRows, error: readErr }] =
     await Promise.all([
-      supabase.from("announcements").select("*").order("created_at", { ascending: false }),
+      supabase
+        .from("announcements")
+        .select("id, title, body, target, is_required, is_published, version, created_at, updated_at")
+        .order("created_at", { ascending: false }),
       supabase.from("users").select("id, name, is_intern, is_active, login_account"),
       supabase.from("announcement_reads").select("announcement_id, user_id, version"),
     ]);
