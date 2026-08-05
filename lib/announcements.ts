@@ -86,14 +86,9 @@ export function selectBlockingAnnouncements(list: Announcement[]): Announcement[
   return selectUnreadForModal(list).filter((a) => a.isRequired);
 }
 
-/**
- * お知らせタブの表示順（新しい順）。元配列は破壊しない。
- * 確認済みのものは確認日時、未確認のものは投稿日時を基準にする
- * （読んだお知らせは「最後に触れた」タイミングまで新着扱いとする）。
- */
+/** お知らせタブの表示順（新しい順）。元配列は破壊しない */
 export function sortAnnouncementsNewestFirst(list: Announcement[]): Announcement[] {
-  const sortKey = (a: Announcement) => a.readAt ?? a.createdAt;
-  return [...list].sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+  return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 /** 宛先の表示名（管理画面の一覧・作成フォーム用） */
