@@ -508,6 +508,12 @@ async function runAutoComplete(
   if (openPast.length === 0) return false;
   const newRecords: WorkRecord[] = [];
   for (const o of openPast) {
+    // 管理者が予実調整で既にその日の実績を確定済み（同じ開始時刻の記録が存在）なら、
+    // 補完レコードを作らず未終了打刻の削除だけ行う（重複行の作成防止）
+    const alreadyResolved = records.some(
+      (r) => r.userId === o.userId && r.date === o.date && r.startRounded === o.startRounded
+    );
+    if (alreadyResolved) continue;
     const shift = shifts.find((s) => s.userId === o.userId && s.date === o.date);
     const startHhmm = getTimeFromIso(o.startRounded);
     let endTime: string;
@@ -523,12 +529,14 @@ async function runAutoComplete(
     const built = buildWorkRecordFromTimes(o.date, startHhmm, endTime, o.userId, o.id, true);
     if (built) newRecords.push(built);
   }
-  if (newRecords.length === 0) return false;
-  const updatedRecords = [...records, ...newRecords].filter((r) => !isWeekendYmdJst(r.date));
+  // 補完レコードが不要（全件が確定済みの残骸）でも、未終了打刻の削除は行う
   const completedIds = new Set(openPast.map((x) => x.id));
   const updatedOpen = openRecs.filter((r) => !completedIds.has(r.id));
   try {
-    await saveRecords(updatedRecords);
+    if (newRecords.length > 0) {
+      const updatedRecords = [...records, ...newRecords].filter((r) => !isWeekendYmdJst(r.date));
+      await saveRecords(updatedRecords);
+    }
     await saveOpenRecords(updatedOpen);
     return true;
   } catch (e) {
@@ -10060,7 +10068,6 @@ export default function DashboardPage() {
     if (!currentUserId || isAdminMode) return;
     const uid = currentUserId;
     const todayJst = getTodayJstDateString();
-    const minDate = addCalendarDays(todayJst, -1);
     try {
       const list = await loadOpenRecords();
       const fromDb = getOpenRecordForUser(list, uid);
@@ -10075,7 +10082,10 @@ export default function DashboardPage() {
       }
       const localBackup = readOpenRecordClientBackup(uid);
       if (!localBackup) return;
-      if (localBackup.date < minDate) {
+      // 当日分のみ復元する。前日以前のバックアップを復元すると、管理者が予実乖離で
+      // 確定・削除済みの未終了打刻が復活し、翌日の開始打刻がブロックされる（実障害あり 2026-08-05）。
+      // 過去日の打刻漏れは自動補完（runAutoComplete）と管理者の予実調整が正で、端末側からは復元しない。
+      if (localBackup.date !== todayJst) {
         persistOpenRecordClientBackup(uid, null);
         return;
       }
