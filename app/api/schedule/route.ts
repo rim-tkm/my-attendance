@@ -158,18 +158,23 @@ export async function POST(req: Request) {
     }
   }
 
-  const windowRuleErr = validateShiftsPlannedOperatingWindow(normalized);
+  // ルール検証は今日以降の行だけを対象にする。クライアントは全履歴を送ってくるため、
+  // 過去に許可されていた条件（朝稼働許可など）で保存済みの古い行まで検証すると、
+  // 設定を戻した瞬間に本人のシフト保存が全ロックされる（監査指摘 2026-08-05）。
+  const todayJst = getTodayJstDateString();
+  const rowsToValidate = normalized.filter((s) => s.date >= todayJst);
+
+  const windowRuleErr = validateShiftsPlannedOperatingWindow(rowsToValidate);
   if (windowRuleErr) {
     return NextResponse.json({ error: windowRuleErr }, { status: 400 });
   }
 
   const canMorning = await loadUserCanWorkMorning(targetUserId);
-  const morningErr = validateShiftsPlannedMorningStartRestriction(normalized, canMorning);
+  const morningErr = validateShiftsPlannedMorningStartRestriction(rowsToValidate, canMorning);
   if (morningErr) {
     return NextResponse.json({ error: morningErr }, { status: 400 });
   }
 
-  const todayJst = getTodayJstDateString();
   const thisMon = getMondayOfCalendarWeekForYmd(todayJst);
   const [subW1, subW2] = getSubmittableShiftWeekMondays(thisMon);
   for (const s of normalized) {
