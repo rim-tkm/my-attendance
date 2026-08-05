@@ -195,7 +195,7 @@ eq("版が上がった直後はブロック対象", selectBlockingAnnouncements(
 eq(
   "タブ: 新しい順",
   sortAnnouncementsNewestFirst(list).map((a) => a.id),
-  ["required-read", "new-required-unread", "optional-unread", "unpublished-unread", "old-required-unread"]
+  ["new-required-unread", "optional-unread", "required-read", "unpublished-unread", "old-required-unread"]
 );
 eq("元配列を破壊しない", list[0].id, "new-required-unread");
 
@@ -245,8 +245,8 @@ export type DbAnnouncement = {
   is_required: boolean | null;
   is_published: boolean | null;
   version: number | null;
-  created_at: string;
-  updated_at: string;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 export function normalizeAnnouncementTarget(raw: string | null | undefined): AnnouncementTarget {
@@ -263,8 +263,8 @@ export function toAnnouncement(r: DbAnnouncement, readAt: string | null): Announ
     isRequired: r.is_required !== false,
     isPublished: r.is_published !== false,
     version: typeof r.version === "number" && Number.isFinite(r.version) ? r.version : 1,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
+    createdAt: r.created_at ?? "",
+    updatedAt: r.updated_at ?? "",
     readAt,
   };
 }
@@ -284,19 +284,20 @@ export function isAnnouncementTargetedAt(
   return member.isIntern !== true;
 }
 
+/** 本人が現在の version をまだ確認していないか */
+export function isAnnouncementUnread(a: Announcement): boolean {
+  return a.readAt == null;
+}
+
 /**
  * ログイン時モーダルに出す未確認のお知らせ（必読・お知らせのみの両方）。
  * 出した順に読ませるため古い順で返す。公開終了したものは出さない。
+ * 作成日時が同値のときも表示順が安定するよう id を第2キーにする。
  */
 export function selectUnreadForModal(list: Announcement[]): Announcement[] {
   return list
-    .filter((a) => a.isPublished && a.readAt == null)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-}
-
-/** 本人が現在の版をまだ確認していないか */
-export function isAnnouncementUnread(a: Announcement): boolean {
-  return a.readAt == null;
+    .filter((a) => a.isPublished && isAnnouncementUnread(a))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 
 /** 稼働（稼働開始・シフト保存）をブロックする未確認の必読お知らせ。古い順 */
@@ -304,9 +305,12 @@ export function selectBlockingAnnouncements(list: Announcement[]): Announcement[
   return selectUnreadForModal(list).filter((a) => a.isRequired);
 }
 
-/** お知らせタブの表示順（新しい順）。元配列は破壊しない */
+/**
+ * お知らせタブの表示順（新しい順）。元配列は破壊しない。
+ * 作成日時が同値のときも表示順が安定するよう id を第2キーにする。
+ */
 export function sortAnnouncementsNewestFirst(list: Announcement[]): Announcement[] {
-  return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return [...list].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
 }
 
 /** 宛先の表示名（管理画面の一覧・作成フォーム用） */
