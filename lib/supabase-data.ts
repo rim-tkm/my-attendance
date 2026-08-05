@@ -93,6 +93,10 @@ export type DbUser = {
   last_name?: string | null;
   first_name?: string | null;
   profile_confirmed_month?: string | null;
+  punch_miss_released_month?: string | null;
+  punch_miss_released_count?: number | null;
+  punch_miss_agreed_month?: string | null;
+  punch_miss_agreed_at?: string | null;
   bank_name?: string | null;
   bank_code?: string | null;
   branch_name?: string | null;
@@ -201,6 +205,14 @@ export function toMember(r: DbUser): Member {
     address2: normStr(r.address2 ?? "") !== "" ? normStr(r.address2 ?? "") : undefined,
     profileConfirmedMonth:
       normStr(r.profile_confirmed_month ?? "") !== "" ? normStr(r.profile_confirmed_month ?? "") : undefined,
+    punchMissReleasedMonth:
+      normStr(r.punch_miss_released_month ?? "") !== "" ? normStr(r.punch_miss_released_month ?? "") : undefined,
+    punchMissReleasedCount:
+      typeof r.punch_miss_released_count === "number" ? r.punch_miss_released_count : undefined,
+    punchMissAgreedMonth:
+      normStr(r.punch_miss_agreed_month ?? "") !== "" ? normStr(r.punch_miss_agreed_month ?? "") : undefined,
+    punchMissAgreedAt:
+      normStr(r.punch_miss_agreed_at ?? "") !== "" ? normStr(r.punch_miss_agreed_at ?? "") : undefined,
     bankName: bank !== "" ? bank : undefined,
     bankCode: normStr(r.bank_code ?? "") !== "" ? normStr(r.bank_code ?? "") : undefined,
     branchName: branch !== "" ? branch : undefined,
@@ -412,6 +424,10 @@ function usersUpsertRowFromMember(m: Member): Record<string, unknown> {
     bank_code: m.bankCode ?? "",
     branch_code: m.branchCode ?? "",
     profile_confirmed_month: m.profileConfirmedMonth ?? null,
+    punch_miss_released_month: m.punchMissReleasedMonth ?? null,
+    punch_miss_released_count: m.punchMissReleasedCount ?? null,
+    punch_miss_agreed_month: m.punchMissAgreedMonth ?? null,
+    punch_miss_agreed_at: m.punchMissAgreedAt ?? null,
     invoice_registration_intent: m.invoiceRegistrationIntent ?? null,
     freee_partner_id: m.freeePartnerId ?? null,
     account_type: m.accountType ?? "普通",
@@ -602,6 +618,8 @@ export type MemberUpdatePayload = Partial<
     | "internRateDecisionMakerApps"
     | "internRateNonDecisionMakerApps"
     | "memberCategory"
+    | "punchMissReleasedMonth"
+    | "punchMissReleasedCount"
   >
 >;
 
@@ -731,6 +749,16 @@ export async function updateMemberOrThrow(
   }
   if (updates.memberCategory !== undefined) {
     body.member_category = normalizeMemberContractorCategory(updates.memberCategory);
+  }
+  // 打刻押し忘れロックの解除（管理者操作。指定時のみ更新）
+  if (updates.punchMissReleasedMonth !== undefined) {
+    body.punch_miss_released_month = (updates.punchMissReleasedMonth ?? "").trim() || null;
+  }
+  if (updates.punchMissReleasedCount !== undefined) {
+    body.punch_miss_released_count =
+      typeof updates.punchMissReleasedCount === "number" && Number.isFinite(updates.punchMissReleasedCount)
+        ? Math.max(0, Math.floor(updates.punchMissReleasedCount))
+        : null;
   }
   if (Object.keys(body).length === 0) return;
   if (updates.invoiceNumber !== undefined) {

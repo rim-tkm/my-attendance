@@ -54,6 +54,14 @@ export interface Member {
   freeePartnerId?: number | null;
   /** 本人が登録情報を確認した月（YYYY-MM）。月が変わると再確認モーダルを表示する */
   profileConfirmedMonth?: string;
+  /** 打刻押し忘れロックの解除が有効な月（YYYY-MM）。lib/punch-miss.ts 参照 */
+  punchMissReleasedMonth?: string;
+  /** 解除時点の押し忘れ回数。これを超える新たな押し忘れで再ロック */
+  punchMissReleasedCount?: number;
+  /** 打刻規約に同意した月（YYYY-MM） */
+  punchMissAgreedMonth?: string;
+  /** 打刻規約の同意日時（エビデンス） */
+  punchMissAgreedAt?: string;
   /** 有効フラグ。false の場合は論理削除（一覧非表示・ログイン不可）。未設定は true 扱い */
   isActive?: boolean;
   /** 初回稼働日（YYYY-MM-DD）。未設定は undefined / null */

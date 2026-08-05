@@ -52,6 +52,12 @@ function coerceMemberUpdates(raw: Record<string, unknown>): MemberUpdatePayload 
   if (typeof raw.memberCategory === "string") {
     out.memberCategory = normalizeMemberContractorCategory(raw.memberCategory);
   }
+  if (typeof raw.punchMissReleasedMonth === "string") {
+    out.punchMissReleasedMonth = raw.punchMissReleasedMonth;
+  }
+  if (typeof raw.punchMissReleasedCount === "number" && Number.isFinite(raw.punchMissReleasedCount)) {
+    out.punchMissReleasedCount = raw.punchMissReleasedCount;
+  }
   return out;
 }
 

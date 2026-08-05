@@ -174,6 +174,13 @@ import {
 } from "@/lib/supabase-data";
 import { shiftHasPlannedWorkHours } from "@/lib/shift-planned-work";
 import {
+  buildPunchMissLineMessage,
+  isPunchMissLocked,
+  loadPunchMissCountsForMonth,
+  PUNCH_MISS_LOCK_THRESHOLD,
+  PUNCH_MISS_TERMS_TEXT,
+} from "@/lib/punch-miss";
+import {
   buildCompanyHolidaySuggestions,
   type CompanyHolidaySuggestion,
 } from "@/lib/company-holiday-suggestions";
@@ -1938,6 +1945,15 @@ function AdminDashboard(props: {
   const [morningBulkSelectedIds, setMorningBulkSelectedIds] = useState<string[]>([]);
   const [morningBulkBusy, setMorningBulkBusy] = useState(false);
   const [morningRowBusyId, setMorningRowBusyId] = useState<string | null>(null);
+  // 打刻押し忘れロック: 当月の押し忘れ回数（ユーザーID→回数）。ロック中メンバーに解除ボタンを出す
+  const [punchMissCounts, setPunchMissCounts] = useState<Map<string, number>>(new Map());
+  const reloadPunchMissCounts = useCallback(async () => {
+    const map = await loadPunchMissCountsForMonth(getTodayJstDateString().slice(0, 7));
+    setPunchMissCounts(map);
+  }, []);
+  useEffect(() => {
+    void reloadPunchMissCounts();
+  }, [reloadPunchMissCounts]);
   const [internRowBusyId, setInternRowBusyId] = useState<string | null>(null);
   const [confirmedSaveBusyKey, setConfirmedSaveBusyKey] = useState<string | null>(null);
   const [invoiceBulkMonth, setInvoiceBulkMonth] = useState(() => getLastMonthString());
@@ -8175,6 +8191,39 @@ function AdminDashboard(props: {
                       <td className="px-2 py-1.5 text-right tabular-nums font-medium text-slate-800 whitespace-nowrap">¥{pay.toLocaleString()}</td>
                       <td className="px-2 py-1.5 text-right align-middle">
                         <div className="flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:justify-end">
+                          {(() => {
+                            const missCount = punchMissCounts.get(mem.id) ?? 0;
+                            const missMonth = getTodayJstDateString().slice(0, 7);
+                            if (adminRow || !isPunchMissLocked(mem, missCount, missMonth)) return null;
+                            return (
+                              <button
+                                type="button"
+                                title={`今月の押し忘れ ${missCount} 回でロック中。公式LINEの報告を確認したら解除してください`}
+                                onClick={async () => {
+                                  if (
+                                    !window.confirm(
+                                      `${mem.name} さんの打刻ロックを解除しますか？\n\n今月の押し忘れ: ${missCount} 回\n規約同意: ${mem.punchMissAgreedMonth === missMonth ? "同意済み" : "未同意"}\n\n公式LINEに報告メッセージが届いていることを確認してから解除してください。`
+                                    )
+                                  )
+                                    return;
+                                  try {
+                                    await adminUpdateMemberViaApi(mem.id, {
+                                      punchMissReleasedMonth: missMonth,
+                                      punchMissReleasedCount: missCount,
+                                    });
+                                    await reloadPunchMissCounts();
+                                    onRefresh();
+                                    alert(`${mem.name} さんのロックを解除しました。`);
+                                  } catch (e) {
+                                    alert(e instanceof Error ? e.message : String(e));
+                                  }
+                                }}
+                                className="rounded border border-red-300 bg-red-50 px-2 py-1 text-[11px] font-medium text-red-800 hover:bg-red-100 shrink-0"
+                              >
+                                🔒解除
+                              </button>
+                            );
+                          })()}
                           <button type="button" onClick={() => openDetail(mem)} className="rounded bg-slate-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-slate-600 shrink-0">編集</button>
                           <button type="button" onClick={() => openReport(mem)} className="rounded bg-slate-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-slate-500 shrink-0">PDF</button>
                         </div>
@@ -10033,6 +10082,19 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // 打刻押し忘れロック（本人側）: 当月の押し忘れ回数と規約同意フローの状態
+  const [memberPunchMissCount, setMemberPunchMissCount] = useState(0);
+  const [punchMissAgreeBusy, setPunchMissAgreeBusy] = useState(false);
+  const [punchMissLineCopied, setPunchMissLineCopied] = useState(false);
+  const reloadMemberPunchMissCount = useCallback(async () => {
+    if (!currentUserId || isAdminMode) return;
+    const map = await loadPunchMissCountsForMonth(getTodayJstDateString().slice(0, 7));
+    setMemberPunchMissCount(map.get(currentUserId) ?? 0);
+  }, [currentUserId, isAdminMode]);
+  useEffect(() => {
+    void reloadMemberPunchMissCount();
+  }, [reloadMemberPunchMissCount]);
+
   const syncOpenRecordFromDbAndLocal = useCallback(async () => {
     if (!currentUserId || isAdminMode) return;
     const uid = currentUserId;
@@ -10349,6 +10411,14 @@ export default function DashboardPage() {
       }
       // 月次の登録情報確認（姓名入力含む）が未完了の間は稼働（開始打刻）不可。確認モーダルを再表示する
       const meIsAdminAccount = ((me?.loginAccount ?? "").toLowerCase() === "admin");
+      // 打刻押し忘れロック中は開始打刻不可（規約同意→公式LINE報告→管理者解除まで）
+      if (me && !meIsAdminAccount && isPunchMissLocked(me, memberPunchMissCount, getTodayJstDateString().slice(0, 7))) {
+        setPunchSubmitPhase("idle");
+        if (typeof window !== "undefined") {
+          window.alert("打刻押し忘れが今月3回に達したため、アカウントがロックされています。画面の案内に従って規約に同意し、公式LINEへ報告のうえ管理者の解除をお待ちください。");
+        }
+        return;
+      }
       if (me && !meIsAdminAccount && (me.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7)) {
         setPunchSubmitPhase("idle");
         if (typeof window !== "undefined") {
@@ -10735,6 +10805,11 @@ export default function DashboardPage() {
         setProfileConfirmDismissed(false);
         return false;
       }
+      // 打刻押し忘れロック中はシフト提出も不可
+      if (me && !isAdminAccount && isPunchMissLocked(me, memberPunchMissCount, getTodayJstDateString().slice(0, 7))) {
+        alert("打刻押し忘れが今月3回に達したため、アカウントがロックされています。規約に同意し、公式LINEへ報告のうえ管理者の解除をお待ちください。");
+        return false;
+      }
     }
     const thisMon = getMondayOfCalendarWeekForYmd(getTodayJstDateString());
     const [subW1, subW2] = getSubmittableShiftWeekMondays(thisMon);
@@ -10936,6 +11011,14 @@ export default function DashboardPage() {
 
   const currentMember = members.find((m) => m.id === currentUserId);
   const isAdminUser = (currentMember?.loginAccount ?? "").toLowerCase() === "admin";
+  // 打刻押し忘れロック: 当月の押し忘れが3回以上（解除後はそれを超える新たな押し忘れ）でロック
+  const punchMissLockMonth = getTodayJstDateString().slice(0, 7);
+  const memberPunchMissLocked =
+    !isAdminMode &&
+    !isAdminUser &&
+    currentMember != null &&
+    isPunchMissLocked(currentMember, memberPunchMissCount, punchMissLockMonth);
+  const memberPunchMissAgreed = (currentMember?.punchMissAgreedMonth ?? "") === punchMissLockMonth;
   const memberInternConfirmedReward =
     currentMember?.isIntern === true && currentUserId
       ? (() => {
@@ -11136,6 +11219,7 @@ export default function DashboardPage() {
     !isAdminMode &&
     !isAdminUser &&
     currentMember != null &&
+    !memberPunchMissLocked &&
     !profileConfirmDismissed &&
     (memberMissingProfileItems.length > 0 ||
       needsNameSplitConfirm ||
@@ -11434,6 +11518,93 @@ export default function DashboardPage() {
                 キャンセル
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {memberPunchMissLocked && currentMember && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/70 p-4 print:hidden">
+          <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl bg-white p-5 shadow-xl sm:p-6">
+            <h2 className="mb-1 text-base font-semibold text-red-700">🔒 アカウントロック中（打刻押し忘れ）</h2>
+            <p className="mb-3 text-xs leading-relaxed text-slate-700">
+              今月の打刻押し忘れが <span className="font-bold text-red-700">{memberPunchMissCount}回</span> に達したため、
+              稼働（打刻・シフト提出）をロックしています。
+            </p>
+            <div className="mb-3 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">
+              {PUNCH_MISS_TERMS_TEXT}
+            </div>
+            {!memberPunchMissAgreed ? (
+              <>
+                <p className="mb-3 text-xs leading-relaxed text-slate-600">
+                  上記の規約に同意いただけない場合、稼働を継続することはできません。
+                  同意すると、公式LINEへ送信する報告メッセージが表示されます。
+                </p>
+                <button
+                  type="button"
+                  disabled={punchMissAgreeBusy}
+                  onClick={async () => {
+                    setPunchMissAgreeBusy(true);
+                    try {
+                      const res = await fetch("/api/member/punch-miss-agree", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        credentials: "include",
+                        body: JSON.stringify({ month: punchMissLockMonth, count: memberPunchMissCount }),
+                      });
+                      const data = (await res.json().catch(() => ({}))) as { error?: string };
+                      if (!res.ok) throw new Error(data.error || "同意の記録に失敗しました");
+                      // ローカルの members 状態にも同意を反映してコピー画面へ進める
+                      setMembers((prev) =>
+                        prev.map((m) =>
+                          m.id === currentMember.id ? { ...m, punchMissAgreedMonth: punchMissLockMonth } : m
+                        )
+                      );
+                    } catch (e) {
+                      alert(e instanceof Error ? e.message : String(e));
+                    } finally {
+                      setPunchMissAgreeBusy(false);
+                    }
+                  }}
+                  className="w-full rounded-lg bg-red-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-600 disabled:opacity-50"
+                >
+                  {punchMissAgreeBusy ? "記録中…" : "規約に同意する"}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="mb-2 text-xs font-medium leading-relaxed text-slate-700">
+                  同意を記録しました。以下のメッセージをコピーして<span className="font-bold">公式LINE</span>へ送信してください。
+                  管理者がLINEを確認してロックを解除するまで、稼働はできません。
+                </p>
+                <div className="mb-2 whitespace-pre-wrap rounded-lg border border-slate-300 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-800">
+                  {buildPunchMissLineMessage(currentMember.name, memberPunchMissCount, punchMissLockMonth)}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(
+                          buildPunchMissLineMessage(currentMember.name, memberPunchMissCount, punchMissLockMonth)
+                        );
+                        setPunchMissLineCopied(true);
+                      } catch {
+                        alert("コピーに失敗しました。上の文面を長押し（選択）してコピーしてください。");
+                      }
+                    }}
+                    className="w-full rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700"
+                  >
+                    {punchMissLineCopied ? "✅ コピーしました — 公式LINEに貼り付けて送信" : "報告メッセージをコピー"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void hydrate()}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs text-slate-600 hover:bg-slate-50"
+                  >
+                    解除されたか確認する（再読み込み）
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -11976,6 +12147,13 @@ export default function DashboardPage() {
                       <>現在は<span className="mx-1">【未稼働】</span>です</>
                     )}
                   </p>
+                </div>
+              )}
+              {memberPunchMissCount >= 1 && !memberPunchMissLocked && (
+                <div className="w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900">
+                  ⚠️ 今月の打刻押し忘れが <span className="font-bold">{memberPunchMissCount}回</span> あります。
+                  月{PUNCH_MISS_LOCK_THRESHOLD}回に達するとアカウントがロックされ、規約同意と公式LINEへの報告、管理者による解除が必要になります。
+                  また、月{PUNCH_MISS_LOCK_THRESHOLD}回を超えた押し忘れの稼働は修正できず、稼働として認められない場合があります。打刻を忘れずにお願いします。
                 </div>
               )}
               <div className="flex w-full flex-col gap-4">
