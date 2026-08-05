@@ -1,5 +1,6 @@
 import { pickInvoiceRegistrationFromFormPayload } from "@/lib/invoice-registration-number";
 import { getSupabase } from "@/lib/supabase";
+import { getUsersDb } from "@/lib/supabase-data";
 import {
   pickAccountHolder,
   pickAccountNumber,
@@ -102,7 +103,7 @@ export function parseExternalMemberDetailsPayload(raw: unknown): ExternalMemberD
 async function findUserIdByEmail(email: string): Promise<
   { ok: true; id: string } | { ok: false; error: string; status: number }
 > {
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return { ok: false, error: "Supabase が設定されていません。", status: 503 };
   }
@@ -149,7 +150,7 @@ export async function updateMemberDetailsByEmail(
     body.invoice_registration_number = patch.invoiceRegistrationNumber;
   }
 
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return { ok: false, error: "Supabase が設定されていません。", status: 503 };
   }

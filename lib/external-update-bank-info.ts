@@ -1,5 +1,6 @@
 import { matchBankByName, matchBranchByName } from "@/lib/bank-master";
 import { getSupabase } from "@/lib/supabase";
+import { getUsersDb } from "@/lib/supabase-data";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -79,7 +80,7 @@ export async function updateBankInfoByEmail(body: ExternalUpdateBankBody): Promi
     return { ok: false, error: "メールアドレスの形式が正しくありません。", status: 400 };
   }
 
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return { ok: false, error: "Supabase が設定されていません。", status: 503 };
   }

@@ -2,8 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
 import { validateQualifiedInvoiceRegistrationNumber } from "@/lib/invoice-registration-number";
-import { getSupabase } from "@/lib/supabase";
-import { updateMemberOrThrow, type MemberUpdatePayload } from "@/lib/supabase-data";
+import { getUsersDb, updateMemberOrThrow, type MemberUpdatePayload } from "@/lib/supabase-data";
 import { resolveAppBaseUrlFromEnv } from "@/lib/app-base-url";
 import { notifyFirstWorkDateSetSlack } from "@/lib/slack-first-work-date";
 import { normalizeMemberContractorCategory } from "@/lib/member-category";
@@ -91,7 +90,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "updates が必要です" }, { status: 400 });
   }
 
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return NextResponse.json({ error: "データベースに接続できません" }, { status: 500 });
   }

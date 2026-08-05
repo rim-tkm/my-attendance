@@ -7,7 +7,7 @@ import {
   type Shift,
   type WorkRecord,
 } from "@/lib/attendance";
-import { loadMembers, loadOpenRecordsOrThrow, loadRecordsOrThrow, loadShiftsOrThrow } from "@/lib/supabase-data";
+import { getUsersDb, loadMembers, loadOpenRecordsOrThrow, loadRecordsOrThrow, loadShiftsOrThrow } from "@/lib/supabase-data";
 import { getSupabase } from "@/lib/supabase";
 import {
   postSlackIncomingWebhook,
@@ -380,7 +380,7 @@ export async function runMissedPunchSlotReminders(options?: {
   const graceMs = readGraceMinutes() * 60 * 1000;
   const nowMs = now.getTime();
 
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return { ok: false, error: "Supabase is not configured" };
   }

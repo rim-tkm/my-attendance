@@ -10,7 +10,7 @@ import {
   toHalfWidthKana,
 } from "@/lib/freee-partners-csv";
 import { getSupabase } from "@/lib/supabase";
-import { loadMembers } from "@/lib/supabase-data";
+import { getUsersDb, loadMembers } from "@/lib/supabase-data";
 
 /**
  * freee 取引先（partner）API の作成・更新ペイロードをメンバーから組み立てる（サーバー専用）。
@@ -126,7 +126,7 @@ export async function syncAllMembersToFreee(): Promise<FreeeSyncSummary> {
   if (!access) {
     return { ok: false, error: "freee と未接続です。管理設定の「freeeと接続」を実行してください。" };
   }
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) return { ok: false, error: "データベースに接続できません" };
   const members = await loadMembers();
   if (members === null) return { ok: false, error: "メンバーを取得できません" };

@@ -1,6 +1,7 @@
 import { buildPlannedShiftListForDate, isWeekendYmd, type Shift } from "@/lib/attendance";
 import { getSupabase } from "@/lib/supabase";
 import { postSlackIncomingWebhook, resolveSlackWebhookUrl, slackWebhookMissingMessage } from "@/lib/slack-webhook";
+import { getUsersDb } from "@/lib/supabase-data";
 
 type DbShiftRow = {
   id: string;
@@ -52,7 +53,7 @@ export async function sendSlackDailyForDate(dateStr: string, options?: SendSlack
     return { ok: false, error: "Slack webhook is not configured", detail: slackWebhookMissingMessage("daily") };
   }
 
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return { ok: false, error: "Supabase is not configured" };
   }

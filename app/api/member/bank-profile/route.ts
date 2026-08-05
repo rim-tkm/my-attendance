@@ -5,8 +5,7 @@ import { validateQualifiedInvoiceRegistrationNumber } from "@/lib/invoice-regist
 import { getTodayJstDateString } from "@/lib/export-schedule";
 import { coerceMemberSelfBankProfileBody } from "@/lib/member-bank-profile-api";
 import { appendProfileConfirmationLog } from "@/lib/profile-confirmation-log";
-import { getSupabase } from "@/lib/supabase";
-import { updateMemberSelfBankProfileOrThrow } from "@/lib/supabase-data";
+import { getUsersDb, updateMemberSelfBankProfileOrThrow } from "@/lib/supabase-data";
 
 /**
  * ログイン中メンバー本人のみ: 振込先・住所・電話・適格請求書登録番号の更新。
@@ -62,7 +61,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: invRegCheck.message }, { status: 400 });
   }
 
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return NextResponse.json({ error: "データベースに接続できません" }, { status: 500 });
   }

@@ -19,6 +19,7 @@ import {
   ROI_PER_PERSON_FIXED_COST_YEN,
 } from "@/lib/roi-analysis";
 import { postSlackIncomingWebhook, resolveSlackWebhookUrl, slackWebhookMissingMessage } from "@/lib/slack-webhook";
+import { getUsersDb } from "@/lib/supabase-data";
 
 export { getTodayJstDateString } from "@/lib/export-schedule";
 
@@ -169,7 +170,7 @@ export async function loadSupabaseRoiSourceForRange(
   start: string,
   end: string
 ): Promise<LoadSupabaseRoiSourceResult> {
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return { ok: false, error: "Supabase is not configured" };
   }

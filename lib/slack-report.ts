@@ -1,5 +1,5 @@
 import { getSupabase } from "@/lib/supabase";
-import { loadCompanyHolidays } from "@/lib/supabase-data";
+import { getUsersDb, loadCompanyHolidays } from "@/lib/supabase-data";
 import { postSlackIncomingWebhook, resolveSlackWebhookUrl, slackWebhookMissingMessage } from "@/lib/slack-webhook";
 import {
   calcMonthlyPay,
@@ -107,7 +107,7 @@ export async function sendSlackReportForDate(
     return { ok: false, error: "Slack webhook is not configured", detail: slackWebhookMissingMessage("report") };
   }
 
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return { ok: false, error: "Supabase is not configured" };
   }

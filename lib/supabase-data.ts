@@ -342,7 +342,7 @@ async function safeQuery<T>(builder: QueryResult<T>): Promise<T[]> {
  * クライアント実行時は従来どおり anon。（RLS段階移行フェーズ1・docs/RLS_MIGRATION_PLAN.md）
  * ※ getSupabaseAdmin() はクライアントで呼ぶと例外を投げるため、window 判定の中でのみ呼ぶ。
  */
-function getUsersDb() {
+export function getUsersDb() {
   if (typeof window === "undefined") {
     const admin = getSupabaseAdmin();
     if (admin) return admin;
@@ -363,7 +363,7 @@ export async function loadMembers(): Promise<Member[] | null> {
 
 /** シフト保存時の午前開始可否。管理者ログインアカウントは常に許可。読み取り失敗時は false（午前不可として検証） */
 export async function loadUserCanWorkMorning(userId: string): Promise<boolean> {
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) return false;
   const { data, error } = await supabase
     .from("users")
@@ -380,7 +380,7 @@ export async function loadUserCanWorkMorning(userId: string): Promise<boolean> {
 
 /** DB 上の請求管理番号（invoice_number）の最大値 + 1 を採番（既存メンバーは変更しない） */
 export async function allocateNextInvoiceManagementNumber(): Promise<string> {
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     throw new Error("Supabase が設定されていません。");
   }
@@ -441,7 +441,7 @@ function usersUpsertRowFromMember(m: Member): Record<string, unknown> {
 
 export async function saveMembers(members: Member[]): Promise<void> {
   if (members.length === 0) return;
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) return;
   try {
     const ids = members.map((m) => m.id);
@@ -507,7 +507,7 @@ export async function addMember(
     canWorkMorning: DEFAULT_CAN_WORK_MORNING_FOR_NEW_MEMBER,
     memberCategory: MEMBER_CONTRACTOR_CATEGORY_DEFAULT,
   };
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     throw new Error("Supabase が設定されていません。");
   }
@@ -636,7 +636,7 @@ export async function updateMemberSelfBankProfileOrThrow(
   memberId: string,
   updates: MemberSelfBankProfilePayload
 ): Promise<void> {
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) throw new Error("データベースに接続できません");
   const body: Record<string, unknown> = {
     zip_code: updates.postalCode,
@@ -667,7 +667,7 @@ export async function updateMemberOrThrow(
   updates: MemberUpdatePayload,
   options?: UpdateMemberOrThrowOptions
 ): Promise<void> {
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) throw new Error("データベースに接続できません");
   const body: Record<string, unknown> = {};
   if (updates.name !== undefined) body.name = collapseMemberNameSpaces(updates.name);
@@ -780,7 +780,7 @@ export async function updateMember(
  * 有効なメンバーや管理者アカウントは削除しない。
  */
 export async function deleteMember(memberId: string): Promise<void> {
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) throw new Error("データベースに接続できません");
   const { data: row, error: selErr } = await supabase
     .from("users")
@@ -1622,7 +1622,7 @@ export async function userHasPlannedWorkShiftInDb(userId: string): Promise<boole
 
 /** users.slack_first_shift_hours_notified_at（未設定は null） */
 export async function getUserSlackFirstShiftHoursNotifiedAt(userId: string): Promise<string | null> {
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) return null;
   const { data, error } = await supabase
     .from("users")
@@ -1640,7 +1640,7 @@ export async function getUserSlackFirstShiftHoursNotifiedAt(userId: string): Pro
 
 /** 初回シフト Slack 通知済みとしてマーク（成功時 true） */
 export async function markUserSlackFirstShiftHoursNotified(userId: string): Promise<boolean> {
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) return false;
   const { error } = await supabase
     .from("users")

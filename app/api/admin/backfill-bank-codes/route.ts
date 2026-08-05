@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
 import { matchBankByName, matchBranchByName } from "@/lib/bank-master";
-import { getSupabase } from "@/lib/supabase";
+import { getUsersDb } from "@/lib/supabase-data";
 
 function isAdmin(session: { user?: { loginId?: string } } | null): boolean {
   return (session?.user?.loginId ?? "").toLowerCase() === "admin";
@@ -31,7 +31,7 @@ export async function POST() {
     return NextResponse.json({ error: "管理者のみ利用できます" }, { status: 403 });
   }
 
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return NextResponse.json({ error: "データベースに接続できません" }, { status: 500 });
   }

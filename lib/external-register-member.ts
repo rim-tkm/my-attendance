@@ -5,7 +5,7 @@ import {
   parseGoogleFormJpRegisterPayload,
   type GoogleFormJpRegisterPayload,
 } from "@/lib/google-form-jp-register-parser";
-import { allocateNextInvoiceManagementNumber } from "@/lib/supabase-data";
+import { getUsersDb, allocateNextInvoiceManagementNumber } from "@/lib/supabase-data";
 import { getSupabase } from "@/lib/supabase";
 
 /** Googleフォーム等からの登録用。ログイン後の初期パスワード */
@@ -91,7 +91,7 @@ export async function registerMemberFromGoogleForm(
     return { ok: false, error: "このログインIDは使用できません。", status: 400 };
   }
 
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return { ok: false, error: "Supabase が設定されていません。", status: 503 };
   }

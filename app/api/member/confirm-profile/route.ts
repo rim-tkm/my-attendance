@@ -4,7 +4,7 @@ import { buildMemberDisplayName } from "@/lib/attendance";
 import { authOptions } from "@/lib/auth";
 import { getTodayJstDateString } from "@/lib/export-schedule";
 import { appendProfileConfirmationLog } from "@/lib/profile-confirmation-log";
-import { getSupabase } from "@/lib/supabase";
+import { getUsersDb } from "@/lib/supabase-data";
 
 /**
  * ログイン中メンバー本人が「登録情報に変更なし」を確認した記録（users.profile_confirmed_month = 当月）。
@@ -18,7 +18,7 @@ export async function POST(req: Request) {
   if (!userId) {
     return NextResponse.json({ error: "ログインしてください" }, { status: 401 });
   }
-  const supabase = getSupabase();
+  const supabase = getUsersDb();
   if (!supabase) {
     return NextResponse.json({ error: "データベースに接続できません" }, { status: 500 });
   }
