@@ -1582,7 +1582,7 @@ function AdminDashboard(props: {
   const handleFreeeSyncPartners = async () => {
     if (
       !window.confirm(
-        "有効メンバー全員（管理者除く）を freee の取引先として登録・更新します。freee 側に同名の取引先がある場合は自動で紐付けます。実行しますか？"
+        "有効メンバー全員（管理者除く）を freee の取引先として登録・更新します。freee 側に同名の取引先がある場合、その人は誤紐付け防止のためエラーで停止します（内容を確認してから対応してください）。実行しますか？"
       )
     )
       return;
