@@ -62,6 +62,13 @@
 - 一般メンバーは total_calls〜non_decision_maker_apo を入力。
 - インターンは `confirmed_dm / confirmed_non_dm`（管理者確定の商談数）のみが評価・請求対象。
 
+### announcements（お知らせ本体）
+`id, title, body, target(all/contractor/intern), is_required(BOOL), is_published(BOOL), version(INT), created_at, updated_at, created_by`
+- RLS ポリシーなし＝公開 anon キーからは一切アクセス不可。サーバー（service_role）経由のみ。
+
+### announcement_reads（お知らせ確認記録）
+`id, announcement_id, user_id, version(INT), read_at` — `(announcement_id, user_id, version)` で一意。版数が上がると再確認が必要になる。
+
 ### その他
 - `plan_actual_gap_approvals` / `deviation_approvals`: 予実乖離の確定記録。
 - `punch_start_reminder_sent` / `punch_end_reminder_sent` / `kpi_productivity_alert_sent` / `kpi_missing_after_punch_alert_sent`: Slack通知の重複防止フラグ。

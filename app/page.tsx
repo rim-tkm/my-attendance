@@ -10890,12 +10890,6 @@ export default function DashboardPage() {
         }, 100);
         return false;
       }
-      // 月次の登録情報確認（姓名入力含む）が未完了の間はシフト提出も不可。確認モーダルを再表示する
-      if (me && !isAdminAccount && (me.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7)) {
-        alert("シフト提出の前に、「登録情報の確認」を完了してください（月に一度、お支払い情報の確認をお願いしています）。");
-        setProfileConfirmDismissed(false);
-        return false;
-      }
       // 打刻押し忘れロック中はシフト提出も不可
       if (me && !isAdminAccount && isPunchMissLocked(me, memberPunchMissCount, getTodayJstDateString().slice(0, 7))) {
         alert("稼働開始・稼働終了の押し忘れが今月3回に達したため、アカウントがロックされています。規約に同意し、公式LINEへ報告のうえ管理者の解除をお待ちください。");
@@ -10905,6 +10899,12 @@ export default function DashboardPage() {
       if (me && !isAdminAccount && memberAnnouncements.blocking.length > 0) {
         alert("シフト提出の前に、お知らせの確認をお願いします。");
         setAnnouncementGateDismissed(false);
+        return false;
+      }
+      // 月次の登録情報確認（姓名入力含む）が未完了の間はシフト提出も不可。確認モーダルを再表示する
+      if (me && !isAdminAccount && (me.profileConfirmedMonth ?? "") !== getTodayJstDateString().slice(0, 7)) {
+        alert("シフト提出の前に、「登録情報の確認」を完了してください（月に一度、お支払い情報の確認をお願いしています）。");
+        setProfileConfirmDismissed(false);
         return false;
       }
     }
