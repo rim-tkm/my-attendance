@@ -173,6 +173,8 @@ import {
   deleteAttendanceRecordById,
 } from "@/lib/supabase-data";
 import { shiftHasPlannedWorkHours } from "@/lib/shift-planned-work";
+import { AnnouncementGateModal } from "@/app/components/AnnouncementGateModal";
+import { useMemberAnnouncements } from "@/app/components/useMemberAnnouncements";
 import {
   buildPunchMissLineMessage,
   isPunchMissLocked,
@@ -10134,6 +10136,10 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // お知らせ（本人側）。取得失敗時は空配列＝稼働をブロックしない（fail-open）
+  const memberAnnouncements = useMemberAnnouncements(currentUserId, !isAdminMode);
+  const [announcementGateDismissed, setAnnouncementGateDismissed] = useState(false);
+
   // 打刻押し忘れロック（本人側）: 当月の押し忘れ回数と規約同意フローの状態
   const [memberPunchMissCount, setMemberPunchMissCount] = useState(0);
   const [punchMissAgreeBusy, setPunchMissAgreeBusy] = useState(false);
@@ -11071,6 +11077,15 @@ export default function DashboardPage() {
     currentMember != null &&
     isPunchMissLocked(currentMember, memberPunchMissCount, punchMissLockMonth);
   const memberPunchMissAgreed = (currentMember?.punchMissAgreedMonth ?? "") === punchMissLockMonth;
+
+  /** お知らせゲート。押し忘れロック中は出さない（ロック → お知らせ → 月次確認 の順） */
+  const showAnnouncementGate =
+    !isAdminMode &&
+    !isAdminUser &&
+    currentMember != null &&
+    !memberPunchMissLocked &&
+    !announcementGateDismissed &&
+    memberAnnouncements.unreadForModal.length > 0;
   const memberInternConfirmedReward =
     currentMember?.isIntern === true && currentUserId
       ? (() => {
@@ -11272,6 +11287,7 @@ export default function DashboardPage() {
     !isAdminUser &&
     currentMember != null &&
     !memberPunchMissLocked &&
+    !showAnnouncementGate &&
     !profileConfirmDismissed &&
     (memberMissingProfileItems.length > 0 ||
       needsNameSplitConfirm ||
@@ -11572,6 +11588,18 @@ export default function DashboardPage() {
             </div>
           </div>
         </div>
+      )}
+      {showAnnouncementGate && memberAnnouncements.unreadForModal[0] && (
+        <AnnouncementGateModal
+          announcement={memberAnnouncements.unreadForModal[0]}
+          remaining={memberAnnouncements.unreadForModal.length}
+          busy={memberAnnouncements.busy}
+          error={memberAnnouncements.error}
+          onConfirm={() => {
+            void memberAnnouncements.confirm(memberAnnouncements.unreadForModal[0]);
+          }}
+          onClose={() => setAnnouncementGateDismissed(true)}
+        />
       )}
       {memberPunchMissLocked && currentMember && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/70 p-4 print:hidden">
