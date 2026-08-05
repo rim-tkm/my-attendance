@@ -1513,7 +1513,7 @@ export async function updateShiftPlannedSlotsById(
   }
 }
 
-/** 指定ユーザー分の稼働を差し替えて保存（他ユーザー分は維持） */
+/** 指定ユーザー分の稼働を保存（他ユーザー分には触れない） */
 export async function saveRecordsForUser(
   userId: string,
   userRecords: WorkRecord[],
@@ -1532,9 +1532,11 @@ export async function saveRecordsForUser(
     const allShifts = await loadShifts();
     assertMemberWorkRecordsForTodayPunch(userId, userRecords, allShifts, new Date());
   }
-  const all = await loadRecords();
-  const rest = all.filter((r) => r.userId !== userId);
-  await saveRecords([...rest, ...withUserId], { bypassWorkDurationSanity: true });
+  // 以前は attendance 全件を読み直して「他ユーザー分＋自分」を丸ごと upsert していたが、
+  // upsert は削除を行わないので他ユーザー行の再送は完全な無駄書き込み（打刻のたびに
+  // 全履歴分の書き込みが走る）。自分の行だけを upsert しても結果の DB 状態は同一
+  // （監査指摘 2026-08-05）。
+  await saveRecords(withUserId, { bypassWorkDurationSanity: true });
 }
 
 /** 指定ユーザーの未終了稼働を設定 */
