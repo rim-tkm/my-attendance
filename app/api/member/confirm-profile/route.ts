@@ -27,7 +27,11 @@ export async function POST(req: Request) {
     firstName?: unknown;
     furigana?: unknown;
     invoiceIntent?: unknown;
+    markConfirmed?: unknown;
   };
+  // false のときは姓名等の保存のみで「当月確認完了」にはしない（「変更がある」経由。
+  // 確認完了はフォーム保存時に bank-profile API が付ける＝実際に修正するまで稼働ブロックを維持）
+  const markConfirmed = body.markConfirmed !== false;
   const lastName = typeof body.lastName === "string" ? body.lastName.trim().replace(/[\s　]+/g, "") : "";
   const firstName = typeof body.firstName === "string" ? body.firstName.trim().replace(/[\s　]+/g, "") : "";
   const furigana = typeof body.furigana === "string" ? body.furigana.trim() : "";
@@ -37,7 +41,7 @@ export async function POST(req: Request) {
       : "";
 
   const currentMonth = getTodayJstDateString().slice(0, 7);
-  const updates: Record<string, unknown> = { profile_confirmed_month: currentMonth };
+  const updates: Record<string, unknown> = markConfirmed ? { profile_confirmed_month: currentMonth } : {};
   if (lastName !== "" && firstName !== "") {
     updates.last_name = lastName;
     updates.first_name = firstName;
@@ -49,11 +53,24 @@ export async function POST(req: Request) {
   if (invoiceIntent !== "") {
     updates.invoice_registration_intent = invoiceIntent;
   }
-  const { error } = await supabase.from("users").update(updates).eq("id", userId).eq("is_active", true);
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  if (Object.keys(updates).length > 0) {
+    const { data: updatedRows, error } = await supabase
+      .from("users")
+      .update(updates)
+      .eq("id", userId)
+      .eq("is_active", true)
+      .select("id");
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    if (!updatedRows || updatedRows.length === 0) {
+      return NextResponse.json({ error: "アカウントが見つかりません（無効化されている可能性があります）" }, { status: 403 });
+    }
   }
-  // エビデンス: 確認時点の登録内容スナップショットを記録（失敗しても確認自体は成立させる）
-  await appendProfileConfirmationLog(supabase, userId, "no_change");
-  return NextResponse.json({ ok: true, month: currentMonth });
+  // エビデンス: 「間違いなし」で確認完了したときのみスナップショットを記録
+  // （「変更がある」経由は実際の保存時に bank-profile API が updated として記録する）
+  if (markConfirmed) {
+    await appendProfileConfirmationLog(supabase, userId, "no_change");
+  }
+  return NextResponse.json({ ok: true, month: markConfirmed ? currentMonth : null });
 }

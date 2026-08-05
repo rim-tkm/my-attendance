@@ -112,7 +112,17 @@ export type FreeeSyncSummary =
  * - freee 側の既存取引先とは空白無視の名前照合で自動紐付け（更新時に name がアプリ表記へ揃う）
  */
 export async function syncAllMembersToFreee(): Promise<FreeeSyncSummary> {
-  const access = await getFreeeAccess();
+  let access: Awaited<ReturnType<typeof getFreeeAccess>>;
+  try {
+    access = await getFreeeAccess();
+  } catch (e) {
+    // トークンリフレッシュ失敗等も throw で落とさず ok:false に変換する
+    // （Cron の Slack 失敗通知経路に確実に乗せるため）
+    return {
+      ok: false,
+      error: `freee 認証の更新に失敗しました: ${e instanceof Error ? e.message : String(e)}。管理設定の「freeeと再接続」が必要な可能性があります。`,
+    };
+  }
   if (!access) {
     return { ok: false, error: "freee と未接続です。管理設定の「freeeと接続」を実行してください。" };
   }

@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
 import {
+  findCompanyHolidayForYmd,
   getMondayOfCalendarWeekForYmd,
   getSubmittableShiftWeekMondays,
   isWeekOpenForEntry,
@@ -18,6 +19,7 @@ import {
 } from "@/lib/shift-planned-work";
 import {
   getUserSlackFirstShiftHoursNotifiedAt,
+  loadCompanyHolidays,
   loadMembers,
   loadUserCanWorkMorning,
   markUserSlackFirstShiftHoursNotified,
@@ -137,6 +139,24 @@ export async function POST(req: Request) {
       endPlanned2: undefined,
     };
   });
+
+  // 会社休業日はメンバー自身の保存では「稼働なし」に矯正（古いUIからの保存でも休業日にシフトが入らないように）。
+  // 管理者による代理保存は例外対応の裁量を残すため矯正しない（ADR-012）。
+  if (!isAdminSession(session)) {
+    const holidays = await loadCompanyHolidays();
+    if (holidays.length > 0) {
+      normalized = normalized.map((s) => {
+        if (!findCompanyHolidayForYmd(holidays, s.date)) return s;
+        return {
+          ...s,
+          startPlanned: SHIFT_ENTRY_NONE,
+          endPlanned: SHIFT_ENTRY_NONE,
+          startPlanned2: undefined,
+          endPlanned2: undefined,
+        };
+      });
+    }
+  }
 
   const windowRuleErr = validateShiftsPlannedOperatingWindow(normalized);
   if (windowRuleErr) {

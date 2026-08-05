@@ -140,20 +140,37 @@ export async function getFreeeAccess(): Promise<{ accessToken: string; companyId
   }
   const cfg = getFreeeClientConfig();
   if (!cfg) return null;
-  const refreshed = await requestToken(
-    new URLSearchParams({
-      grant_type: "refresh_token",
-      client_id: cfg.clientId,
-      client_secret: cfg.clientSecret,
-      refresh_token: stored.refresh_token,
-    })
-  );
-  await saveTokens(refreshed);
-  return {
-    accessToken: refreshed.access_token,
-    companyId: stored.company_id,
-    companyName: stored.company_name ?? "",
-  };
+  try {
+    const refreshed = await requestToken(
+      new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: cfg.clientId,
+        client_secret: cfg.clientSecret,
+        refresh_token: stored.refresh_token,
+      })
+    );
+    await saveTokens(refreshed);
+    return {
+      accessToken: refreshed.access_token,
+      companyId: stored.company_id,
+      companyName: stored.company_name ?? "",
+    };
+  } catch (e) {
+    // refresh_token は使い捨てのため、手動同期と Cron が同時に走ると片方の refresh が失敗する。
+    // その場合は勝った側が保存した最新トークンを読み直して使う（競合の自己回復）。
+    const latest = await loadFreeeTokens();
+    if (latest && latest.company_id != null && latest.refresh_token !== stored.refresh_token) {
+      const latestExpiry = Date.parse(latest.expires_at);
+      if (Number.isFinite(latestExpiry) && latestExpiry - Date.now() > REFRESH_MARGIN_SECONDS * 1000) {
+        return {
+          accessToken: latest.access_token,
+          companyId: latest.company_id,
+          companyName: latest.company_name ?? "",
+        };
+      }
+    }
+    throw e;
+  }
 }
 
 /** freee API 呼び出し（JSON）。エラー時は freee のメッセージを含む Error を投げる */

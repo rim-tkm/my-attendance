@@ -39,7 +39,10 @@ export function invoiceNumberForCsvDisplay(invoiceNumber: string | null | undefi
 }
 
 function csvEscapeCell(cell: string | number): string {
-  const s = typeof cell === "number" ? (Number.isFinite(cell) ? String(cell) : "") : cell;
+  let s = typeof cell === "number" ? (Number.isFinite(cell) ? String(cell) : "") : cell;
+  // Excel数式インジェクション対策: =,+,@ 始まりはシングルクォートで数式化を防ぐ
+  // （- は「-」単体の未入力表現やマイナス値表示で正当に使うため対象外）
+  if (/^[=+@]/.test(s)) s = `'${s}`;
   if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
     return `"${s.replace(/"/g, '""')}"`;
   }

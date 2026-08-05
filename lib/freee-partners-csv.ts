@@ -176,7 +176,10 @@ function stripLeadingZeros(code: string): string {
 }
 
 function csvEscape(v: string): string {
-  return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  // Excel数式インジェクション対策: =,+,-,@ 始まりの値は先頭にシングルクォートを付けて数式化を防ぐ
+  // （日本語の氏名・住所・銀行名で正当にこれらから始まる値は存在しない）
+  const guarded = /^[=+\-@]/.test(v) ? `'${v}` : v;
+  return /[",\n\r]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
 }
 
 /** 対象メンバー（有効・管理者以外）を freee 取引先インポート CSV の本文にする（BOM なし・UTF-8 文字列） */

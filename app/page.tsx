@@ -1713,35 +1713,44 @@ function AdminDashboard(props: {
     startDate: string,
     endDate: string
   ): Promise<{ ok: boolean; message: string } | null> => {
-    const existingShifts = await loadShiftsInDateRange(startDate, endDate);
+    // 過去日の稼働予定は実績突合（予実乖離）に使うため削除しない。削除対象は今日以降のみ
+    const todayJst = getTodayJstDateString();
+    const deleteStart = startDate < todayJst ? todayJst : startDate;
+    const hasDeletableRange = deleteStart <= endDate;
+    const existingShifts = hasDeletableRange ? await loadShiftsInDateRange(deleteStart, endDate) : [];
     const plannedCount = existingShifts.filter((s) => shiftHasPlannedWorkHours(s)).length;
     const periodLabel = startDate === endDate ? startDate : `${startDate} 〜 ${endDate}`;
     const confirmMessage =
       plannedCount > 0
-        ? `${periodLabel} を休業日「${name}」として登録します。\nこの期間に登録済みの稼働予定が ${plannedCount} 件あります。該当期間のシフトをすべて削除して登録しますか？`
+        ? `${periodLabel} を休業日「${name}」として登録します。\nこの期間（今日以降）に登録済みの稼働予定が ${plannedCount} 件あります。該当シフトを削除して登録しますか？`
         : `${periodLabel} を休業日「${name}」として登録します。この期間はシフト提出ができなくなります。よろしいですか？`;
     if (!window.confirm(confirmMessage)) return null;
-    if (existingShifts.length > 0) {
-      const deleted = await deleteShiftsInDateRange(startDate, endDate);
-      if (!deleted) {
-        return { ok: false, message: "既存シフトの削除に失敗しました。休業日は登録していません。" };
-      }
-    }
+    // 先に休業日を登録し、その後にシフトを削除する（途中失敗時に「シフトだけ消えた」状態を防ぐ。
+    // 逆順で休業日登録に失敗した場合、削除したシフトは復元できない）
     const created = await addCompanyHoliday({ name, startDate, endDate });
     if (!created) {
       return {
         ok: false,
         message:
-          "休業日の登録に失敗しました。Supabase に company_holidays テーブルが作成済みか確認してください（supabase-migration-company-holidays.sql）。",
+          "休業日の登録に失敗しました（シフトは削除していません）。Supabase に company_holidays テーブルが作成済みか確認してください（supabase-migration-company-holidays.sql）。",
       };
     }
     setCompanyHolidays((prev) => [...prev, created].sort((a, b) => a.startDate.localeCompare(b.startDate)));
-    if (existingShifts.length > 0) onRefresh();
+    if (hasDeletableRange && existingShifts.length > 0) {
+      const deleted = await deleteShiftsInDateRange(deleteStart, endDate);
+      if (!deleted) {
+        return {
+          ok: false,
+          message: `休業日「${created.name}」は登録しましたが、期間内シフトの削除に失敗しました。もう一度同じ期間で登録し直すか、稼働予定管理から手動で削除してください。`,
+        };
+      }
+      onRefresh();
+    }
     return {
       ok: true,
       message:
         plannedCount > 0
-          ? `休業日「${created.name}」を登録し、期間内のシフト ${plannedCount} 件を削除しました。`
+          ? `休業日「${created.name}」を登録し、期間内（今日以降）のシフト ${plannedCount} 件を削除しました。`
           : `休業日「${created.name}」を登録しました。`,
     };
   };
@@ -2863,10 +2872,11 @@ function AdminDashboard(props: {
     setDetailId(member.id);
     setEditName(member.name);
     {
-      // 姓・名が未分離の既存メンバーは表示名から推定分割（分割できなければ姓に全体を入れる）
+      // 姓・名が未分離の既存メンバーは表示名から推定分割。分割できない場合は空欄にして
+      // 管理者に明示的な入力を求める（フルネームを姓として誤保存する事故防止）
       const split = member.lastName
         ? { lastName: member.lastName, firstName: member.firstName ?? "" }
-        : splitMemberName(member.name) ?? { lastName: member.name, firstName: "" };
+        : splitMemberName(member.name) ?? { lastName: "", firstName: "" };
       setEditLastNameField(split.lastName);
       setEditFirstNameField(split.firstName);
     }
@@ -8236,7 +8246,12 @@ function AdminDashboard(props: {
               )}
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-0.5 block text-xs text-slate-500">姓・名（表示は「姓 名」・半角スペース区切り）</label>
+                  <label className="mb-0.5 block text-xs text-slate-500">
+                    姓・名（表示は「姓 名」・半角スペース区切り）
+                    {editLastNameField === "" && editFirstNameField === "" && (
+                      <span className="ml-1 text-amber-700">※現在の表示名「{editName}」を姓と名に分けて入力してください</span>
+                    )}
+                  </label>
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -11026,9 +11041,10 @@ export default function DashboardPage() {
     if (!currentMember) return;
     if (profileConfirmNameSeededRef.current === currentMember.id) return;
     profileConfirmNameSeededRef.current = currentMember.id;
+    // 分割できない名前は空欄にして本人に入力させる（「山田太郎」を姓として確定してしまう事故防止）
     const split = currentMember.lastName
       ? { lastName: currentMember.lastName, firstName: currentMember.firstName ?? "" }
-      : splitMemberName(currentMember.name) ?? { lastName: currentMember.name, firstName: "" };
+      : splitMemberName(currentMember.name) ?? { lastName: "", firstName: "" };
     setConfirmSei(split.lastName);
     setConfirmMei(split.firstName);
     const furiganaSplit = splitMemberName(currentMember.furigana ?? "");
@@ -11042,9 +11058,13 @@ export default function DashboardPage() {
     (!needsFuriganaConfirm || (confirmFuriganaSei.trim() !== "" && confirmFuriganaMei.trim() !== "")) &&
     (!needsInvoiceIntentConfirm || confirmInvoiceIntent !== "");
 
-  /** 姓名・フリガナ（必要時）を確認記録と一緒にサーバーへ送る */
-  const postConfirmProfile = async () => {
-    const body: Record<string, string> = {};
+  /**
+   * 姓名・フリガナ・アンケート（必要時）をサーバーへ送る。
+   * markConfirmed=true のときだけ「当月確認完了」として記録する（「変更がある」経由では
+   * フォーム保存まで確認完了にしない＝打刻ブロックを素通りさせない）。
+   */
+  const postConfirmProfile = async (markConfirmed: boolean) => {
+    const body: Record<string, unknown> = { markConfirmed };
     if (needsNameSplitConfirm) {
       body.lastName = confirmSei.trim();
       body.firstName = confirmMei.trim();
@@ -11065,32 +11085,35 @@ export default function DashboardPage() {
     if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "確認の記録に失敗しました");
   };
 
-  /** 月次確認モーダル: 「この内容で間違いない」→ 当月確認（＋必要なら姓名）を記録 */
+  /** 月次確認モーダル: 「この内容で間違いない」→ 当月確認（＋必要なら姓名等）を記録 */
   const handleConfirmProfileNoChange = async () => {
     if (!nameSplitInputsValid) return;
     setProfileConfirmBusy(true);
     try {
-      await postConfirmProfile();
+      await postConfirmProfile(true);
       await refresh();
       setMemberDataToast({ message: "登録情報の確認ありがとうございました！", isError: false });
+      setProfileConfirmDismissed(true);
     } catch (e) {
+      // 記録に失敗した場合はモーダルを閉じない（未確認のまま非表示にならないように）
       setMemberDataToast({ message: e instanceof Error ? e.message : String(e), isError: true });
     } finally {
-      setProfileConfirmDismissed(true);
       setProfileConfirmBusy(false);
     }
   };
 
-  /** 月次確認モーダル: 「変更する」→ 姓名（必要時）だけ先に記録してから振込先フォームへスクロール */
+  /**
+   * 月次確認モーダル: 「変更がある」→ 入力済みの姓名・フリガナ・アンケートだけ保存して
+   * 振込先フォームへスクロール。当月確認の完了はフォーム保存時（bank-profile API）に付く
+   * （＝このボタンだけでは打刻・シフトのブロックは解除されない）。
+   */
   const handleConfirmProfileEdit = () => {
     if (!nameSplitInputsValid) return;
-    if (needsNameSplitConfirm) {
-      void postConfirmProfile()
-        .then(() => refresh())
-        .catch(() => {
-          /* 姓名の記録失敗は次回モーダルで再収集される */
-        });
-    }
+    void postConfirmProfile(false)
+      .then(() => refresh())
+      .catch(() => {
+        /* 入力内容の保存失敗は次回モーダルで再収集される */
+      });
     setProfileConfirmDismissed(true);
     setTab("home");
     window.setTimeout(() => {

@@ -20,6 +20,9 @@ CREATE INDEX IF NOT EXISTS idx_profile_confirmations_user ON public.profile_conf
 
 ALTER TABLE public.profile_confirmations ENABLE ROW LEVEL SECURITY;
 
+-- ⚠️ 口座番号を含むスナップショットのため、anon キーからは INSERT のみ許可（読み取り・改ざん・削除は不可）。
+--    参照が必要になったら service_role（サーバー専用）経由で行うこと。
 DROP POLICY IF EXISTS "Allow all for profile_confirmations" ON public.profile_confirmations;
-CREATE POLICY "Allow all for profile_confirmations"
-  ON public.profile_confirmations FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Allow insert for profile_confirmations" ON public.profile_confirmations;
+CREATE POLICY "Allow insert for profile_confirmations"
+  ON public.profile_confirmations FOR INSERT WITH CHECK (true);

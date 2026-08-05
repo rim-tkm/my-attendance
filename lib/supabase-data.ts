@@ -397,20 +397,25 @@ function usersUpsertRowFromMember(m: Member): Record<string, unknown> {
   return {
     id: m.id,
     name: m.name,
-    ...(m.lastName !== undefined ? { last_name: m.lastName } : {}),
-    ...(m.firstName !== undefined ? { first_name: m.firstName } : {}),
+    // 注意: 一括 upsert では全行のキーが揃っている必要があるため、新列も常に含める
+    // （条件付きで含めると行によってキーが不揃いになり、バックアップ復元が丸ごと失敗する）。
+    // 本番の全マイグレーションは適用済み。
+    last_name: m.lastName ?? "",
+    first_name: m.firstName ?? "",
     furigana: m.furigana ?? "",
     login_account: login === "" ? null : login,
     password: m.password ?? "",
     hourly_rate: m.hourlyRate ?? DEFAULT_HOURLY_RATE,
     zip_code: m.postalCode ?? "",
     address: m.address ?? "",
-    ...(m.address2 !== undefined ? { address2: m.address2 } : {}),
+    address2: m.address2 ?? "",
     bank_name: m.bankName ?? "",
     branch_name: m.branchName ?? "",
-    // 銀行コード・支店コードは列未作成の環境でも upsert が通るよう、値があるときのみ含める
-    ...(m.bankCode !== undefined ? { bank_code: m.bankCode } : {}),
-    ...(m.branchCode !== undefined ? { branch_code: m.branchCode } : {}),
+    bank_code: m.bankCode ?? "",
+    branch_code: m.branchCode ?? "",
+    profile_confirmed_month: m.profileConfirmedMonth ?? null,
+    invoice_registration_intent: m.invoiceRegistrationIntent ?? null,
+    freee_partner_id: m.freeePartnerId ?? null,
     account_type: m.accountType ?? "普通",
     account_number: m.accountNumber ?? "",
     account_holder: m.accountHolder ?? "",

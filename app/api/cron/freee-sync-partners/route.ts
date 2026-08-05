@@ -15,13 +15,23 @@ export async function GET(request: NextRequest) {
   const denied = verifyCronSecret(request);
   if (denied) return denied;
 
-  const result = await syncAllMembersToFreee();
-
   const notifySlack = async (text: string) => {
     const url = resolveSlackWebhookUrl("daily");
     if (!url) return;
     await postSlackIncomingWebhook(url, { text });
   };
+
+  // 想定外の例外でも必ず Slack 通知に乗せる（未捕捉で500になると同期停止に誰も気付けない）
+  let result: Awaited<ReturnType<typeof syncAllMembersToFreee>>;
+  try {
+    result = await syncAllMembersToFreee();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await notifySlack(
+      `⚠️ freee取引先の自動同期が想定外のエラーで停止しました: ${msg}\n管理画面の「管理設定 → freee連携」を確認してください。`
+    );
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+  }
 
   if (!result.ok) {
     await notifySlack(
