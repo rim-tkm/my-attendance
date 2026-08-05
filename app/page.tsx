@@ -150,7 +150,6 @@ import {
   buildProductivityMemberSummaryCsvRows,
 } from "@/lib/export-productivity-csv";
 import {
-  loadMembers,
   addMember,
   updateMember,
   updateMemberOrThrow,
@@ -163,7 +162,6 @@ import {
   saveRecordsForUser,
   setOpenRecordForUser,
   saveKpiForUser,
-  loginUser,
   loadPlanActualGapApprovalsDetailed,
   loadCompanyHolidays,
   addCompanyHoliday,
@@ -246,6 +244,30 @@ import {
   sanitizeInvoiceRegistrationInput,
   validateQualifiedInvoiceRegistrationNumber,
 } from "@/lib/invoice-registration-number";
+
+/**
+ * users の取得をサーバAPI経由に一本化（RLS移行フェーズ1・docs/RLS_MIGRATION_PLAN.md）。
+ * 管理者セッション＝全メンバー、一般メンバー＝本人1件のみ（他人の口座・PII・PWハッシュは
+ * ブラウザに配信されない）。未ログイン・失敗時は null。
+ */
+async function fetchMembersViaApi(): Promise<Member[] | null> {
+  try {
+    const adminRes = await fetch("/api/admin/members", { credentials: "include" });
+    if (adminRes.ok) {
+      const data = (await adminRes.json().catch(() => null)) as { ok?: boolean; members?: Member[] } | null;
+      return data?.ok && Array.isArray(data.members) ? data.members : null;
+    }
+    if (adminRes.status === 403) {
+      const meRes = await fetch("/api/member/me", { credentials: "include" });
+      if (!meRes.ok) return null;
+      const data = (await meRes.json().catch(() => null)) as { ok?: boolean; member?: Member } | null;
+      return data?.ok && data.member ? [data.member] : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /** シフト保存 API 用: isManualDelete を is_manual_delete にし、DB 非カラムを送らない */
 function shiftsToScheduleApiJson(shifts: Shift[]): unknown[] {
@@ -2164,7 +2186,7 @@ function AdminDashboard(props: {
           failures.push(`${nm}（${e instanceof Error ? e.message : String(e)}）`);
         }
       }
-      const mems = await loadMembers();
+      const mems = await fetchMembersViaApi();
       setMembers(mems ?? []);
       setDormantSelectedIds(new Set());
       onRefresh();
@@ -2227,7 +2249,7 @@ function AdminDashboard(props: {
           failures.push(`${nm}（${e instanceof Error ? e.message : String(e)}）`);
         }
       }
-      const mems = await loadMembers();
+      const mems = await fetchMembersViaApi();
       setMembers(mems ?? []);
       setNeverWorkedSelectedIds(new Set());
       onRefresh();
@@ -2690,7 +2712,7 @@ function AdminDashboard(props: {
         password: newMemberPassword,
         hourlyRate: newMemberHourlyRate >= 0 ? newMemberHourlyRate : DEFAULT_HOURLY_RATE,
       });
-      const mems = await loadMembers();
+      const mems = await fetchMembersViaApi();
       setMembers(mems ?? []);
       setNewMemberName("");
       setNewMemberLogin("");
@@ -8388,7 +8410,7 @@ function AdminDashboard(props: {
                         await updateMember(detailId, { isActive: false });
                         setDetailId(null);
                         setMemberDetailSaveError(null);
-                        const mems = await loadMembers();
+                        const mems = await fetchMembersViaApi();
                         setMembers(mems ?? []);
                         onRefresh();
                       } catch (e) {
@@ -8420,7 +8442,7 @@ function AdminDashboard(props: {
                         onClick={async () => {
                           try {
                             await updateMember(mem.id, { isActive: true });
-                            const mems = await loadMembers();
+                            const mems = await fetchMembersViaApi();
                             setMembers(mems ?? []);
                             onRefresh();
                           } catch (e) {
@@ -8443,7 +8465,7 @@ function AdminDashboard(props: {
                               setDetailId(null);
                               setMemberDetailSaveError(null);
                             }
-                            const mems = await loadMembers();
+                            const mems = await fetchMembersViaApi();
                             setMembers(mems ?? []);
                             onRefresh();
                           } catch (e) {
@@ -8666,7 +8688,7 @@ function AdminDashboard(props: {
                             if (!data || typeof data !== "object") throw new Error("不正な形式です");
                             await importAllDataToSupabase(data);
                             onRefresh();
-                            const mems = await loadMembers();
+                            const mems = await fetchMembersViaApi();
                             setMembers(mems ?? []);
                             alert("復元が完了しました。画面を更新します。");
                             window.location.reload();
@@ -9960,7 +9982,7 @@ export default function DashboardPage() {
         loadOpenRecords(),
         loadShifts(),
         loadKpi(),
-        loadMembers(),
+        fetchMembersViaApi(),
         loadPlanActualGapApprovalsDetailed(),
         loadCompanyHolidays(),
       ]);
@@ -10019,23 +10041,27 @@ export default function DashboardPage() {
   const hydrate = useCallback(async () => {
     setLoadError(null);
     try {
-      const mems = await loadMembers();
+      // 認証を先に確認してから users をサーバAPI経由で取得する（RLS移行フェーズ1）。
+      // 以前は認証前に anon で全メンバー（口座・PII含む）をブラウザへロードしていた。
+      // 未ログインなら何もロードせずログイン画面へ（finally で sessionChecked は立つ）。
+      const session = await getSession();
+      const sessionUserId = (session?.user as { id?: string } | undefined)?.id;
+      if (!sessionUserId) {
+        setMembers([]);
+        setCurrentUserId(null);
+        return;
+      }
+      const mems = await fetchMembersViaApi();
       if (mems === null) {
-        setLoadError("Supabase の設定がありません。.env.local に NEXT_PUBLIC_SUPABASE_URL と NEXT_PUBLIC_SUPABASE_ANON_KEY を設定してください。");
+        setLoadError("メンバー情報の取得に失敗しました。通信環境を確認して再読み込みしてください。");
         setMembers([]);
         setCurrentUserId(null);
         return;
       }
       setMembers(mems);
       // リロードするとログイン画面に戻ってしまう対策：
-      // ログイン時に作成済みの NextAuth セッション（Cookie・30日有効）から currentUserId を復元する。
-      // 重いデータ読み込みの前に行い、判定完了（sessionChecked）までログイン画面は表示しない。
-      // 無効化済みメンバーは復元しない。
-      const session = await getSession();
-      const sessionUserId = (session?.user as { id?: string } | undefined)?.id;
-      const sessionMember = sessionUserId
-        ? mems.find((m) => m.id === sessionUserId && m.isActive !== false)
-        : undefined;
+      // NextAuth セッション（Cookie・30日有効）から currentUserId を復元する。無効化済みは復元しない。
+      const sessionMember = mems.find((m) => m.id === sessionUserId && m.isActive !== false);
       setCurrentUserId((prev) => {
         if (prev && mems.some((m) => m.id === prev)) return prev;
         return sessionMember ? sessionMember.id : null;
@@ -10785,28 +10811,25 @@ export default function DashboardPage() {
     setLoginError("");
     setIsLoggingIn(true);
     try {
-      const user = await loginUser(loginAccount.trim(), loginPassword);
-      if (user) {
-        if ((user.loginAccount ?? "").toLowerCase() === "admin") {
-          slackAdminAuthMemory.current = { loginId: loginAccount.trim(), password: loginPassword };
-        } else {
-          slackAdminAuthMemory.current = null;
-        }
-        const na = await signIn("credentials", {
-          loginId: loginAccount.trim(),
-          password: loginPassword,
-          redirect: false,
-        });
-        setCurrentUserId(user.id);
-        setLoginPassword("");
-        // 管理者アカウントは最初から管理者画面で開く（毎回トグルする手間をなくす）
-        setIsAdminMode((user.loginAccount ?? "").toLowerCase() === "admin");
-        if (na?.error) {
-          console.warn("NextAuth セッション作成に失敗（Slack送信などAPIで401になる可能性）:", na.error);
-        }
-      } else {
+      // 認証はサーバ側 NextAuth（signIn）に一本化（RLS移行フェーズ1）。
+      // 以前はブラウザから anon で users 全件を読んで照合していた（PWハッシュがブラウザに届く）。
+      const trimmedLogin = loginAccount.trim();
+      const na = await signIn("credentials", {
+        loginId: trimmedLogin,
+        password: loginPassword,
+        redirect: false,
+      });
+      if (na?.error) {
         setLoginError("ユーザー名またはパスワードが正しくありません。");
+        return;
       }
+      const isAdminLogin = trimmedLogin.toLowerCase() === "admin";
+      slackAdminAuthMemory.current = isAdminLogin ? { loginId: trimmedLogin, password: loginPassword } : null;
+      // 管理者アカウントは最初から管理者画面で開く（毎回トグルする手間をなくす）
+      setIsAdminMode(isAdminLogin);
+      // メンバー取得と全データロードは hydrate に任せる（セッション確立後なのでAPI経由で取得できる）
+      await hydrate();
+      setLoginPassword("");
     } catch (err) {
       console.error("handleLogin", err);
       setLoginError("ログイン処理でエラーが発生しました。通信環境を確認してもう一度お試しください。");
@@ -10827,7 +10850,7 @@ export default function DashboardPage() {
         password: setupPassword,
         hourlyRate: setupHourlyRate >= 0 ? setupHourlyRate : DEFAULT_HOURLY_RATE,
       });
-      const mems = await loadMembers();
+      const mems = await fetchMembersViaApi();
       setMembers(mems ?? []);
       if (setupLogin.trim().toLowerCase() === "admin") {
         slackAdminAuthMemory.current = { loginId: setupLogin.trim(), password: setupPassword };
