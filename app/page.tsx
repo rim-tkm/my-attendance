@@ -2621,10 +2621,12 @@ function AdminDashboard(props: {
     [allRecords, dashboardDate]
   );
   const dateApoCostMinutes = dateDecision > 0 ? dateTeamMinutes / dateDecision : null;
-  // 決裁者アポまたは非決裁者アポが1件以上あるメンバーのみ、決裁者アポ多い順
+  // 決裁者アポまたは非決裁者アポが1件以上あるメンバーのみ、決裁者アポ多い順。
+  // 上のアポ合計（dateDecision 等）は全KPI行を数えるため、一覧も無効化済みを含む
+  // 全メンバーを母集団にして合計と内訳を一致させる（監査指摘 2026-08-05）
   const apoListForDate = useMemo(
     () =>
-      activeMembers
+      members
         .map((mem) => {
           const k = getKpiForDate(getKpiForUser(allKpiRecords, mem.id), dashboardDate);
           const dec = k ? k.decisionMakerApo : 0;
@@ -2633,7 +2635,7 @@ function AdminDashboard(props: {
         })
         .filter(({ dec, non }) => dec >= 1 || non >= 1)
         .sort((a, b) => b.dec - a.dec),
-    [activeMembers, allKpiRecords, dashboardDate]
+    [members, allKpiRecords, dashboardDate]
   );
 
   // 請求に必要な情報が未登録のメンバー（カードの文言どおり、振込先4項目＋請求管理番号＋電話番号で判定。管理者アカウントは除く）
