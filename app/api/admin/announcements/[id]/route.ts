@@ -52,7 +52,8 @@ export async function POST(req: Request, context: { params: { id: string } }) {
   const currentVersion = typeof current.version === "number" ? current.version : 1;
   const nextVersion = o.requireReconfirm === true ? currentVersion + 1 : currentVersion;
 
-  const patch: Record<string, unknown> = { updated_at: new Date().toISOString(), version: nextVersion };
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (o.requireReconfirm === true) patch.version = nextVersion;
   if (typeof o.title === "string") {
     const t = o.title.trim();
     if (!t) return NextResponse.json({ ok: false, error: "タイトルを入力してください" }, { status: 400 });

@@ -21,6 +21,34 @@ type DbUserRow = {
   login_account: string | null;
 };
 
+const READ_ROWS_PAGE_SIZE = 1000;
+
+type DbReadRow = { announcement_id: string; user_id: string; version: number };
+
+/**
+ * 確認記録を全件取得（PostgREST の 1 リクエスト行上限を超えないようページング）。
+ * announcement_reads はメンバー×お知らせ×版数の直積で、お知らせが増えると
+ * 1000行を容易に超える。ここで取りこぼすと確認済みのメンバーが「未確認」と
+ * 表示されてしまうため、途中で失敗したら部分結果を返さず throw する。
+ */
+async function loadAllAnnouncementReadRows(
+  supabase: NonNullable<ReturnType<typeof getSupabaseAdmin>>
+): Promise<DbReadRow[]> {
+  const out: DbReadRow[] = [];
+  for (let from = 0; ; from += READ_ROWS_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("announcement_reads")
+      .select("announcement_id, user_id, version")
+      .order("id")
+      .range(from, from + READ_ROWS_PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    const chunk = (data ?? []) as DbReadRow[];
+    out.push(...chunk);
+    if (chunk.length < READ_ROWS_PAGE_SIZE) break;
+  }
+  return out;
+}
+
 /** 全お知らせに確認状況（対象人数・確認済み人数・未確認者）を添えて返す（管理者のみ） */
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -36,25 +64,26 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: "SUPABASE_SERVICE_ROLE_KEY が未設定です" }, { status: 500 });
   }
 
-  const [{ data: rows, error: listErr }, { data: userRows, error: userErr }, { data: readRows, error: readErr }] =
-    await Promise.all([
-      supabase
-        .from("announcements")
-        .select("id, title, body, target, is_required, is_published, version, created_at, updated_at")
-        .order("created_at", { ascending: false }),
-      supabase.from("users").select("id, name, is_intern, is_active, login_account"),
-      supabase.from("announcement_reads").select("announcement_id, user_id, version"),
-    ]);
+  const [{ data: rows, error: listErr }, { data: userRows, error: userErr }] = await Promise.all([
+    supabase
+      .from("announcements")
+      .select("id, title, body, target, is_required, is_published, version, created_at, updated_at")
+      .order("created_at", { ascending: false }),
+    supabase.from("users").select("id, name, is_intern, is_active, login_account"),
+  ]);
   if (listErr) return NextResponse.json({ ok: false, error: listErr.message }, { status: 500 });
   if (userErr) return NextResponse.json({ ok: false, error: userErr.message }, { status: 500 });
-  if (readErr) return NextResponse.json({ ok: false, error: readErr.message }, { status: 500 });
+
+  let readRows: DbReadRow[];
+  try {
+    readRows = await loadAllAnnouncementReadRows(supabase);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+  }
 
   const users = (userRows as DbUserRow[]) ?? [];
-  const readKeys = new Set(
-    ((readRows ?? []) as { announcement_id: string; user_id: string; version: number }[]).map(
-      (r) => `${r.announcement_id}\t${r.user_id}\t${r.version}`
-    )
-  );
+  const readKeys = new Set(readRows.map((r) => `${r.announcement_id}\t${r.user_id}\t${r.version}`));
 
   const announcements = ((rows as DbAnnouncement[]) ?? []).map((r) => {
     const target = normalizeAnnouncementTarget(r.target);
