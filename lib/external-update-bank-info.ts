@@ -1,3 +1,4 @@
+import { matchBankByName, matchBranchByName } from "@/lib/bank-master";
 import { getSupabase } from "@/lib/supabase";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -98,11 +99,19 @@ export async function updateBankInfoByEmail(body: ExternalUpdateBankBody): Promi
     return { ok: false, error: "指定のメールアドレスに一致するユーザーが見つかりません。", status: 404 };
   }
 
+  // 銀行・支店コードは新しい名称から必ず引き直す。名称だけ更新して旧コードを残すと、
+  // freee連携が古いコードで振込先を作り誤送金につながるため（監査指摘 2026-08-05）。
+  // マスタで特定できない場合はコードを空にして、管理画面の不足警告に載せる。
+  const bankHit = matchBankByName(body.bankName.trim());
+  const branchHit = bankHit ? matchBranchByName(bankHit.code, body.branchName.trim()) : null;
+
   const { error: upErr } = await supabase
     .from("users")
     .update({
       bank_name: body.bankName.trim(),
       branch_name: body.branchName.trim(),
+      bank_code: bankHit?.code ?? "",
+      branch_code: branchHit?.code ?? "",
       account_type: body.accountType.trim(),
       account_number: body.accountNumber.trim(),
       account_holder: body.accountHolder.trim(),
