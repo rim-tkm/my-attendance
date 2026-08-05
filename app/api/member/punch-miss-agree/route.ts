@@ -58,7 +58,7 @@ export async function POST(req: Request) {
   if (webhook) {
     const name = ((row.name as string | null) ?? "").trim() || "（名前なし）";
     await postSlackIncomingWebhook(webhook, {
-      text: `🔒 ${name} さんが打刻押し忘れ規約に同意しました（今月${count > 0 ? `${count}回目` : "3回以上"}）。\n公式LINEの報告メッセージを確認し、問題なければ管理画面の「管理設定 → メンバー」からロックを解除してください。`,
+      text: `🔒 ${name} さんが稼働記録に関する規約（押し忘れ）に同意しました（今月${count > 0 ? `${count}回目` : "3回以上"}）。\n公式LINEの報告メッセージを確認し、問題なければ管理画面の「管理設定 → メンバー」からロックを解除してください。`,
     });
   }
 

@@ -50,11 +50,11 @@ export function isPunchMissLocked(member: Member, monthCount: number, month: str
 }
 
 /** ロック画面に表示する規約文面 */
-export const PUNCH_MISS_TERMS_TEXT = `【打刻に関する規約】
+export const PUNCH_MISS_TERMS_TEXT = `【稼働記録に関する規約】
 
-1. 稼働開始・稼働終了の打刻は、稼働の事実を証明する唯一の記録であり、本人が必ず行うものとします。
+1. 「稼働開始」「稼働終了」ボタンの操作は、稼働の事実を証明する唯一の記録であり、本人が必ず行うものとします。
 
-2. 打刻の押し忘れ（開始・終了のいずれか）が1ヶ月に${PUNCH_MISS_LOCK_THRESHOLD}回に達した場合、アカウントはロックされ、本規約に同意のうえ公式LINEへ報告し、管理者がロックを解除するまで稼働（打刻・シフト提出）はできません。
+2. 稼働開始・稼働終了の押し忘れ（いずれか一方でも）が1ヶ月に${PUNCH_MISS_LOCK_THRESHOLD}回に達した場合、アカウントはロックされ、本規約に同意のうえ公式LINEへ報告し、管理者がロックを解除するまで稼働（稼働開始・シフト提出）はできません。
 
 3. 1ヶ月で${PUNCH_MISS_LOCK_THRESHOLD + 1}回目以降の押し忘れが発生した稼働については、以後いかなる理由があっても修正は行われず、稼働として認められない（報酬のお支払い対象外となる）場合があります。
 
@@ -63,10 +63,10 @@ export const PUNCH_MISS_TERMS_TEXT = `【打刻に関する規約】
 /** 規約同意後に公式LINEへコピペ送信してもらう文面 */
 export function buildPunchMissLineMessage(memberName: string, monthCount: number, month: string): string {
   const [y, m] = month.split("-");
-  return `【打刻押し忘れの報告】
+  return `【稼働開始・終了の押し忘れ報告】
 氏名：${memberName}
 対象：${y}年${Number(m)}月の押し忘れ ${monthCount}回目
 
-打刻規約（1ヶ月${PUNCH_MISS_LOCK_THRESHOLD}回を超える押し忘れは修正不可・稼働として認められない場合があること）を確認し、同意します。
-以後、打刻を徹底します。ロックの解除をお願いいたします。`;
+稼働記録に関する規約（1ヶ月${PUNCH_MISS_LOCK_THRESHOLD}回を超える押し忘れは修正不可・稼働として認められない場合があること）を確認し、同意します。
+以後、稼働開始・稼働終了の操作を徹底します。ロックの解除をお願いいたします。`;
 }

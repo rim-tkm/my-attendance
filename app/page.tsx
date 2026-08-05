@@ -8254,7 +8254,7 @@ function AdminDashboard(props: {
                                 onClick={async () => {
                                   if (
                                     !window.confirm(
-                                      `${mem.name} さんの打刻ロックを解除しますか？\n\n今月の押し忘れ: ${missCount} 回\n規約同意: ${mem.punchMissAgreedMonth === missMonth ? "同意済み" : "未同意"}\n\n公式LINEに報告メッセージが届いていることを確認してから解除してください。`
+                                      `${mem.name} さんの稼働ロックを解除しますか？\n\n今月の押し忘れ: ${missCount} 回\n規約同意: ${mem.punchMissAgreedMonth === missMonth ? "同意済み" : "未同意"}\n\n公式LINEに報告メッセージが届いていることを確認してから解除してください。`
                                     )
                                   )
                                     return;
@@ -10467,7 +10467,7 @@ export default function DashboardPage() {
       if (me && !meIsAdminAccount && isPunchMissLocked(me, memberPunchMissCount, getTodayJstDateString().slice(0, 7))) {
         setPunchSubmitPhase("idle");
         if (typeof window !== "undefined") {
-          window.alert("打刻押し忘れが今月3回に達したため、アカウントがロックされています。画面の案内に従って規約に同意し、公式LINEへ報告のうえ管理者の解除をお待ちください。");
+          window.alert("稼働開始・稼働終了の押し忘れが今月3回に達したため、アカウントがロックされています。画面の案内に従って規約に同意し、公式LINEへ報告のうえ管理者の解除をお待ちください。");
         }
         return;
       }
@@ -10859,7 +10859,7 @@ export default function DashboardPage() {
       }
       // 打刻押し忘れロック中はシフト提出も不可
       if (me && !isAdminAccount && isPunchMissLocked(me, memberPunchMissCount, getTodayJstDateString().slice(0, 7))) {
-        alert("打刻押し忘れが今月3回に達したため、アカウントがロックされています。規約に同意し、公式LINEへ報告のうえ管理者の解除をお待ちください。");
+        alert("稼働開始・稼働終了の押し忘れが今月3回に達したため、アカウントがロックされています。規約に同意し、公式LINEへ報告のうえ管理者の解除をお待ちください。");
         return false;
       }
     }
@@ -11576,10 +11576,10 @@ export default function DashboardPage() {
       {memberPunchMissLocked && currentMember && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/70 p-4 print:hidden">
           <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl bg-white p-5 shadow-xl sm:p-6">
-            <h2 className="mb-1 text-base font-semibold text-red-700">🔒 アカウントロック中（打刻押し忘れ）</h2>
+            <h2 className="mb-1 text-base font-semibold text-red-700">🔒 アカウントロック中（稼働開始・終了の押し忘れ）</h2>
             <p className="mb-3 text-xs leading-relaxed text-slate-700">
-              今月の打刻押し忘れが <span className="font-bold text-red-700">{memberPunchMissCount}回</span> に達したため、
-              稼働（打刻・シフト提出）をロックしています。
+              今月の稼働開始・稼働終了の押し忘れが <span className="font-bold text-red-700">{memberPunchMissCount}回</span> に達したため、
+              稼働（稼働開始・シフト提出）をロックしています。
             </p>
             <div className="mb-3 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700">
               {PUNCH_MISS_TERMS_TEXT}
@@ -12203,9 +12203,9 @@ export default function DashboardPage() {
               )}
               {memberPunchMissCount >= 1 && !memberPunchMissLocked && (
                 <div className="w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900">
-                  ⚠️ 今月の打刻押し忘れが <span className="font-bold">{memberPunchMissCount}回</span> あります。
+                  ⚠️ 今月の稼働開始・稼働終了の押し忘れが <span className="font-bold">{memberPunchMissCount}回</span> あります。
                   月{PUNCH_MISS_LOCK_THRESHOLD}回に達するとアカウントがロックされ、規約同意と公式LINEへの報告、管理者による解除が必要になります。
-                  また、月{PUNCH_MISS_LOCK_THRESHOLD}回を超えた押し忘れの稼働は修正できず、稼働として認められない場合があります。打刻を忘れずにお願いします。
+                  また、月{PUNCH_MISS_LOCK_THRESHOLD}回を超えた押し忘れの稼働は修正できず、稼働として認められない場合があります。稼働開始・稼働終了ボタンを忘れずにお願いします。
                 </div>
               )}
               <div className="flex w-full flex-col gap-4">
