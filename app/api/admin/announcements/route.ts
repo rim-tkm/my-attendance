@@ -39,6 +39,7 @@ async function loadAllAnnouncementReadRows(
     const { data, error } = await supabase
       .from("announcement_reads")
       .select("announcement_id, user_id, version")
+      .order("read_at")
       .order("id")
       .range(from, from + READ_ROWS_PAGE_SIZE - 1);
     if (error) throw new Error(error.message);

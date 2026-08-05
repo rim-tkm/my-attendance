@@ -44,7 +44,9 @@ export function useMemberAnnouncements(userId: string | null, enabled: boolean):
         setAnnouncements([]);
         return;
       }
-      setAnnouncements(data.announcements);
+      // 壊れた要素が1つでも混じるとレンダー中の選別で例外になり画面が白くなるため、
+      // オブジェクト以外は捨てる（fail-open を全経路で守る）
+      setAnnouncements(data.announcements.filter((a) => a != null && typeof a === "object"));
     } catch {
       setAnnouncements([]);
     }
@@ -68,7 +70,13 @@ export function useMemberAnnouncements(userId: string | null, enabled: boolean):
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         if (!res.ok) {
           setError(data.error || "確認の記録に失敗しました。通信環境を確認してもう一度お試しください。");
-          if (res.status === 409) await reload();
+          // 409(版ずれ)だけでなく 403(対象外になった)・404(削除された)でも再取得する。
+          // 再取得しないと、確認できないお知らせが一覧に残り続けて稼働が永久にブロックされる。
+          if (res.status === 409 || res.status === 403 || res.status === 404) {
+            await reload();
+            // 再取得で最新の内容に置き換わったので、前の版に対するエラー表示は消す
+            setError(null);
+          }
           return false;
         }
         await reload();
