@@ -37,7 +37,6 @@ function coerceMemberUpdates(raw: Record<string, unknown>): MemberUpdatePayload 
     out.invoiceRegistrationNumber = raw.invoiceRegistrationNumber;
   }
   if (typeof raw.phoneNumber === "string") out.phoneNumber = raw.phoneNumber;
-  if (typeof raw.slackId === "string") out.slackId = raw.slackId;
   if (typeof raw.isActive === "boolean") out.isActive = raw.isActive;
   if ("firstWorkDate" in raw) {
     if (raw.firstWorkDate === null || raw.firstWorkDate === undefined) out.firstWorkDate = null;

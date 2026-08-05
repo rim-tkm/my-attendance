@@ -48,8 +48,6 @@ export interface Member {
   invoiceRegistrationIntent?: string;
   /** 電話番号 */
   phoneNumber?: string;
-  /** Slack メンバーID（例: U0123…）。シフト催促で <@…> メンションに使用 */
-  slackId?: string | null;
   /** freee の取引先ID（同期済みなら設定。未同期は undefined） */
   freeePartnerId?: number | null;
   /** 本人が登録情報を確認した月（YYYY-MM）。月が変わると再確認モーダルを表示する */

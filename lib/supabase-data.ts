@@ -104,7 +104,6 @@ export type DbUser = {
   invoice_registration_number?: string | null;
   invoice_registration_intent?: string | null;
   phone_number?: string | null;
-  slack_id?: string | null;
   freee_partner_id?: number | null;
   is_active?: boolean | null;
   first_work_date?: string | null;
@@ -214,7 +213,6 @@ export function toMember(r: DbUser): Member {
     invoiceRegistrationIntent:
       normStr(r.invoice_registration_intent ?? "") !== "" ? normStr(r.invoice_registration_intent ?? "") : undefined,
     phoneNumber: phone !== "" ? phone : undefined,
-    slackId: normStr(r.slack_id ?? "") !== "" ? normStr(r.slack_id ?? "") : undefined,
     freeePartnerId: typeof r.freee_partner_id === "number" ? r.freee_partner_id : undefined,
     isActive: r.is_active === undefined || r.is_active === null ? true : !!r.is_active,
     firstWorkDate:
@@ -441,10 +439,6 @@ function usersUpsertRowFromMember(m: Member): Record<string, unknown> {
   };
 }
 
-function slackIdSchemaErrorMessage(msg: string): boolean {
-  return /slack_id/i.test(msg) && (/schema cache/i.test(msg) || /column/i.test(msg) || /Could not find/i.test(msg));
-}
-
 export async function saveMembers(members: Member[]): Promise<void> {
   if (members.length === 0) return;
   const supabase = getSupabase();
@@ -482,11 +476,6 @@ export async function saveMembers(members: Member[]): Promise<void> {
     if (error) {
       console.warn("saveMembers error:", error);
       return;
-    }
-    for (const m of members) {
-      if (m.slackId !== undefined) {
-        await updateMember(m.id, { slackId: m.slackId ?? "" });
-      }
     }
   } catch (e) {
     console.warn("saveMembers error:", e);
@@ -606,7 +595,6 @@ export type MemberUpdatePayload = Partial<
     | "invoiceNumber"
     | "invoiceRegistrationNumber"
     | "phoneNumber"
-    | "slackId"
     | "isActive"
     | "firstWorkDate"
     | "canWorkMorning"
@@ -718,10 +706,6 @@ export async function updateMemberOrThrow(
   if (updates.invoiceRegistrationNumber !== undefined) {
     body.invoice_registration_number = updates.invoiceRegistrationNumber;
   }
-  if (updates.slackId !== undefined) {
-    const s = (updates.slackId ?? "").trim();
-    body.slack_id = s === "" ? null : s;
-  }
   if (updates.isActive !== undefined) body.is_active = updates.isActive;
   if (updates.firstWorkDate !== undefined) {
     const v = updates.firstWorkDate == null ? "" : String(updates.firstWorkDate).trim();
@@ -770,25 +754,10 @@ export async function updateMemberOrThrow(
     }
   }
   const { error } = await supabase.from("users").update(body).eq("id", memberId);
-  if (error && slackIdSchemaErrorMessage(error.message ?? "") && "slack_id" in body) {
-    const { slack_id: _s, ...rest } = body;
-    if (Object.keys(rest).length > 0) {
-      const { error: e2 } = await supabase.from("users").update(rest).eq("id", memberId);
-      if (e2) {
-        const m = e2.message ?? String(e2);
-        if (/duplicate key|unique constraint|23505/i.test(m) && /login/i.test(m)) {
-          throw new Error("このログインIDは既に使用されています");
-        }
-        throw new Error(m);
-      }
-    }
-  } else if (error) {
+  if (error) {
     const m = error.message ?? String(error);
     if (/duplicate key|unique constraint|23505/i.test(m) && /login/i.test(m)) {
       throw new Error("このログインIDは既に使用されています");
-    }
-    if (/duplicate key|unique constraint|23505/i.test(m) && /slack/i.test(m)) {
-      throw new Error("この Slack ID は既に別のメンバーで使用されています");
     }
     throw new Error(m);
   }

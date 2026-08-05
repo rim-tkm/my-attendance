@@ -1996,11 +1996,6 @@ function AdminDashboard(props: {
     message: string;
     variant: "success" | "error" | "info";
   } | null>(null);
-  const [shiftRemindTestSending, setShiftRemindTestSending] = useState(false);
-  const [shiftRemindTestFeedback, setShiftRemindTestFeedback] = useState<{
-    message: string;
-    variant: "success" | "error" | "info";
-  } | null>(null);
   const [gapApprovalBusy, setGapApprovalBusy] = useState(false);
   const [gapActionToast, setGapActionToast] = useState<{ message: string; isError: boolean } | null>(null);
   const [gapManualEditor, setGapManualEditor] = useState<null | {
@@ -2819,58 +2814,6 @@ function AdminDashboard(props: {
       });
     } finally {
       setProductivitySlackTestSending(false);
-    }
-  };
-
-  const handleShiftRemindTestSend = async () => {
-    setShiftRemindTestFeedback(null);
-    setShiftRemindTestSending(true);
-    try {
-      let loginId = slackAdminAuthMemory.current?.loginId ?? "";
-      let password = slackAdminAuthMemory.current?.password ?? "";
-      if (!loginId || !password) {
-        const fallbackId = adminLoginAccount.trim();
-        if (!fallbackId) {
-          alert("ログイン情報を確認できません。一度ログアウトして再ログインしてください。");
-          return;
-        }
-        const p = window.prompt("催促通知を送るため、管理者のパスワードを入力してください");
-        if (p == null || p === "") {
-          alert("キャンセルしました。");
-          return;
-        }
-        loginId = fallbackId;
-        password = p;
-      }
-      const { remindUnsubmittedShiftTestAction } = await import("@/app/actions/remind-unsubmitted-shift");
-      const data = await remindUnsubmittedShiftTestAction({ adminLoginId: loginId, adminPassword: password });
-      if (!data.ok) {
-        const err = data.error ?? "エラー";
-        const det = data.detail?.trim();
-        setShiftRemindTestFeedback({
-          message: det ? `${err}\n\n詳細: ${det}` : err,
-          variant: "error",
-        });
-        return;
-      }
-      if (!data.sent) {
-        setShiftRemindTestFeedback({
-          message: `送信スキップ：翌週（${data.rangeStart} 〜 ${data.rangeEnd}）の期間に、シフト未入力のメンバーはいませんでした。\nSlack には何も送っていません。（テストは曜日・時刻に関係なく、この瞬間のデータで判定しています）`,
-          variant: "info",
-        });
-      } else {
-        setShiftRemindTestFeedback({
-          message: `送信成功：${data.count}名を対象に Slack に催促を送り、成功応答を受け取りました。\n対象週（翌週）: ${data.rangeStart} 〜 ${data.rangeEnd}\n※テストは Cron のスケジュールに依存せず即時実行です。`,
-          variant: "success",
-        });
-      }
-    } catch (e) {
-      setShiftRemindTestFeedback({
-        message: e instanceof Error ? e.message : String(e),
-        variant: "error",
-      });
-    } finally {
-      setShiftRemindTestSending(false);
     }
   };
 
@@ -5210,35 +5153,6 @@ function AdminDashboard(props: {
               >
                 PDFで出力（月〜金）
               </button>
-            </div>
-            <div className="flex flex-col gap-2 border-t border-slate-200 pt-3 sm:flex-row sm:flex-wrap sm:items-center">
-              <button
-                type="button"
-                onClick={handleShiftRemindTestSend}
-                disabled={shiftRemindTestSending}
-                className="rounded border border-amber-500 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950 hover:bg-amber-100 disabled:opacity-50 sm:text-sm"
-              >
-                {shiftRemindTestSending ? "送信中…" : "【テスト】未入力者への催促通知を今すぐ飛ばす"}
-              </button>
-              {shiftRemindTestFeedback != null && (
-                <div
-                  className={`min-w-0 max-w-xl whitespace-pre-wrap text-xs font-medium sm:text-sm ${
-                    shiftRemindTestFeedback.variant === "success"
-                      ? "text-green-700"
-                      : shiftRemindTestFeedback.variant === "info"
-                        ? "text-slate-600"
-                        : "text-red-700"
-                  }`}
-                  role="status"
-                >
-                  {shiftRemindTestFeedback.variant === "error"
-                    ? `送信失敗\n${shiftRemindTestFeedback.message}`
-                    : shiftRemindTestFeedback.message}
-                </div>
-              )}
-              <p className="w-full text-[11px] text-slate-500 sm:text-xs">
-                来週（月〜日）にシフトが1件もないメンバーへ、Cron と同じロジックで Slack に送ります。テストは曜日・時刻に関係なく即時に抽出・送信します。対象がいない場合は送信しません。
-              </p>
             </div>
           </div>
           <p className="mb-4 text-xs font-medium text-slate-600">
