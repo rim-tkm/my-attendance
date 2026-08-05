@@ -13,11 +13,16 @@ export const PUNCH_OUTSIDE_WINDOW_MESSAGE = "打刻は9:45〜21:15の間のみ�
 export const PUNCH_DEADLINE_PASSED_MESSAGE =
   "打刻期限を過ぎました。管理者に連絡して時間を報告してください";
 
-/** 業務開始打刻: 各枠の稼働予定開始のこの分だけ前から許可 */
-export const PUNCH_START_LEAD_MINUTES_BEFORE_PLANNED = 30;
+/**
+ * 業務開始打刻: 各枠の稼働予定開始のこの分だけ前から許可。
+ * 14分（=実質14分00秒前〜）にしているのは 15分切り上げ丸めとの整合のため:
+ * 予定10:00 に対し 9:46〜9:59 の打刻は 10:00 に丸まり必ず予定内に収まる。
+ * 15分前（9:45）を許すと丸め結果が 9:45 になり予定外の稼働開始が記録されてしまう。
+ */
+export const PUNCH_START_LEAD_MINUTES_BEFORE_PLANNED = 14;
 
-/** 業務開始打刻: 各枠の稼働予定開始のこの分だけ後まで許可 */
-export const PUNCH_START_LAG_MINUTES_AFTER_PLANNED = 30;
+/** 業務開始打刻: 各枠の稼働予定開始のこの分だけ後まで許可（分単位比較のため実質14分59秒後まで） */
+export const PUNCH_START_LAG_MINUTES_AFTER_PLANNED = 14;
 
 /** 予定に基づく開始打刻がまだ早いとき（UI 案内・API エラーで共通） */
 export const PUNCH_START_BEFORE_PLANNED_MESSAGE = `稼働開始は予定時刻の${PUNCH_START_LEAD_MINUTES_BEFORE_PLANNED}分前から可能です`;
@@ -28,7 +33,9 @@ export const PUNCH_START_AFTER_PLANNED_MESSAGE =
 
 const WINDOW_START_MIN = 9 * 60 + 45;
 const WINDOW_END_MIN = 21 * 60 + 15;
-const GRACE_MS = 15 * 60 * 1000;
+// 終了打刻の猶予は予定終了+14分59秒まで。15分ちょうどを許すと 15分切り捨て丸めで
+// 「予定終了+15分」が記録され、稼働予定時間内に収まらなくなるため
+const GRACE_MS = (14 * 60 + 59) * 1000;
 
 function isNoneLike(v: string): boolean {
   const t = v.trim();
@@ -73,8 +80,8 @@ export function isWithinDailyPunchClockWindowJst(at: Date): boolean {
 
 /**
  * 予定に基づく業務開始打刻の許可ウィンドウ（JST の「その日 0:00 からの分」）一覧。
- * 2部制（枠1・枠2）に対応し、各枠の開始時刻の前後30分をそれぞれ許可する
- * （例: 10-12/13-16 の予定なら 9:45〜10:30 と 12:30〜13:30 の2つ）。
+ * 2部制（枠1・枠2）に対応し、各枠の開始時刻の前後14分をそれぞれ許可する
+ * （例: 10-12/13-16 の予定なら 9:46〜10:14 と 12:46〜13:14 の2つ）。
  * 従来は最速枠の開始だけを基準にしていたため、枠2の開始打刻が「遅すぎ」で弾かれていた。
  * 具体の予定が無い場合は null（9:45〜21:15 の日次ウィンドウのみ適用）。開始昇順で返す。
  */
@@ -141,7 +148,7 @@ export function getLatestConcretePlanEndMs(dateYmd: string, shift: Shift | undef
 
 /**
  * 本人の「終了打刻」として許容される最終瞬間（ms、境界を含む）。
- * min(当日 JST 21:15, 最遅の予定終了+15分)。実予定が無い場合は 21:15。
+ * min(当日 JST 21:15, 最遅の予定終了+14分59秒)。実予定が無い場合は 21:15。
  */
 export function getMemberEndPunchDeadlineMs(
   dateYmd: string,
@@ -203,7 +210,7 @@ function assertMemberCompletedTodayWorkRecord(
   if (now.getTime() > deadlineMs) throw new Error(PUNCH_DEADLINE_PASSED_MESSAGE);
 }
 
-/** 本人保存経路: 当日分の完了レコードに打刻ウィンドウ・予定終了+15分を適用 */
+/** 本人保存経路: 当日分の完了レコードに打刻ウィンドウ・予定終了+14分59秒を適用 */
 export function assertMemberWorkRecordsForTodayPunch(
   userId: string,
   userRecords: WorkRecord[],

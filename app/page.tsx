@@ -10041,6 +10041,21 @@ export default function DashboardPage() {
       const list = await loadOpenRecords();
       const fromDb = getOpenRecordForUser(list, uid);
       if (fromDb) {
+        // 前日以前の未終了打刻（終了押し忘れの残骸）は「稼働中」として復元しない。
+        // 復元すると翌日の開始打刻が予実調整までブロックされてしまうため、
+        // その場で自動補完（予定終了で確定）して状態からも外す（リロード時の hydrate と同じ扱い）。
+        if (fromDb.date !== todayJst) {
+          try {
+            const [records, shifts] = await Promise.all([loadRecords(), loadShifts()]);
+            await runAutoComplete(records, list, shifts);
+            await refresh();
+          } catch {
+            /* 失敗しても状態に載せない。次回 hydrate の自動補完で再試行される */
+          }
+          setAllOpenRecords((prev) => prev.filter((r) => !(r.userId === uid && r.date !== todayJst)));
+          persistOpenRecordClientBackup(uid, null);
+          return;
+        }
         setAllOpenRecords((prev) => {
           const cur = getOpenRecordForUser(prev, uid);
           if (cur && cur.id === fromDb.id && cur.startRounded === fromDb.startRounded) return prev;
@@ -12007,7 +12022,7 @@ export default function DashboardPage() {
                       <p className="text-center text-[11px] leading-snug text-slate-500 sm:text-xs">
                         {punchStartPlanBlockReason === "late"
                           ? PUNCH_START_AFTER_PLANNED_MESSAGE
-                          : "稼働開始は予定時刻の30分前〜30分後に打刻可能です"}
+                          : "稼働開始は予定時刻の14分前〜14分後に打刻可能です"}
                       </p>
                     )}
                 </div>
