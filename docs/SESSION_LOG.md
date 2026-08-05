@@ -1,5 +1,16 @@
 # SESSION_LOG
 
+## 2026-08-05（追記: RLS移行フェーズ1完了・過去シフト改ざん防止）
+
+- **過去シフト改ざん防止**（e144c70）: /api/schedule で本人保存時は過去日の行を保存対象から除外（日付単位マージ保存なのでDBの既存値は残る）。管理者の代理保存は従来どおり。
+- **RLS移行フェーズ1をコード側完了**（docs/RLS_MIGRATION_PLAN.md 参照。f281614→e3f43b1→2febc1f→2909303）:
+  - users を触る全サーバ経路を service_role 優先（getUsersDb）に統一
+  - ログインを NextAuth signIn に一本化（client loginUser 廃止）。hydrate は「認証確認→API取得」の順に
+  - メンバー取得は 管理者=/api/admin/members（全件・PWハッシュ除外・hasPasswordフラグ）／一般=/api/member/me（本人1件のみ）。**一般メンバーのブラウザに他人の口座・住所・電話・PWハッシュが配信されなくなった**
+  - 書き込みもAPI集約: 無効化/有効化・新規作成(POST /api/admin/members)・バックアップ(GET/POST /api/admin/backup)・アーカイブ画面
+  - 検証: 各コミットで tsc/build ✅。ローカルで未ログイン画面・誤PWエラー表示・未認証API 401 を確認
+- **申し送り（次のアクション）**: ①本番で管理者ログイン＋メンバー一覧・一般メンバーログイン＋打刻を確認 ②問題なければ Supabase SQL Editor で `drop policy "Allow all for users" on public.users;` を実行（=公開anonキーでの users 読み書きを遮断。切り戻しSQLは RLS_MIGRATION_PLAN.md に記載）③attendance/shifts/kpis 等の運用テーブルはフェーズ2（未着手）
+
 ## 2026-08-05（監査#2対応: 22エージェント点検→確定10件を1件ずつ全修正）
 
 - **経緯**: ユーザー指示で2回目のWorkflow監査（バグ/セキュリティ/矛盾/改善提案、約22エージェント+反証検証）を実行。確定10件・却下0件・未検証(参考)43件・改善提案27件。確定10件を「1個ずつ」の指示どおり1件=1コミットで全修正。

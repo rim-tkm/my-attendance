@@ -55,13 +55,19 @@
 - ✅ service_roleキー疎通検証：`GET /api/admin/members` で168名取得(本番・管理者セッション)。
 - ✅ 1-1途中：`getUsersDb()`（サーバ=service_role/クライアント=anon）を `loadMembers` に適用。サーバNextAuthログインも service_role で users を読む（本番ログイン/リロード確認済 `eccbb28`）。
 - ✅ 読み取りAPI足場：`GET /api/admin/members`(管理者=全件・PW除外)＋`GET /api/member/me`(本人1件・PW除外)。**まだクライアント未使用**。
-- ⬜ **残り（リスク高・要集中）**:
-  1. **書き込み系のサーバ集約**: `addMember`/`updateMemberOrThrow`/`deleteMember`/`saveMembers`/`allocateNextInvoiceManagementNumber` を `getUsersDb` 化 or サーバAPIに寄せる。`member-update`/`bank-profile` 等の既存サーバ経路も getSupabase(anon)→admin へ。
-  2. **クライアント読み取り差し替え**: `page.tsx` の `loadMembers` 直呼び(hydrate等)を、管理者=`/api/admin/members`・一般=`/api/member/me` に。
-     - ✅ **調査確定(2026-07-31)**: 一般メンバー画面は**本人Member1件で足りる**（他人の氏名すら不参照）。根拠: 画面分岐 `page.tsx:10381`（AdminDashboardは管理者時のみ描画）、DashboardPage内 `members` 参照は本人検索のみ（`9351`/`9470`/`10042` の `find(id===currentUserId)`）。records/shifts/kpi は非管理者時 `getRecordsForUser` 等で本人分に絞り済（`9374-9377`）。
-     - ⚠ **login と結合している**: 現状 hydrate は認証前に `loadMembers()`(anon全件) を実行し、その後 getSession で本人特定。API化すると「認証前はメンバー取得不可(401)」になるため、**先にログインを済ませてから API でメンバー取得**する順序に変える必要がある＝下記3(signIn化)と一緒に実装する。単独では切り替えられない。
-  3. **ログイン signIn 化**: `page.tsx:9939` の client `loginUser` を撤去し `signIn()` に一本化（anon での users 読みを無くす）。**リロード復元(hydrate/sessionChecked)に影響・要本番確認**。
-  4. **RLS締め**: `drop policy "Allow all for users" on public.users;`。締めた後 `curl`(anon)で users が読めないこと＋アプリ正常動作を確認。
+- ✅ **1. 書き込み系のサーバ集約**（2026-08-05 `f281614`）: users を触る全 lib 関数と全サーバAPIルートを `getUsersDb()`（サーバ=service_role）に統一。
+- ✅ **2. クライアント読み取り差し替え**（2026-08-05 `e3f43b1`）: hydrate を「getSession → API取得」の順に変更。`fetchMembersViaApi()`（管理者=`/api/admin/members` 全件・一般=`/api/member/me` 本人1件）で page.tsx の loadMembers 直呼び10箇所を置換。
+- ✅ **3. ログイン signIn 化**（2026-08-05 `e3f43b1`）: client `loginUser` を撤去し `signIn()` 一本化。未ログイン画面・誤PWエラー・未認証API 401 をローカル確認済み。
+- ✅ **3.5 書き込みのAPI化**（2026-08-05 `2febc1f` `2909303`）: 無効化/有効化=member-update API、新規作成=POST /api/admin/members、バックアップ=GET/POST /api/admin/backup、アーカイブ画面もAPI化。「PW設定済み」表示は hasPassword フラグ（ハッシュ非配信）。残るanon直書きは初期セットアップ（メンバー0件時のみ・本番では通らない）だけ。
+- ⬜ **4. RLS締め**（ユーザー作業・SQL）:
+  ```sql
+  drop policy "Allow all for users" on public.users;
+  ```
+  切り戻し（問題が出た場合に実行すれば即元通り）:
+  ```sql
+  create policy "Allow all for users" on public.users for all using (true) with check (true);
+  ```
+  締めた後の確認: 管理者ログイン→メンバー一覧/編集、一般メンバーのログイン→打刻・シフト保存・確認モーダル、`curl`(anonキー)で users が読めない(空)こと。
 
 ## フェーズ3：④認証堅牢化（初期PWランダム化＋初回変更必須・試行回数制限）
 
