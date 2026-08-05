@@ -176,6 +176,7 @@ import { shiftHasPlannedWorkHours } from "@/lib/shift-planned-work";
 import { AnnouncementGateModal } from "@/app/components/AnnouncementGateModal";
 import { AnnouncementsTab } from "@/app/components/AnnouncementsTab";
 import { useMemberAnnouncements } from "@/app/components/useMemberAnnouncements";
+import { AdminAnnouncementsSection, useAdminAnnouncements } from "@/app/components/AdminAnnouncementsSection";
 import {
   buildPunchMissLineMessage,
   isPunchMissLocked,
@@ -771,6 +772,7 @@ type AdminSection =
   | "dailyActual"
   | "planActualGap"
   | "dormant"
+  | "announcements"
   | "settings"
   | "roi"
   | "productivityExport"
@@ -1425,6 +1427,12 @@ function AdminNavIcon({ id }: { id: AdminSection }) {
       <>
         <rect x="4" y="4" width="16" height="16" rx="2" />
         <path d="M4 10h16M4 15h16M10 4v16" />
+      </>
+    ),
+    announcements: (
+      <>
+        <path d="M4 9v6h3l5 4V5L7 9H4z" />
+        <path d="M16 9a4 4 0 0 1 0 6" />
       </>
     ),
     planActualGap: (
@@ -3945,6 +3953,7 @@ function AdminDashboard(props: {
     { id: "kpi", label: "業務委託KPI" },
     { id: "planActualGap", label: "予実乖離アーカイブ" },
     { id: "dormant", label: "休眠メンバー" },
+    { id: "announcements", label: "お知らせ" },
     ...(isAdminUser
       ? ([
           { id: "roi" as const, label: "生産性分析（ROI）" },
@@ -3955,6 +3964,8 @@ function AdminDashboard(props: {
     { id: "settings", label: "管理設定" },
   ];
   const invoiceMissingNavCount = membersWithMissingInvoiceNumber.length;
+  // お知らせ（管理者側）。左メニューのバッジにも使う
+  const adminAnnouncements = useAdminAnnouncements(isAdminUser);
 
   useEffect(() => {
     if (
@@ -4349,6 +4360,14 @@ function AdminDashboard(props: {
                       title="請求管理番号未入力のメンバーがいます"
                     >
                       {invoiceMissingNavCount}
+                    </span>
+                  ) : null}
+                  {item.id === "announcements" && adminAnnouncements.unconfirmedCount > 0 ? (
+                    <span
+                      className="rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white"
+                      title="未確認のメンバーがいる必読お知らせがあります"
+                    >
+                      {adminAnnouncements.unconfirmedCount}
                     </span>
                   ) : null}
                 </button>
@@ -7241,6 +7260,10 @@ function AdminDashboard(props: {
             </div>
           ) : null}
         </section>
+      )}
+
+      {adminSection === "announcements" && (
+        <AdminAnnouncementsSection state={adminAnnouncements} />
       )}
 
       {adminSection === "dormant" && (
