@@ -151,8 +151,6 @@ import {
 } from "@/lib/export-productivity-csv";
 import {
   addMember,
-  updateMember,
-  updateMemberOrThrow,
   loadRecords,
   loadOpenRecords,
   loadShifts,
@@ -172,7 +170,6 @@ import {
   addCompanyHolidaySuggestionDismissal,
   type PlanActualGapResolution,
   exportAllDataFromSupabase,
-  importAllDataToSupabase,
   deleteAttendanceRecordById,
 } from "@/lib/supabase-data";
 import { shiftHasPlannedWorkHours } from "@/lib/shift-planned-work";
@@ -267,6 +264,18 @@ async function fetchMembersViaApi(): Promise<Member[] | null> {
   } catch {
     return null;
   }
+}
+
+/** 管理者によるメンバー更新をサーバAPI経由で行う（users への anon 直書きを廃止・RLS移行フェーズ1） */
+async function adminUpdateMemberViaApi(memberId: string, updates: Record<string, unknown>): Promise<void> {
+  const res = await fetch("/api/admin/member-update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ memberId, updates }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) throw new Error(data.error || "保存に失敗しました");
 }
 
 /** シフト保存 API 用: isManualDelete を is_manual_delete にし、DB 非カラムを送らない */
@@ -2172,14 +2181,14 @@ function AdminDashboard(props: {
     )
       return;
     setDormantBulkBusy(true);
-    // 1件ずつ結果を確認する。updateMemberOrThrow は失敗時に例外を投げるので、
+    // 1件ずつ結果を確認する。adminUpdateMemberViaApi は失敗時に例外を投げるので、
     // 成功件数と失敗理由を集計して正確に報告する（保存失敗を握り潰して「成功」と誤表示しない）。
     let okCount = 0;
     const failures: string[] = [];
     try {
       for (const id of ids) {
         try {
-          await updateMemberOrThrow(id, { isActive: false });
+          await adminUpdateMemberViaApi(id, { isActive: false });
           okCount += 1;
         } catch (e) {
           const nm = members.find((m) => m.id === id)?.name ?? id;
@@ -2242,7 +2251,7 @@ function AdminDashboard(props: {
     try {
       for (const id of ids) {
         try {
-          await updateMemberOrThrow(id, { isActive: false });
+          await adminUpdateMemberViaApi(id, { isActive: false });
           okCount += 1;
         } catch (e) {
           const nm = members.find((m) => m.id === id)?.name ?? id;
@@ -2707,11 +2716,19 @@ function AdminDashboard(props: {
     }
     setNewMemberAdding(true);
     try {
-      await addMember(newMemberName.trim(), {
-        loginAccount: newMemberLogin.trim(),
-        password: newMemberPassword,
-        hourlyRate: newMemberHourlyRate >= 0 ? newMemberHourlyRate : DEFAULT_HOURLY_RATE,
+      const createRes = await fetch("/api/admin/members", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: newMemberName.trim(),
+          loginAccount: newMemberLogin.trim(),
+          password: newMemberPassword,
+          hourlyRate: newMemberHourlyRate >= 0 ? newMemberHourlyRate : DEFAULT_HOURLY_RATE,
+        }),
       });
+      const createData = (await createRes.json().catch(() => ({}))) as { error?: string };
+      if (!createRes.ok) throw new Error(createData.error || "追加に失敗しました");
       const mems = await fetchMembersViaApi();
       setMembers(mems ?? []);
       setNewMemberName("");
@@ -8407,7 +8424,7 @@ function AdminDashboard(props: {
                     onClick={async () => {
                       if (!window.confirm("このメンバーを無効にしますか？一覧から非表示になりログインできなくなります。データは残り、後から「有効に戻す」で復元できます。")) return;
                       try {
-                        await updateMember(detailId, { isActive: false });
+                        await adminUpdateMemberViaApi(detailId, { isActive: false });
                         setDetailId(null);
                         setMemberDetailSaveError(null);
                         const mems = await fetchMembersViaApi();
@@ -8441,7 +8458,7 @@ function AdminDashboard(props: {
                         type="button"
                         onClick={async () => {
                           try {
-                            await updateMember(mem.id, { isActive: true });
+                            await adminUpdateMemberViaApi(mem.id, { isActive: true });
                             const mems = await fetchMembersViaApi();
                             setMembers(mems ?? []);
                             onRefresh();
@@ -8656,7 +8673,14 @@ function AdminDashboard(props: {
                     type="button"
                     onClick={async () => {
                       try {
-                        const data = await exportAllDataFromSupabase();
+                        const res = await fetch("/api/admin/backup", { credentials: "include" });
+                        const json = (await res.json().catch(() => ({}))) as {
+                          ok?: boolean;
+                          error?: string;
+                          data?: Awaited<ReturnType<typeof exportAllDataFromSupabase>>;
+                        };
+                        if (!res.ok || !json.ok || !json.data) throw new Error(json.error || "エクスポートに失敗しました");
+                        const data = json.data;
                         const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement("a");
@@ -8686,7 +8710,14 @@ function AdminDashboard(props: {
                           try {
                             const data = JSON.parse(reader.result as string);
                             if (!data || typeof data !== "object") throw new Error("不正な形式です");
-                            await importAllDataToSupabase(data);
+                            const res = await fetch("/api/admin/backup", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              credentials: "include",
+                              body: JSON.stringify(data),
+                            });
+                            const resJson = (await res.json().catch(() => ({}))) as { error?: string };
+                            if (!res.ok) throw new Error(resJson.error || "復元に失敗しました");
                             onRefresh();
                             const mems = await fetchMembersViaApi();
                             setMembers(mems ?? []);
