@@ -850,6 +850,14 @@ export async function loadRecords(): Promise<WorkRecord[]> {
   }
 }
 
+/** loadRecords の厳格版。DB読取に失敗したら [] に潰さず throw する（未打刻アラート等の誤発火防止用） */
+export async function loadRecordsOrThrow(): Promise<WorkRecord[]> {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error("データベースに接続できません");
+  const rows = await loadAllAttendanceRows(supabase);
+  return dedupeWorkRecordsByUserDateStart(rows.map(toWorkRecord));
+}
+
 export async function saveRecords(
   records: WorkRecord[],
   opts?: { bypassWorkDurationSanity?: boolean }
@@ -899,6 +907,14 @@ export async function loadOpenRecords(): Promise<OpenRecord[]> {
   } catch {
     return [];
   }
+}
+
+/** loadOpenRecords の厳格版。DB読取に失敗したら [] に潰さず throw する */
+export async function loadOpenRecordsOrThrow(): Promise<OpenRecord[]> {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error("データベースに接続できません");
+  const rows = await safeQuery<DbOpenRecord>(supabase.from("open_records").select("*"));
+  return rows.map(toOpenRecord);
 }
 
 export async function saveOpenRecords(records: OpenRecord[]): Promise<void> {
@@ -985,6 +1001,14 @@ export async function loadShifts(): Promise<Shift[]> {
   } catch {
     return [];
   }
+}
+
+/** loadShifts の厳格版。DB読取に失敗したら [] に潰さず throw する */
+export async function loadShiftsOrThrow(): Promise<Shift[]> {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error("データベースに接続できません");
+  const rows = await loadAllShiftRows(supabase);
+  return dedupeShiftsByUserDate(rows.map(toShift));
 }
 
 /** 指定期間（YYYY-MM-DD 含む）の稼働予定のみ取得 */

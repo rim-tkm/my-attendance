@@ -7,7 +7,7 @@ import {
   type Shift,
   type WorkRecord,
 } from "@/lib/attendance";
-import { loadMembers, loadOpenRecords, loadRecords, loadShifts } from "@/lib/supabase-data";
+import { loadMembers, loadOpenRecordsOrThrow, loadRecordsOrThrow, loadShiftsOrThrow } from "@/lib/supabase-data";
 import { getSupabase } from "@/lib/supabase";
 import {
   postSlackIncomingWebhook,
@@ -385,13 +385,29 @@ export async function runMissedPunchSlotReminders(options?: {
     return { ok: false, error: "Supabase is not configured" };
   }
 
-  const [membersOrNull, records, shifts, openRecs] = await Promise.all([
-    loadMembers(),
-    loadRecords(),
-    loadShifts(),
-    loadOpenRecords(),
-  ]);
-  const members = membersOrNull ?? [];
+  // 読取失敗を [] に潰す通常ローダーを使うと「全員未打刻」に見えて誤アラートが
+  // 一斉送信されるため、失敗したらこの実行自体を中断する（監査指摘 2026-08-05）。
+  let membersOrNull: Awaited<ReturnType<typeof loadMembers>>;
+  let records: Awaited<ReturnType<typeof loadRecordsOrThrow>>;
+  let shifts: Awaited<ReturnType<typeof loadShiftsOrThrow>>;
+  let openRecs: Awaited<ReturnType<typeof loadOpenRecordsOrThrow>>;
+  try {
+    [membersOrNull, records, shifts, openRecs] = await Promise.all([
+      loadMembers(),
+      loadRecordsOrThrow(),
+      loadShiftsOrThrow(),
+      loadOpenRecordsOrThrow(),
+    ]);
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    console.warn("[missed-punch] base data read failed:", detail);
+    return { ok: false, error: "DB read failed", detail };
+  }
+  if (membersOrNull === null) {
+    console.warn("[missed-punch] loadMembers failed");
+    return { ok: false, error: "DB read failed", detail: "loadMembers returned null" };
+  }
+  const members = membersOrNull;
 
   const { data: startSentRows, error: startSentErr } = await supabase
     .from("punch_start_reminder_sent")
