@@ -1,8 +1,10 @@
 import { getSupabase } from "@/lib/supabase";
+import { loadCompanyHolidays } from "@/lib/supabase-data";
 import { postSlackIncomingWebhook, resolveSlackWebhookUrl, slackWebhookMissingMessage } from "@/lib/slack-webhook";
 import {
   calcMonthlyPay,
   DEFAULT_HOURLY_RATE,
+  findCompanyHolidayForYmd,
   formatDuration,
   getKpiTotalsFromRecords,
   isWeekendYmd,
@@ -74,11 +76,11 @@ function rowToKpi(r: DbKpiRow): KpiRecord {
 
 export type SlackReportResult =
   | { ok: true; date: string; sent: true }
-  | { ok: true; date: string; sent: false; skipReason: "weekend" }
+  | { ok: true; date: string; sent: false; skipReason: "weekend" | "companyHoliday" }
   | { ok: false; error: string; detail?: string };
 
 export type SendSlackReportOptions = {
-  /** 土日（対象日の暦）でも送信する（手動検証用）。既定は土日スキップ。 */
+  /** 土日・会社休業日（対象日の暦）でも送信する（手動検証用）。既定はスキップ。 */
   bypassWeekendSkip?: boolean;
 };
 
@@ -89,9 +91,16 @@ export async function sendSlackReportForDate(
   dateStr: string,
   options?: SendSlackReportOptions
 ): Promise<SlackReportResult> {
-  // 対象日（レポート対象の日）が土日なら、稼働がない前提で送信しない。
-  if (!options?.bypassWeekendSkip && isWeekendYmd(dateStr)) {
-    return { ok: true, date: dateStr, sent: false, skipReason: "weekend" };
+  // 対象日（レポート対象の日）が土日・会社休業日なら、稼働がない前提で送信しない。
+  // 休業日のゼロ実績レポートは「昨日誰も働いていない」誤報に見えるため（監査指摘 2026-08-05）。
+  if (!options?.bypassWeekendSkip) {
+    if (isWeekendYmd(dateStr)) {
+      return { ok: true, date: dateStr, sent: false, skipReason: "weekend" };
+    }
+    const holidays = await loadCompanyHolidays();
+    if (findCompanyHolidayForYmd(holidays, dateStr)) {
+      return { ok: true, date: dateStr, sent: false, skipReason: "companyHoliday" };
+    }
   }
   const webhookUrl = resolveSlackWebhookUrl("report");
   if (!webhookUrl) {
