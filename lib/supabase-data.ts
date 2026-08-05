@@ -1528,10 +1528,40 @@ export async function setOpenRecordForUser(
     const shiftForDate = canonicalShiftForUserDate(allShiftsForPunch, userId, record.date);
     assertMemberOpenRecordPunchAllowed(record, new Date(), shiftForDate);
   }
-  const all = await loadOpenRecords();
-  const rest = all.filter((r) => r.userId !== userId);
-  const next = record ? [...rest, { ...record, userId }] : rest;
-  await saveOpenRecords(next);
+  // 自分の行だけを行単位で操作する。以前の「全件読み→filter→テーブル全置換」方式は、
+  // 同時打刻で他メンバーの行が消える lost update や、読込エラー時の [] スナップショットで
+  // 稼働中全員の未終了打刻を消す事故につながるため廃止（監査指摘 2026-08-05）。
+  const supabase = getSupabase();
+  if (!supabase) throw new Error("データベースに接続できません");
+  const { error: delErr } = await supabase.from("open_records").delete().eq("user_id", userId);
+  if (delErr) throw new Error(delErr.message);
+  if (record) {
+    const { error: insErr } = await supabase.from("open_records").insert({
+      id: record.id,
+      user_id: userId,
+      start_raw: record.startRaw,
+      start_rounded: record.startRounded,
+      date: record.date,
+    });
+    if (insErr) throw new Error(insErr.message);
+  }
+}
+
+/** 指定 id の未終了打刻のみ削除（行単位。テーブル全置換をしない） */
+export async function deleteOpenRecordsByIds(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const supabase = getSupabase();
+  if (!supabase) throw new Error("データベースに接続できません");
+  const { error } = await supabase.from("open_records").delete().in("id", ids);
+  if (error) throw new Error(error.message);
+}
+
+/** 指定ユーザー・日付の未終了打刻のみ削除（行単位。予実調整の確定時などに使用） */
+export async function deleteOpenRecordsForUserAndDate(userId: string, date: string): Promise<void> {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error("データベースに接続できません");
+  const { error } = await supabase.from("open_records").delete().eq("user_id", userId).eq("date", date);
+  if (error) throw new Error(error.message);
 }
 
 /** 保存前判定: 当該ユーザーに「稼働なし」以外の予定時間が1件でもあるか */

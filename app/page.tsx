@@ -159,7 +159,7 @@ import {
   loadShifts,
   loadKpi,
   saveRecords,
-  saveOpenRecords,
+  deleteOpenRecordsByIds,
   saveRecordsForUser,
   setOpenRecordForUser,
   saveKpiForUser,
@@ -529,15 +529,15 @@ async function runAutoComplete(
     const built = buildWorkRecordFromTimes(o.date, startHhmm, endTime, o.userId, o.id, true);
     if (built) newRecords.push(built);
   }
-  // 補完レコードが不要（全件が確定済みの残骸）でも、未終了打刻の削除は行う
-  const completedIds = new Set(openPast.map((x) => x.id));
-  const updatedOpen = openRecs.filter((r) => !completedIds.has(r.id));
+  // 補完レコードが不要（全件が確定済みの残骸）でも、未終了打刻の削除は行う。
+  // 削除は該当行のみ（全置換だと同時操作で他メンバーの行を巻き込むため）
+  const completedIds = openPast.map((x) => x.id);
   try {
     if (newRecords.length > 0) {
       const updatedRecords = [...records, ...newRecords].filter((r) => !isWeekendYmdJst(r.date));
       await saveRecords(updatedRecords);
     }
-    await saveOpenRecords(updatedOpen);
+    await deleteOpenRecordsByIds(completedIds);
     return true;
   } catch (e) {
     console.warn("runAutoComplete save error:", e);

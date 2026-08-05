@@ -18,10 +18,9 @@ import { getConcretePlannedSlots } from "@/lib/plan-actual-gap";
 import {
   deleteAttendanceRecordById,
   loadKpi,
-  loadOpenRecords,
   loadRecords,
   loadShifts,
-  saveOpenRecords,
+  deleteOpenRecordsForUserAndDate,
   savePlanActualGapResolution,
   saveRecordsForUser,
   saveShifts,
@@ -167,8 +166,7 @@ export async function applyPlanActualGapResolve(
         const del = await deleteAttendanceRecordById(r.id);
         if (!del.ok) return { ok: false, error: del.error ?? "活動記録の削除に失敗しました。" };
       }
-      const opensAbsent = await loadOpenRecords();
-      await saveOpenRecords(opensAbsent.filter((o) => !(o.userId === userId && o.date === date)));
+      await deleteOpenRecordsForUserAndDate(userId, date);
       const afterAbsent = await loadRecords();
       const userRestAbsent = getRecordsForUser(afterAbsent, userId).filter((r) => r.date !== date);
       await saveRecordsForUser(userId, userRestAbsent, { bypassPunchTimeRestrictions: true });
@@ -192,9 +190,7 @@ export async function applyPlanActualGapResolve(
       if (!del.ok) return { ok: false, error: del.error ?? "既存の活動記録の削除に失敗しました。" };
     }
 
-    const opens = await loadOpenRecords();
-    const nextOpen = opens.filter((o) => !(o.userId === userId && o.date === date));
-    await saveOpenRecords(nextOpen);
+    await deleteOpenRecordsForUserAndDate(userId, date);
 
     const afterDel = await loadRecords();
     const userRest = getRecordsForUser(afterDel, userId).filter((r) => r.date !== date);
@@ -274,8 +270,7 @@ export async function applyPlanActualGapManualOverride(
       if (!del.ok) return { ok: false, error: del.error ?? "既存の活動記録の削除に失敗しました。" };
     }
 
-    const opens = await loadOpenRecords();
-    await saveOpenRecords(opens.filter((o) => !(o.userId === userId && o.date === date)));
+    await deleteOpenRecordsForUserAndDate(userId, date);
 
     const afterDel = await loadRecords();
     const userRest = getRecordsForUser(afterDel, userId).filter((r) => r.date !== date);
