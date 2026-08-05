@@ -9,7 +9,8 @@
   - メンバー取得は 管理者=/api/admin/members（全件・PWハッシュ除外・hasPasswordフラグ）／一般=/api/member/me（本人1件のみ）。**一般メンバーのブラウザに他人の口座・住所・電話・PWハッシュが配信されなくなった**
   - 書き込みもAPI集約: 無効化/有効化・新規作成(POST /api/admin/members)・バックアップ(GET/POST /api/admin/backup)・アーカイブ画面
   - 検証: 各コミットで tsc/build ✅。ローカルで未ログイン画面・誤PWエラー表示・未認証API 401 を確認
-- **申し送り（次のアクション）**: ①本番で管理者ログイン＋メンバー一覧・一般メンバーログイン＋打刻を確認 ②問題なければ Supabase SQL Editor で `drop policy "Allow all for users" on public.users;` を実行（=公開anonキーでの users 読み書きを遮断。切り戻しSQLは RLS_MIGRATION_PLAN.md に記載）③attendance/shifts/kpis 等の運用テーブルはフェーズ2（未着手）
+- **RLS締め実施済み（2026-08-05）**: ユーザーが本番で `drop policy "Allow all for users" on public.users;` を実行。curl検証で anonキーの users 読み取り=[]（遮断✅）・attendance は従来どおり読める（フェーズ2前の想定どおり）・本番トップ200・未認証API 401 を確認。切り戻しSQLは RLS_MIGRATION_PLAN.md に記載。
+- **申し送り**: ①本番で管理者ログイン＋メンバー一覧表示、一般メンバーのログイン＋打刻を実地確認（翌朝の打刻が自然なテスト）②attendance/shifts/kpis 等の運用テーブルはフェーズ2（未着手）③初期セットアップ画面（メンバー0件時のみ）は anon 直書きのまま=RLS締め後は動かないが本番では通らない
 
 ## 2026-08-05（監査#2対応: 22エージェント点検→確定10件を1件ずつ全修正）
 
