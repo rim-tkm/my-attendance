@@ -213,23 +213,43 @@ export async function applyPlanActualGapResolve(
 
 const MANUAL_OVERRIDE_HISTORY_SOURCE = "plan_actual_gap_admin_manual";
 
+/** 予実手動確定の1枠（HH:mm）。稼働予定と同じ2部制（枠1必須・枠2任意）で指定する */
+export type PlanActualGapManualSlot = { startHhmm: string; endHhmm: string };
+
 /**
- * 管理者が開始・終了・休憩（分）を指定して活動記録を 1 件に差し替え、予実を manual で確定する。
+ * 管理者が枠1（必須）・枠2（任意）の開始・終了を1分単位で指定し、当日の活動記録を
+ * その枠数ぶん（1〜2件）に差し替え、予実を manual で確定する。休憩は枠を分けて表現する。
  * 既存の当日 attendance は削除し、修正前の attendance / KPI スナップショットを data_change_history に残す。
  */
 export async function applyPlanActualGapManualOverride(
   userId: string,
   date: string,
-  input: { startHhmm: string; endHhmm: string; breakMinutes: number },
+  input: { slots: PlanActualGapManualSlot[] },
   opts?: { adminUserId?: string | null }
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     if (isWeekendYmdJst(date)) {
       return { ok: false, error: JST_WEEKEND_WORK_REJECTED_MESSAGE };
     }
-    const startH = input.startHhmm.trim();
-    const endH = input.endHhmm.trim();
-    const breakM = Math.max(0, Math.floor(input.breakMinutes));
+    const HHMM_RE = /^\d{2}:\d{2}$/;
+    const slots = (input.slots ?? [])
+      .map((s) => ({ startHhmm: s.startHhmm.trim(), endHhmm: s.endHhmm.trim() }))
+      .filter((s) => s.startHhmm !== "" || s.endHhmm !== "");
+    if (slots.length < 1 || slots.length > 2) {
+      return { ok: false, error: "枠1（必須）と枠2（任意）の1〜2枠で指定してください。" };
+    }
+    for (const s of slots) {
+      if (!HHMM_RE.test(s.startHhmm) || !HHMM_RE.test(s.endHhmm)) {
+        return { ok: false, error: "時刻は HH:mm 形式で開始・終了の両方を入力してください。" };
+      }
+      // 同一暦日内のみ（ゼロ埋め HH:mm は文字列比較で大小が正しく判定できる）
+      if (s.endHhmm <= s.startHhmm) {
+        return { ok: false, error: "各枠の終了は開始より後の時刻にしてください。" };
+      }
+    }
+    if (slots.length === 2 && slots[1].startHhmm < slots[0].endHhmm) {
+      return { ok: false, error: "枠2の開始は枠1の終了以降にしてください。" };
+    }
 
     let shifts = await loadShifts();
     let shift = canonicalShiftForUserDate(shifts, userId, date);
@@ -251,13 +271,16 @@ export async function applyPlanActualGapManualOverride(
       if (!shift) return { ok: false, error: "稼働予定の確認に失敗しました。" };
     }
 
-    const newId = crypto.randomUUID();
-    const newRec = buildAdminExactWorkRecord(date, startH, endH, breakM, userId, newId);
-    if (!newRec) {
-      return {
-        ok: false,
-        error: "開始・終了・休憩の組み合わせが無効です（実働が 0 分以下、または時刻の形式が不正です）。",
-      };
+    const newRecs: WorkRecord[] = [];
+    for (const s of slots) {
+      const rec = buildAdminExactWorkRecord(date, s.startHhmm, s.endHhmm, 0, userId, crypto.randomUUID());
+      if (!rec) {
+        return {
+          ok: false,
+          error: "開始・終了の組み合わせが無効です（実働が 0 分以下、または時刻の形式が不正です）。",
+        };
+      }
+      newRecs.push(rec);
     }
 
     const allRecords = await loadRecords();
@@ -274,14 +297,14 @@ export async function applyPlanActualGapManualOverride(
 
     const afterDel = await loadRecords();
     const userRest = getRecordsForUser(afterDel, userId).filter((r) => r.date !== date);
-    await saveRecordsForUser(userId, [...userRest, newRec], { bypassPunchTimeRestrictions: true });
+    await saveRecordsForUser(userId, [...userRest, ...newRecs], { bypassPunchTimeRestrictions: true });
 
     /** 管理者が入力した壁時計どおりに shifts を上書き（ISO 経由の変換ズレを避ける） */
     const patch = {
-      startPlanned: startH,
-      endPlanned: endH,
-      startPlanned2: null,
-      endPlanned2: null,
+      startPlanned: slots[0].startHhmm,
+      endPlanned: slots[0].endHhmm,
+      startPlanned2: slots.length === 2 ? slots[1].startHhmm : null,
+      endPlanned2: slots.length === 2 ? slots[1].endHhmm : null,
     };
     const okShift = await updateShiftPlannedSlotsById(shift.id, patch);
     if (!okShift) return { ok: false, error: "稼働予定の更新に失敗しました。" };
@@ -294,13 +317,13 @@ export async function applyPlanActualGapManualOverride(
       kpiId: kpiBefore?.id ?? null,
       originalStart,
       originalEnd,
-      approvedStart: newRec.startRounded,
-      approvedEnd: newRec.endRounded,
+      approvedStart: newRecs[0].startRounded,
+      approvedEnd: newRecs[newRecs.length - 1].endRounded,
       adminId: opts?.adminUserId ?? null,
     });
 
     await logAttendanceAdminManualOverrideHistory({
-      newAttendanceId: newRec.id,
+      newAttendanceId: newRecs[0].id,
       userId,
       source: MANUAL_OVERRIDE_HISTORY_SOURCE,
       oldRow: {
@@ -310,8 +333,10 @@ export async function applyPlanActualGapManualOverride(
         },
       },
       newRow: {
-        確定後の活動記録: workRecordToHistoryJson(newRec),
-        admin_input: { start_hhmm: startH, end_hhmm: endH, break_minutes: breakM },
+        確定後の活動記録: newRecs.map(workRecordToHistoryJson),
+        admin_input: {
+          slots: slots.map((s) => ({ start_hhmm: s.startHhmm, end_hhmm: s.endHhmm })),
+        },
         resolution: "manual",
       },
     });

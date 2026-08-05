@@ -1500,11 +1500,11 @@ function AdminDashboard(props: {
   planActualGapApprovedKeys: Set<string>;
   planActualGapResolutionByKey: Map<string, PlanActualGapResolution | null>;
   onResolvePlanActualGap: (userId: string, date: string, mode: PlanActualGapResolution) => Promise<void>;
-  /** 予実調整の「手動で時間を編集」（管理者のみ UI 表示） */
+  /** 予実調整の「手動で時間を編集」（管理者のみ UI 表示）。枠1必須・枠2任意の2部制入力 */
   onApplyManualPlanActualGap?: (
     userId: string,
     date: string,
-    input: { startHhmm: string; endHhmm: string; breakMinutes: number }
+    input: { slots: { startHhmm: string; endHhmm: string }[] }
   ) => Promise<void>;
   deepLinkMemberId?: string;
   onAdminDeepLinkConsumed?: () => void;
@@ -2051,7 +2051,9 @@ function AdminDashboard(props: {
     date: string;
     start: string;
     end: string;
-    breakMin: string;
+    /** 枠2（任意）。両方空なら1枠のみで確定 */
+    start2: string;
+    end2: string;
   }>(null);
   const [roiYearMonth, setRoiYearMonth] = useState(() => {
     const d = new Date();
@@ -2528,15 +2530,29 @@ function AdminDashboard(props: {
     );
     let start = "09:00";
     let end = "18:00";
+    let start2 = "";
+    let end2 = "";
     if (dayRecs.length > 0) {
-      start = localHhmmFromAttendanceIso(dayRecs[0].startRounded);
-      end = localHhmmFromAttendanceIso(dayRecs[dayRecs.length - 1].endRounded);
+      // 既存記録が2件以上ある日は枠1=最初の記録、枠2=2件目〜最後の記録として初期表示する
+      if (dayRecs.length >= 2) {
+        start = localHhmmFromAttendanceIso(dayRecs[0].startRounded);
+        end = localHhmmFromAttendanceIso(dayRecs[0].endRounded);
+        start2 = localHhmmFromAttendanceIso(dayRecs[1].startRounded);
+        end2 = localHhmmFromAttendanceIso(dayRecs[dayRecs.length - 1].endRounded);
+      } else {
+        start = localHhmmFromAttendanceIso(dayRecs[0].startRounded);
+        end = localHhmmFromAttendanceIso(dayRecs[dayRecs.length - 1].endRounded);
+      }
     } else {
       const sh = canonicalShiftForUserDate(allShifts, r.userId, r.date);
       const slots = sh ? getConcretePlannedSlots(sh) : [];
       if (slots.length > 0) {
         start = slots[0].start;
         end = slots[0].end;
+      }
+      if (slots.length > 1) {
+        start2 = slots[1].start;
+        end2 = slots[1].end;
       }
     }
     setGapManualEditor({
@@ -2545,7 +2561,8 @@ function AdminDashboard(props: {
       date: r.date,
       start: normalizeTimeInputValue(start),
       end: normalizeTimeInputValue(end),
-      breakMin: "0",
+      start2: start2 === "" ? "" : normalizeTimeInputValue(start2),
+      end2: end2 === "" ? "" : normalizeTimeInputValue(end2),
     });
   };
 
@@ -2576,15 +2593,20 @@ function AdminDashboard(props: {
 
   const handleGapManualSave = async () => {
     if (!gapManualEditor || !onApplyManualPlanActualGap) return;
+    const s2 = gapManualEditor.start2.trim();
+    const e2 = gapManualEditor.end2.trim();
+    if ((s2 === "") !== (e2 === "")) {
+      setGapActionToast({ message: "枠2は開始・終了の両方を入力するか、両方空にしてください。", isError: true });
+      return;
+    }
     setGapApprovalBusy(true);
     setGapActionToast(null);
     try {
-      const br = Math.max(0, Number.parseInt(gapManualEditor.breakMin, 10) || 0);
-      await onApplyManualPlanActualGap(gapManualEditor.userId, gapManualEditor.date, {
-        startHhmm: normalizeTimeInputValue(gapManualEditor.start),
-        endHhmm: normalizeTimeInputValue(gapManualEditor.end),
-        breakMinutes: br,
-      });
+      const slots = [
+        { startHhmm: normalizeTimeInputValue(gapManualEditor.start), endHhmm: normalizeTimeInputValue(gapManualEditor.end) },
+        ...(s2 !== "" ? [{ startHhmm: normalizeTimeInputValue(s2), endHhmm: normalizeTimeInputValue(e2) }] : []),
+      ];
+      await onApplyManualPlanActualGap(gapManualEditor.userId, gapManualEditor.date, { slots });
       setGapManualEditor(null);
       setGapActionToast({ message: "手動確定を保存しました。", isError: false });
     } catch (e) {
@@ -6443,9 +6465,10 @@ function AdminDashboard(props: {
                           {gapManualEditor?.key === gapApproveKey && isAdminUser && onApplyManualPlanActualGap && (
                             <div className="mt-2 space-y-2 rounded-lg border border-emerald-200 bg-emerald-50/40 p-2.5">
                               <p className="text-[10px] leading-snug text-emerald-950 sm:text-[11px]">
-                                開始・終了・休憩（分）を1分単位で指定し、当日の活動記録を1件に差し替えます。保存すると予実は「手動確定」となり、修正前の活動記録とKPIは監査ログに残ります。
+                                稼働予定と同じ2部制（枠1必須・枠2任意）で1分単位の時刻を指定し、当日の活動記録を枠数ぶんに差し替えます。休憩は枠1と枠2の間の空き時間で表現してください。保存すると予実は「手動確定」となり、修正前の活動記録とKPIは監査ログに残ります。
                               </p>
                               <div className="flex flex-wrap items-end gap-2">
+                                <span className="pb-1 text-[10px] font-medium text-slate-500">枠1</span>
                                 <label className="flex flex-col gap-0.5 text-[10px] font-medium text-slate-700">
                                   開始
                                   <input
@@ -6478,23 +6501,52 @@ function AdminDashboard(props: {
                                     className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
                                   />
                                 </label>
+                                <span className="pb-1 text-[10px] font-medium text-slate-500">枠2（任意）</span>
                                 <label className="flex flex-col gap-0.5 text-[10px] font-medium text-slate-700">
-                                  休憩（分）
+                                  開始
                                   <input
-                                    type="number"
-                                    min={0}
-                                    step={1}
-                                    value={gapManualEditor.breakMin}
+                                    type="time"
+                                    step={60}
+                                    value={gapManualEditor.start2}
                                     onChange={(e) =>
                                       setGapManualEditor((prev) =>
                                         prev && prev.key === gapApproveKey
-                                          ? { ...prev, breakMin: e.target.value }
+                                          ? { ...prev, start2: e.target.value }
                                           : prev
                                       )
                                     }
-                                    className="w-20 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
                                   />
                                 </label>
+                                <label className="flex flex-col gap-0.5 text-[10px] font-medium text-slate-700">
+                                  終了
+                                  <input
+                                    type="time"
+                                    step={60}
+                                    value={gapManualEditor.end2}
+                                    onChange={(e) =>
+                                      setGapManualEditor((prev) =>
+                                        prev && prev.key === gapApproveKey
+                                          ? { ...prev, end2: e.target.value }
+                                          : prev
+                                      )
+                                    }
+                                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900"
+                                  />
+                                </label>
+                                {(gapManualEditor.start2 !== "" || gapManualEditor.end2 !== "") && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setGapManualEditor((prev) =>
+                                        prev && prev.key === gapApproveKey ? { ...prev, start2: "", end2: "" } : prev
+                                      )
+                                    }
+                                    className="pb-1 text-[10px] text-slate-500 underline hover:text-slate-700"
+                                  >
+                                    枠2をクリア
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   disabled={gapApprovalBusy}
