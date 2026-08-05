@@ -35,7 +35,7 @@ export function calcInvoiceAmounts(
   hourlyRateTaxInclusive: number
 ): { totalWithTax: number; subtotal: number; taxRate: number } {
   const totalWithTax = Math.round((totalMinutes / 60) * hourlyRateTaxInclusive);
-  const subtotal = Math.floor(totalWithTax / 1.1);
+  const subtotal = Math.floor((totalWithTax * 10) / 11);
   const taxRate = totalWithTax - subtotal;
   return { totalWithTax, subtotal, taxRate };
 }

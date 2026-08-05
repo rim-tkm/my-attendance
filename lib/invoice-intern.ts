@@ -26,7 +26,9 @@ export function sumInternConfirmedAppsForMonth(
 /** 行ごと税込→税抜・消費税（請求書 PDF と同一の端数処理） */
 export function splitTaxInclusiveLineAmount(taxInclusive: number): { subtotal: number; tax: number; total: number } {
   const total = Math.max(0, Math.round(taxInclusive));
-  const subtotal = Math.floor(total / 1.1);
+  // 税抜 = 税込×10/11。`total / 1.1` は二進浮動小数点で 99.999... になる値があり
+  // floor で1円ズレるため、整数のまま計算する（例: 税込110円 → 旧式99円/正100円）
+  const subtotal = Math.floor((total * 10) / 11);
   const tax = total - subtotal;
   return { subtotal, tax, total };
 }
@@ -67,7 +69,7 @@ export function calcInternInvoiceAmounts(
   const decisionAmount = totals.decisionCount * rates.decisionMaker;
   const nonDecisionAmount = totals.nonDecisionCount * rates.nonDecisionMaker;
   const totalWithTax = decisionAmount + nonDecisionAmount;
-  const subtotal = Math.floor(totalWithTax / 1.1);
+  const subtotal = Math.floor((totalWithTax * 10) / 11);
   const taxRate = totalWithTax - subtotal;
   return { totalWithTax, subtotal, taxRate, decisionAmount, nonDecisionAmount };
 }
