@@ -1,5 +1,5 @@
 import type { KpiRecord, Member, WorkRecord } from "@/lib/attendance";
-import { getTotalMinutesForUserInDateRange } from "@/lib/attendance";
+import { sumBillableMinutesForUserMonth } from "@/lib/attendance";
 import { calcMemberMonthlyPayYen, isInternMember, splitTaxInclusiveLineAmount } from "@/lib/invoice-intern";
 
 /**
@@ -57,14 +57,12 @@ export function buildFreeeDealRows(input: {
   defaultHourlyRate: number;
 }): FreeeDealRow[] {
   const { members, records, kpiRecords, yearMonth, defaultHourlyRate } = input;
-  const start = `${yearMonth}-01`;
-  const [y, m] = yearMonth.split("-").map(Number);
-  const end = `${yearMonth}-${pad2(new Date(y, m, 0).getDate())}`;
   const rows: FreeeDealRow[] = [];
   for (const member of members) {
-    if (member.isActive === false) continue;
+    // 月の途中で無効化されたメンバーの支払い漏れを防ぐため、有効/無効は問わず「対象月に支払いが発生するか」で判定する
     if ((member.loginAccount ?? "").trim().toLowerCase() === "admin") continue;
-    const minutes = getTotalMinutesForUserInDateRange(records, member.id, start, end);
+    // 請求書PDF・一括記帳と同一の集計（旧形式日付の正規化・duration異常時の打刻時刻からの再計算を含む）
+    const minutes = sumBillableMinutesForUserMonth(records, member.id, yearMonth);
     const amount = calcMemberMonthlyPayYen(member, minutes, kpiRecords, yearMonth, defaultHourlyRate);
     if (amount <= 0) continue;
     const hasInvoiceRegistration = (member.invoiceRegistrationNumber ?? "").trim() !== "";

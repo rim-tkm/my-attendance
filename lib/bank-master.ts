@@ -59,12 +59,31 @@ export function normalizeBankNameQuery(raw: string): string {
       .replace(/自分銀行/g, "じぶん銀行") // 「au自分銀行」→ 正式「auじぶん銀行」
   );
   return base
-    .replace(/^ja/, "") // 「JA兵庫西」→ マスタは「兵庫西農協」（前方一致で解決）
     .replace(/信用金庫$/, "信金")
     .replace(/信用組合$/, "信組")
     .replace(/労働金庫$/, "労金")
     .replace(/農業協同組合$/, "農協")
     .replace(/銀行$/, "");
+}
+
+/**
+ * 「JA〇〇」表記の照合。JAプレフィックスを外した名前は「横浜」のように市中銀行名と衝突する
+ * （JA横浜→横浜銀行の誤マッチで振込先を取り違える）ため、候補を農協系（名称が農協・信連等で終わる行）に限定する。
+ */
+function matchJaBank(rawName: string): BankMasterHit | null {
+  const base = normalizeBankNameQuery(rawName);
+  if (!/^ja/.test(base)) return null;
+  const q = base.replace(/^ja/, "");
+  if (q === "") return null;
+  const isAgri = (name: string) => /(農協|信連|漁協|信漁連|農林)$/.test(name);
+  const exact = data.banks.filter(
+    (e) => isAgri(e.n) && (normalizeForMatch(e.n).replace(/(農協|信連|漁協|信漁連)$/, "") === q || normalizeForMatch(e.n) === q)
+  );
+  if (exact.length === 1) return { code: exact[0].c, name: exact[0].n, kana: exact[0].k };
+  if (exact.length > 1) return null;
+  const prefix = data.banks.filter((e) => isAgri(e.n) && normalizeForMatch(e.n).startsWith(q));
+  if (prefix.length === 1) return { code: prefix[0].c, name: prefix[0].n, kana: prefix[0].k };
+  return null;
 }
 
 /** マスタの銀行名（種別語なしの略称が多い）を保存・表示用に補う。信金・信組等の種別語付きはそのまま */
@@ -121,6 +140,10 @@ export function searchBranches(bankCode: string, query: string, limit = 20): Ban
 export function matchBankByName(rawName: string): BankMasterHit | null {
   const q = normalizeBankNameQuery(rawName);
   if (q === "") return null;
+  // 「JA〇〇」は農協系に限定した専用照合を最優先（JA横浜→横浜銀行のような誤マッチ防止）
+  if (/^ja/.test(q)) {
+    return matchJaBank(rawName);
+  }
   const exact = data.banks.filter((e) => normalizeForMatch(e.n) === q || normalizeForMatch(e.h) === q);
   if (exact.length === 1) return { code: exact[0].c, name: exact[0].n, kana: exact[0].k };
   if (exact.length > 1) return null;

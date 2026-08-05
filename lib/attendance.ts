@@ -1628,10 +1628,10 @@ export function getTotalMinutesForUserInDateRange(
   ).reduce((sum, r) => sum + r.durationMinutes, 0);
 }
 
-/** 月間概算委託料（分・委託料単価 → 円） */
+/** 月間概算委託料（分・委託料単価 → 円）。丸めは請求書PDF（calcInvoiceAmounts）と同じ四捨五入で統一 */
 export function calcMonthlyPay(totalMinutes: number, hourlyRate: number): number {
   if (!Number.isFinite(totalMinutes) || !Number.isFinite(hourlyRate) || hourlyRate < 0) return 0;
-  return Math.floor((totalMinutes / 60) * hourlyRate);
+  return Math.round((totalMinutes / 60) * hourlyRate);
 }
 
 /** 指定日の KPI（既定スロット 00:00 を優先） */

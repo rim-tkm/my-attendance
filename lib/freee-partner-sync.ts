@@ -156,46 +156,81 @@ export async function syncAllMembersToFreee(): Promise<FreeeSyncSummary> {
     };
   }
 
-  /** 更新後に freee 側へ口座が本当に入ったか検証。未反映なら口座含む最小ペイロードで1回リトライ */
+  /**
+   * 更新後に freee 側の口座が「送信した内容と一致しているか」を検証。
+   * 不一致（freee が PUT の口座属性を黙って無視するケース・旧口座が残るケース）なら
+   * 口座のみの最小ペイロードで1回リトライし、それでも一致しなければ ⚠️ で報告する。
+   */
   const ensureBankAccountApplied = async (partnerId: number, payload: FreeePartnerPayload): Promise<string | null> => {
-    if (payload.partner_bank_account_attributes == null) return null; // 口座未登録メンバーは対象外
-    const fetchBank = async () => {
+    const sent = payload.partner_bank_account_attributes as
+      | { bank_code?: string; branch_code?: string; account_number?: string }
+      | undefined;
+    if (sent == null) return null; // 口座未登録メンバーは対象外
+    const digitsOf = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+    const stripZeros = (v: unknown) => digitsOf(v).replace(/^0+/, "");
+    const matchesSent = async () => {
       const res = await freeeRequest<{
-        partner?: { partner_bank_account_attributes?: { bank_name?: string | null; account_number?: string | null } | null };
+        partner?: {
+          partner_bank_account_attributes?: {
+            bank_code?: string | null;
+            branch_code?: string | null;
+            account_number?: string | null;
+          } | null;
+        };
       }>(access.accessToken, "GET", `/api/1/partners/${partnerId}?company_id=${access.companyId}`);
       const b = res.partner?.partner_bank_account_attributes;
-      return !!b && (((b.bank_name ?? "") !== "") || ((b.account_number ?? "") !== ""));
+      if (!b) return false;
+      // 口座番号は必須一致。コードは送信した場合のみ一致を要求（先頭ゼロの揺れは無視）
+      if (digitsOf(b.account_number) !== digitsOf(sent.account_number)) return false;
+      if (digitsOf(sent.bank_code) !== "" && stripZeros(b.bank_code) !== stripZeros(sent.bank_code)) return false;
+      if (digitsOf(sent.branch_code) !== "" && stripZeros(b.branch_code) !== stripZeros(sent.branch_code)) return false;
+      return true;
     };
-    if (await fetchBank()) return null;
+    if (await matchesSent()) return null;
     await freeeRequest(access.accessToken, "PUT", `/api/1/partners/${partnerId}`, {
       company_id: access.companyId,
       name: payload.name,
       partner_bank_account_attributes: payload.partner_bank_account_attributes,
     });
-    if (await fetchBank()) return "口座情報は再送信で反映されました";
-    return "⚠️ 口座情報がfreeeに反映されていません（要確認）";
+    if (await matchesSent()) return "口座情報は再送信で反映されました";
+    return "⚠️ 口座情報がfreeeに反映されていません（freee側に旧い口座が残っている可能性。要確認）";
   };
+
+  // 同姓同名（空白無視）のメンバーが複数いる場合、名前ベースの処理は振込先取り違えに直結するため要手動対応にする
+  const memberNameCounts = new Map<string, number>();
+  for (const m of targets) {
+    const k = normalizeMemberName(m.name);
+    memberNameCounts.set(k, (memberNameCounts.get(k) ?? 0) + 1);
+  }
 
   for (const m of targets) {
     const payload = buildFreeePartnerPayload(m, access.companyId);
     try {
       if (m.freeePartnerId != null) {
+        // ID紐付け済みの更新は同名がいても安全（freee内部IDで更新するため）
         await freeeRequest(access.accessToken, "PUT", `/api/1/partners/${m.freeePartnerId}`, payload);
         const bankNote = await ensureBankAccountApplied(m.freeePartnerId, payload);
         updated++;
         results.push({ name: m.name, action: "updated", ...(bankNote ? { detail: bankNote } : {}) });
         continue;
       }
-      const existingId = partnersByNormalizedName.get(normalizeMemberName(m.name));
-      if (existingId != null) {
-        await freeeRequest(access.accessToken, "PUT", `/api/1/partners/${existingId}`, payload);
-        await savePartnerId(m.id, existingId);
-        const bankNote = await ensureBankAccountApplied(existingId, payload);
-        updated++;
+      // 未紐付けメンバー: 名前一致による既存取引先への自動紐付けは廃止（無関係の同名取引先の
+      // 口座・住所を上書きする事故を防ぐ）。同名の取引先が freee にいる場合は作成もせず要確認で報告する。
+      if ((memberNameCounts.get(normalizeMemberName(m.name)) ?? 0) > 1) {
         results.push({
           name: m.name,
-          action: "updated",
-          detail: bankNote ?? "freee側の既存取引先に自動紐付けしました",
+          action: "error",
+          detail:
+            "⚠️ 同姓同名のメンバーがアプリ内に複数存在するため自動同期を停止しました（取り違え防止）。管理者にて確認してください",
+        });
+        continue;
+      }
+      if (partnersByNormalizedName.has(normalizeMemberName(m.name))) {
+        results.push({
+          name: m.name,
+          action: "error",
+          detail:
+            "⚠️ freeeに同名の取引先が既に存在するため、誤った紐付けを避けて自動登録を停止しました。freee側の同名取引先がこのメンバー本人か確認し、本人なら freee 側の取引先名を一時的に変更（例: 末尾に旧）してから同期→新規作成後に旧取引先を整理してください",
         });
         continue;
       }

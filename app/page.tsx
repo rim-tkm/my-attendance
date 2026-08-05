@@ -11148,6 +11148,13 @@ export default function DashboardPage() {
     const accDigits = digitsOf(acc);
     if (acc !== "" && (accDigits.length === 0 || accDigits.length > 8)) {
       w.account = "口座番号が正しくない可能性があります（通常は7桁以内。ゆうちょは通帳の「番号」8桁でも可）";
+    } else if (
+      (currentMember.bankName ?? "").includes("ゆうちょ") &&
+      accDigits.length === 7 &&
+      accDigits.endsWith("1")
+    ) {
+      w.account =
+        "ゆうちょの口座番号が通帳の「番号」か振込用番号か判別できません。振込用の7桁（ゆうちょ公式の変換後の番号）かご確認ください";
     }
     const invReg = (currentMember.invoiceRegistrationNumber ?? "").trim();
     if (invReg !== "" && !/^T[1-9][0-9]{12}$/.test(invReg.normalize("NFKC").replace(/[\s　-]/g, ""))) {

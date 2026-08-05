@@ -89,5 +89,6 @@ export function calcMemberMonthlyPayYen(
   }
   const rate = member.hourlyRate != null ? member.hourlyRate : hourlyRateFallback;
   if (!Number.isFinite(totalMinutes) || !Number.isFinite(rate) || rate < 0) return 0;
-  return Math.floor((totalMinutes / 60) * rate);
+  // 丸めは請求書PDF（calcInvoiceAmounts の Math.round）と同一にし、freee外注費CSV等との1円ズレを防ぐ
+  return Math.round((totalMinutes / 60) * rate);
 }

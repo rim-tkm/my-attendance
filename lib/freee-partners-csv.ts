@@ -152,14 +152,18 @@ export function branchNameForFreee(branchName: string): string {
  * 振込用の口座番号に正規化する（freee は7桁まで・半角数字のみ）。
  * - 全角数字は半角化し、数字以外（スペース・ハイフン等）は区切りとして扱い、最後の数字列を採用
  *   （ゆうちょで「記号 番号」を続けて入力しているケースは番号側を取る）
- * - ゆうちょ銀行の通帳の「番号」8桁（末尾は必ず1）は、公式ルールどおり末尾の1を除いた振込用7桁に変換
+ * - ゆうちょ銀行の通帳の「番号」（2〜8桁・末尾は必ず1）は、公式ルールどおり
+ *   末尾の1を除いて7桁になるまで先頭を0埋めした振込用番号に変換する（例: 2345671 → 0234567）。
+ *   ちょうど7桁で末尾1の場合のみ「変換済みの振込用番号」の可能性と曖昧なため、そのまま通す。
  */
 export function accountNumberForTransfer(accountNumberRaw: string, bankName: string, bankCode: string): string {
   const digitRuns = accountNumberRaw.normalize("NFKC").match(/\d+/g) ?? [];
   if (digitRuns.length === 0) return "";
   let num = digitRuns[digitRuns.length - 1];
   const isYucho = bankCode.trim() === "9900" || bankName.includes("ゆうちょ");
-  if (isYucho && num.length === 8 && num.endsWith("1")) num = num.slice(0, 7);
+  if (isYucho && num.endsWith("1") && num.length >= 2 && num.length <= 8 && num.length !== 7) {
+    num = num.slice(0, -1).padStart(7, "0");
+  }
   return num;
 }
 
