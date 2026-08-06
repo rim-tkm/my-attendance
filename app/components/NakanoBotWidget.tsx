@@ -548,9 +548,14 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
             {sending ? "送信中…" : "送信"}
           </button>
         </div>
-        {available && remainingHour != null && remainingDay != null && (
+        {/*
+          残り回数は普段は出さない。上限があることを常時見せると
+          「制限されている」印象が先に立ち、使ってほしい人が遠慮してしまうため。
+          残りわずかなときだけ知らせる（何も言わずに突然止まるのは避ける）。
+        */}
+        {available && remainingHour != null && remainingHour <= 2 && (
           <p className="mt-1.5 text-[10px] text-slate-500">
-            残り 1時間あたり {remainingHour} 回 ／ 今日 {remainingDay} 回
+            続けて質問できるのはあと {remainingHour} 回です
           </p>
         )}
       </div>

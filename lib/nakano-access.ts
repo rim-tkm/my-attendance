@@ -12,8 +12,9 @@ import { timeToMinutes } from "@/lib/attendance";
 import { getTodayJstDateString } from "@/lib/export-schedule";
 import { isNakanoAdmin, isNakanoAvailableTo } from "@/lib/nakano";
 
-// 1人あたりの上限。運用判断で 10/30 から引き下げた（2026-08-06）。
-export const NAKANO_DEFAULT_HOURLY_LIMIT = 5;
+// 1人あたりの上限。10/30 → 5/15 に下げたのち、時間帯制限の撤廃にあわせて時間あたりを10に戻した（2026-08-06）。
+// メンバーには回数を告知しない方針なので、上限は「気づかれずに暴走を止める」水準に置く。
+export const NAKANO_DEFAULT_HOURLY_LIMIT = 10;
 export const NAKANO_DEFAULT_DAILY_LIMIT = 15;
 export const NAKANO_DEFAULT_SHIFT_MARGIN_MINUTES = 30;
 
