@@ -9023,12 +9023,25 @@ const ENTRY_NONE = "なし";
 
 type WeekFormState = Record<string, { s1: string; e1: string; s2: string; e2: string }>;
 
-function ShiftDeadlineCountdown({ todayJstYmd }: { todayJstYmd: string }) {
+function ShiftDeadlineCountdown({ todayJstYmd, submitted }: { todayJstYmd: string; submitted: boolean }) {
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = window.setInterval(() => setTick((n) => n + 1), 30_000);
     return () => window.clearInterval(id);
   }, []);
+
+  if (submitted) {
+    return (
+      <section className="mb-6 rounded-xl border-2 border-emerald-300 bg-emerald-50 p-5 shadow-md sm:p-6">
+        <p className="text-center text-base font-bold text-emerald-900 sm:text-lg">
+          来週の稼働予定は提出済みです
+        </p>
+        <p className="mt-2 text-center text-xs text-emerald-800 sm:text-sm">
+          変更する場合は「稼働予定」タブから締切（前週の日曜 23:59・日本時間）までに修正してください。
+        </p>
+      </section>
+    );
+  }
 
   const thisMon = getMondayOfCalendarWeekForYmd(todayJstYmd);
   const nextWeekMon = addWeeksToWeekStart(thisMon, 1);
@@ -11319,6 +11332,12 @@ export default function DashboardPage() {
         })
       : [];
 
+  /** 振込先フォームは既定で折りたたむ（毎日使う打刻を上に出すため）。未入力がある人は自動で開く */
+  const [billingProfileOpen, setBillingProfileOpen] = useState(false);
+  useEffect(() => {
+    if (memberMissingProfileItems.length > 0) setBillingProfileOpen(true);
+  }, [memberMissingProfileItems.length]);
+
   /** 月が変わって最初のログインで、本人に登録情報の確認を求める（管理者・未ログイン・確認済みの月は出さない）。
    *  不足項目がある場合は月次確認済みでも表示する（不足の回収を優先） */
   const showMonthlyProfileConfirm =
@@ -12029,7 +12048,7 @@ export default function DashboardPage() {
           />
         ) : tab === "home" ? (
           <>
-            <ShiftDeadlineCountdown todayJstYmd={getTodayJstDateString()} />
+            <ShiftDeadlineCountdown todayJstYmd={getTodayJstDateString()} submitted={memberHasEntryForTargetWeek} />
             {!memberHasEntryForTargetWeek && (
               <section className="mb-6 rounded-xl border-2 border-amber-400 bg-amber-50 p-5 shadow-md">
                 <h2 className="mb-2 text-base font-bold text-amber-900">次週の稼働予定が登録されていません</h2>
@@ -12044,217 +12063,6 @@ export default function DashboardPage() {
                 </button>
               </section>
             )}
-            <section className="mb-6 rounded-xl bg-slate-800 p-6 text-white shadow-md sm:mb-8">
-              <h2 className="mb-1 text-sm font-medium text-slate-300">当日の活動時間</h2>
-              <p className="text-3xl font-bold sm:text-4xl">{formatDuration(todayMinutes)}</p>
-            </section>
-
-            <section className="mb-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:mb-8 sm:p-6">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-sm font-medium text-slate-600">{isCurrentMonth ? "今月の活動時間" : "選択月の活動時間"}</h2>
-                <select
-                  value={currentYearMonth}
-                  onChange={(e) => setSelectedMonth(e.target.value)}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
-                >
-                  {selectableMonths.map((ym) => {
-                    const [y, m] = ym.split("-");
-                    const label =
-                      ym === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}` ? `${y}年${m}月（今月）` : `${y}年${m}月`;
-                    return (
-                      <option key={ym} value={ym}>
-                        {label}
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-              <p className="text-2xl font-bold text-slate-800 sm:text-3xl">{formatDuration(totalMinutes)}</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMemberReportMonth(getLastMonthString());
-                    setShowMemberReportModal(true);
-                  }}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-                >
-                  PDFダウンロード（請求書・実績レポート）
-                </button>
-              </div>
-            </section>
-
-            {memberInternConfirmedReward != null ? (
-              <section className="mb-6 rounded-xl border-2 border-violet-200 bg-violet-50 p-5 shadow-sm sm:mb-8 sm:p-6">
-                <h2 className="text-sm font-medium text-violet-900">
-                  {isCurrentMonth ? "今月の確定報酬額" : "選択月の確定報酬額"}
-                  <span className="ml-1 font-normal text-violet-700">（管理者承認済み合計）</span>
-                </h2>
-                <p className="mt-2 text-2xl font-bold text-violet-950 sm:text-3xl">
-                  ¥{memberInternConfirmedReward.amount.toLocaleString()}
-                </p>
-                <p className="mt-2 text-xs leading-relaxed text-violet-800">
-                  決裁者商談 {memberInternConfirmedReward.totals.decisionCount}件 × ¥
-                  {memberInternConfirmedReward.rates.decisionMaker.toLocaleString()}
-                  {" ／ "}
-                  非決裁者商談 {memberInternConfirmedReward.totals.nonDecisionCount}件 × ¥
-                  {memberInternConfirmedReward.rates.nonDecisionMaker.toLocaleString()}
-                </p>
-              </section>
-            ) : null}
-
-            {currentMember && !isAdminUser ? (
-              <section id="member-billing-profile" className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:mb-8 sm:p-6">
-                <h2 className="mb-1 text-sm font-semibold text-slate-800">振込先・インボイス設定</h2>
-                <p className="mb-4 text-xs leading-relaxed text-slate-600">
-                  経理・請求書に印字される情報です。
-                  <span className="font-medium text-slate-700">請求管理番号（3桁）</span>
-                  は管理者が付与するため、ここでは変更できません（表示のみ）。
-                </p>
-                <form onSubmit={(e) => void handleSaveMemberSelfBankProfile(e)} className="space-y-4">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="sm:col-span-2">
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">請求管理番号（3桁）</label>
-                      <input
-                        type="text"
-                        readOnly
-                        disabled
-                        tabIndex={-1}
-                        aria-readonly="true"
-                        value={
-                          formatMemberInvoiceNumberThreeDigits(currentMember.invoiceNumber) ??
-                          "未設定（管理者が登録します）"
-                        }
-                        className="w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-700"
-                      />
-                      <p className="mt-1 text-[11px] text-slate-500">管理者のみ変更できます。保存時に送信されません。</p>
-                    </div>
-                    <div>
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">郵便番号</label>
-                      <input
-                        type="text"
-                        value={memberSelfBankDraft.postalCode}
-                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, postalCode: e.target.value }))}
-                        placeholder="例: 100-0001"
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                      />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">住所（都道府県〜番地）</label>
-                      <input
-                        type="text"
-                        value={memberSelfBankDraft.address}
-                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, address: e.target.value }))}
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                      />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">建物名・部屋番号など（任意）</label>
-                      <input
-                        type="text"
-                        value={memberSelfBankDraft.address2}
-                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, address2: e.target.value }))}
-                        placeholder="例: 〇〇マンション201"
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                      />
-                    </div>
-                    <BankMasterAutocompleteField
-                      label="銀行名"
-                      name={memberSelfBankDraft.bankName}
-                      code={memberSelfBankDraft.bankCode}
-                      onPick={(name, code) =>
-                        setMemberSelfBankDraft((d) => ({
-                          ...d,
-                          bankName: name,
-                          bankCode: code,
-                          // 銀行を変えたら支店コードの確定は無効（別銀行の支店コードが残らないように）
-                          branchCode: code === d.bankCode ? d.branchCode : "",
-                        }))
-                      }
-                      inputClassName="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                    />
-                    <BankMasterAutocompleteField
-                      label="支店名"
-                      name={memberSelfBankDraft.branchName}
-                      code={memberSelfBankDraft.branchCode}
-                      branchOfBankCode={memberSelfBankDraft.bankCode}
-                      onPick={(name, code) => setMemberSelfBankDraft((d) => ({ ...d, branchName: name, branchCode: code }))}
-                      inputClassName="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                    />
-                    <div>
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">口座種別</label>
-                      <select
-                        value={memberSelfBankDraft.accountType}
-                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, accountType: e.target.value }))}
-                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
-                      >
-                        <option value="普通">普通</option>
-                        <option value="当座">当座</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">口座番号</label>
-                      <input
-                        type="text"
-                        value={memberSelfBankDraft.accountNumber}
-                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, accountNumber: e.target.value }))}
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                      />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">口座名義</label>
-                      <input
-                        type="text"
-                        value={memberSelfBankDraft.accountHolder}
-                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, accountHolder: e.target.value }))}
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                      />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">電話番号</label>
-                      <input
-                        type="text"
-                        value={memberSelfBankDraft.phoneNumber}
-                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, phoneNumber: e.target.value }))}
-                        placeholder="03-1234-5678"
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                      />
-                    </div>
-                    <div className="sm:col-span-2">
-                      <label className="mb-0.5 block text-xs font-medium text-slate-600">
-                        適格請求書発行事業者登録番号
-                      </label>
-                      <input
-                        type="text"
-                        value={memberSelfBankDraft.invoiceRegistrationNumber}
-                        onChange={(e) =>
-                          setMemberSelfBankDraft((d) => ({
-                            ...d,
-                            invoiceRegistrationNumber: sanitizeInvoiceRegistrationInput(e.target.value),
-                          }))
-                        }
-                        placeholder="T1234567890123"
-                        maxLength={14}
-                        className="w-full max-w-md rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono text-slate-800"
-                      />
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        任意。T + 13桁（例: T1234567890123）。登録すると請求書のお振込先欄に表示されます。
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <button
-                      type="submit"
-                      disabled={memberSelfBankProfileBusy}
-                      className="rounded-lg bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {memberSelfBankProfileBusy ? "保存中…" : "保存する"}
-                    </button>
-                  </div>
-                </form>
-              </section>
-            ) : null}
-
             <section className="mb-6 sm:mb-8">
               <h2 className="mb-3 text-center text-sm font-semibold uppercase tracking-wide text-slate-500">打刻</h2>
               {memberPunchContext && (
@@ -12397,6 +12205,227 @@ export default function DashboardPage() {
                 )}
               <p className="mt-3 text-center text-xs text-slate-500">KPI入力は「KPI入力」タブからいつでも行えます</p>
             </section>
+
+            <section className="mb-6 rounded-xl bg-slate-800 p-6 text-white shadow-md sm:mb-8">
+              <h2 className="mb-1 text-sm font-medium text-slate-300">当日の活動時間</h2>
+              <p className="text-3xl font-bold sm:text-4xl">{formatDuration(todayMinutes)}</p>
+            </section>
+
+            <section className="mb-6 rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:mb-8 sm:p-6">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-medium text-slate-600">{isCurrentMonth ? "今月の活動時間" : "選択月の活動時間"}</h2>
+                <select
+                  value={currentYearMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500/20"
+                >
+                  {selectableMonths.map((ym) => {
+                    const [y, m] = ym.split("-");
+                    const label =
+                      ym === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}` ? `${y}年${m}月（今月）` : `${y}年${m}月`;
+                    return (
+                      <option key={ym} value={ym}>
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <p className="text-2xl font-bold text-slate-800 sm:text-3xl">{formatDuration(totalMinutes)}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMemberReportMonth(getLastMonthString());
+                    setShowMemberReportModal(true);
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                >
+                  PDFダウンロード（請求書・実績レポート）
+                </button>
+              </div>
+            </section>
+
+            {memberInternConfirmedReward != null ? (
+              <section className="mb-6 rounded-xl border-2 border-violet-200 bg-violet-50 p-5 shadow-sm sm:mb-8 sm:p-6">
+                <h2 className="text-sm font-medium text-violet-900">
+                  {isCurrentMonth ? "今月の確定報酬額" : "選択月の確定報酬額"}
+                  <span className="ml-1 font-normal text-violet-700">（管理者承認済み合計）</span>
+                </h2>
+                <p className="mt-2 text-2xl font-bold text-violet-950 sm:text-3xl">
+                  ¥{memberInternConfirmedReward.amount.toLocaleString()}
+                </p>
+                <p className="mt-2 text-xs leading-relaxed text-violet-800">
+                  決裁者商談 {memberInternConfirmedReward.totals.decisionCount}件 × ¥
+                  {memberInternConfirmedReward.rates.decisionMaker.toLocaleString()}
+                  {" ／ "}
+                  非決裁者商談 {memberInternConfirmedReward.totals.nonDecisionCount}件 × ¥
+                  {memberInternConfirmedReward.rates.nonDecisionMaker.toLocaleString()}
+                </p>
+              </section>
+            ) : null}
+
+            {currentMember && !isAdminUser ? (
+              <section id="member-billing-profile" className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-sm ring-1 ring-slate-200/80 sm:mb-8 sm:p-6">
+                <h2 className="mb-1 text-sm font-semibold text-slate-800">振込先・インボイス設定</h2>
+                <p className="mb-4 text-xs leading-relaxed text-slate-600">
+                  経理・請求書に印字される情報です。
+                  <span className="font-medium text-slate-700">請求管理番号（3桁）</span>
+                  は管理者が付与するため、ここでは変更できません（表示のみ）。
+                </p>
+                <details
+                  open={billingProfileOpen}
+                  onToggle={(e) => setBillingProfileOpen(e.currentTarget.open)}
+                >
+                  <summary className="cursor-pointer list-none rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100">
+                    {billingProfileOpen ? "▼ 振込先・インボイス設定を閉じる" : "▶ 振込先・インボイス設定を開く"}
+                  </summary>
+                  <div className="mt-3">
+                <form onSubmit={(e) => void handleSaveMemberSelfBankProfile(e)} className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="sm:col-span-2">
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">請求管理番号（3桁）</label>
+                      <input
+                        type="text"
+                        readOnly
+                        disabled
+                        tabIndex={-1}
+                        aria-readonly="true"
+                        value={
+                          formatMemberInvoiceNumberThreeDigits(currentMember.invoiceNumber) ??
+                          "未設定（管理者が登録します）"
+                        }
+                        className="w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-700"
+                      />
+                      <p className="mt-1 text-[11px] text-slate-500">管理者のみ変更できます。保存時に送信されません。</p>
+                    </div>
+                    <div>
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">郵便番号</label>
+                      <input
+                        type="text"
+                        value={memberSelfBankDraft.postalCode}
+                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, postalCode: e.target.value }))}
+                        placeholder="例: 100-0001"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">住所（都道府県〜番地）</label>
+                      <input
+                        type="text"
+                        value={memberSelfBankDraft.address}
+                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, address: e.target.value }))}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">建物名・部屋番号など（任意）</label>
+                      <input
+                        type="text"
+                        value={memberSelfBankDraft.address2}
+                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, address2: e.target.value }))}
+                        placeholder="例: 〇〇マンション201"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      />
+                    </div>
+                    <BankMasterAutocompleteField
+                      label="銀行名"
+                      name={memberSelfBankDraft.bankName}
+                      code={memberSelfBankDraft.bankCode}
+                      onPick={(name, code) =>
+                        setMemberSelfBankDraft((d) => ({
+                          ...d,
+                          bankName: name,
+                          bankCode: code,
+                          // 銀行を変えたら支店コードの確定は無効（別銀行の支店コードが残らないように）
+                          branchCode: code === d.bankCode ? d.branchCode : "",
+                        }))
+                      }
+                      inputClassName="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    />
+                    <BankMasterAutocompleteField
+                      label="支店名"
+                      name={memberSelfBankDraft.branchName}
+                      code={memberSelfBankDraft.branchCode}
+                      branchOfBankCode={memberSelfBankDraft.bankCode}
+                      onPick={(name, code) => setMemberSelfBankDraft((d) => ({ ...d, branchName: name, branchCode: code }))}
+                      inputClassName="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    />
+                    <div>
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">口座種別</label>
+                      <select
+                        value={memberSelfBankDraft.accountType}
+                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, accountType: e.target.value }))}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+                      >
+                        <option value="普通">普通</option>
+                        <option value="当座">当座</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">口座番号</label>
+                      <input
+                        type="text"
+                        value={memberSelfBankDraft.accountNumber}
+                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, accountNumber: e.target.value }))}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">口座名義</label>
+                      <input
+                        type="text"
+                        value={memberSelfBankDraft.accountHolder}
+                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, accountHolder: e.target.value }))}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">電話番号</label>
+                      <input
+                        type="text"
+                        value={memberSelfBankDraft.phoneNumber}
+                        onChange={(e) => setMemberSelfBankDraft((d) => ({ ...d, phoneNumber: e.target.value }))}
+                        placeholder="03-1234-5678"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="mb-0.5 block text-xs font-medium text-slate-600">
+                        適格請求書発行事業者登録番号
+                      </label>
+                      <input
+                        type="text"
+                        value={memberSelfBankDraft.invoiceRegistrationNumber}
+                        onChange={(e) =>
+                          setMemberSelfBankDraft((d) => ({
+                            ...d,
+                            invoiceRegistrationNumber: sanitizeInvoiceRegistrationInput(e.target.value),
+                          }))
+                        }
+                        placeholder="T1234567890123"
+                        maxLength={14}
+                        className="w-full max-w-md rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono text-slate-800"
+                      />
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        任意。T + 13桁（例: T1234567890123）。登録すると請求書のお振込先欄に表示されます。
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="submit"
+                      disabled={memberSelfBankProfileBusy}
+                      className="rounded-lg bg-slate-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {memberSelfBankProfileBusy ? "保存中…" : "保存する"}
+                    </button>
+                  </div>
+                </form>
+                  </div>
+                </details>
+              </section>
+            ) : null}
 
             <HistorySection
               monthRecords={monthRecords}
