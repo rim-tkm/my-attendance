@@ -1082,6 +1082,16 @@ function handleKpiNumberInputFocus(e: React.FocusEvent<HTMLInputElement>) {
   }
 }
 
+/** KPI入力の整合性チェック。問題があればメッセージ、なければ null */
+function validateKpiFormValues(values: Record<KpiFormFieldKey, number>, dateYmd: string): string | null {
+  if (dateYmd > getTodayJstDateString()) return "未来の日付は入力できません。";
+  if (values.validCalls > values.totalCalls) return "総有効コール数が総コール数を超えています。数字を確認してください。";
+  if (values.kcCount > values.validCalls) return "KC数が総有効コール数を超えています。数字を確認してください。";
+  if (values.decisionMakerApo + values.nonDecisionMakerApo > values.kcCount)
+    return "アポ数の合計（決裁者＋非決裁者）がKC数を超えています。数字を確認してください。";
+  return null;
+}
+
 /** NextAuth Cookie が使えない本番でも Slack 送信できるよう、管理者ログイン時にのみメモリ保持（再読み込みで消える） */
 const slackAdminAuthMemory = { current: null as { loginId: string; password: string } | null };
 
@@ -9654,6 +9664,19 @@ function KpiTab(props: {
         alert("日付が不正です。もう一度お試しください。");
         return;
       }
+      const parsedValues: Record<KpiFormFieldKey, number> = {
+        totalCalls: parseKpiFieldStringToInt(kpiFields.totalCalls),
+        validCalls: parseKpiFieldStringToInt(kpiFields.validCalls),
+        kcCount: parseKpiFieldStringToInt(kpiFields.kcCount),
+        followUpCreated: parseKpiFieldStringToInt(kpiFields.followUpCreated),
+        decisionMakerApo: parseKpiFieldStringToInt(kpiFields.decisionMakerApo),
+        nonDecisionMakerApo: parseKpiFieldStringToInt(kpiFields.nonDecisionMakerApo),
+      };
+      const validationError = validateKpiFormValues(parsedValues, dateYmd);
+      if (validationError) {
+        alert(validationError);
+        return;
+      }
       const existingRec = getKpiForDate(kpiRecords, dateYmd);
       const slotStart = normalizeKpiStartTime(existingRec ?? { startTime: KPI_DAY_DEFAULT_START_TIME });
       const preservedNotify = existingRec ? coerceKpiTimestamptzField(existingRec.kpiMissingSlackNotifiedAt) : undefined;
@@ -9662,12 +9685,7 @@ function KpiTab(props: {
         userId,
         date: dateYmd,
         startTime: slotStart,
-        totalCalls: parseKpiFieldStringToInt(kpiFields.totalCalls),
-        validCalls: parseKpiFieldStringToInt(kpiFields.validCalls),
-        kcCount: parseKpiFieldStringToInt(kpiFields.kcCount),
-        followUpCreated: parseKpiFieldStringToInt(kpiFields.followUpCreated),
-        decisionMakerApo: parseKpiFieldStringToInt(kpiFields.decisionMakerApo),
-        nonDecisionMakerApo: parseKpiFieldStringToInt(kpiFields.nonDecisionMakerApo),
+        ...parsedValues,
         confirmedDecisionMakerApps: existingRec?.confirmedDecisionMakerApps ?? 0,
         confirmedNonDecisionMakerApps: existingRec?.confirmedNonDecisionMakerApps ?? 0,
         ...(preservedNotify ? { kpiMissingSlackNotifiedAt: preservedNotify } : {}),
@@ -10125,9 +10143,14 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (punchSubmitPhase !== "end_done") return;
-    const id = window.setTimeout(() => setPunchSubmitPhase("idle"), 1400);
+    const id = window.setTimeout(() => {
+      setPunchSubmitPhase("idle");
+      // 終了後は KPI 入力へ直行する（入力忘れを防ぐ）。インターンは KPI 対象外なので切り替えない
+      const me = members.find((m) => m.id === currentUserId);
+      if (!isAdminMode && me?.isIntern !== true) setTab("kpi");
+    }, 1400);
     return () => window.clearTimeout(id);
-  }, [punchSubmitPhase]);
+  }, [punchSubmitPhase, members, currentUserId, isAdminMode]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -10742,7 +10765,11 @@ export default function DashboardPage() {
         }
       }
       setPunchSubmitPhase("end_modal_open");
-      setManualStartTimeHhmm("10:00");
+      // その日の稼働予定（枠1）があれば予定開始時刻を初期値にする。無ければ従来どおりのデフォルト
+      const todayYmd = getTodayJstDateString();
+      const shiftToday = canonicalShiftForUserDate(allShifts, currentUserId, todayYmd);
+      const plannedSlots = shiftToday ? getConcretePlannedSlots(shiftToday) : [];
+      setManualStartTimeHhmm(plannedSlots.length > 0 ? plannedSlots[0].start : "10:00");
       setShowEndWithoutStartModal(true);
     })();
   };
