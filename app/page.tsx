@@ -593,8 +593,12 @@ async function runAutoComplete(
   const completedIds = openPast.map((x) => x.id);
   try {
     if (newRecords.length > 0) {
-      const updatedRecords = [...records, ...newRecords].filter((r) => !isWeekendYmdJst(r.date));
-      await saveRecords(updatedRecords);
+      // 補完で新しく作った記録だけを保存する。saveRecords は id での upsert なので、
+      // 既存行を送り直しても結果は変わらず、全履歴ぶんの無駄な書き込みになるだけ（打刻保存と同じ理屈）
+      const newRecordsToSave = newRecords.filter((r) => !isWeekendYmdJst(r.date));
+      if (newRecordsToSave.length > 0) {
+        await saveRecords(newRecordsToSave);
+      }
     }
     await deleteOpenRecordsByIds(completedIds);
     return true;
