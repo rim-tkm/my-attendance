@@ -1501,6 +1501,12 @@ function AdminNavIcon({ id }: { id: AdminSection }) {
   );
 }
 
+/**
+ * refresh() で再読込する対象データセット。未指定（呼び出し時に配列を渡さない）なら従来どおり全7種を再取得する。
+ * 書き込み先テーブルが明確な操作だけ、対応するスコープに絞って再読込コストを下げる。
+ */
+type RefreshScope = "records" | "openRecords" | "shifts" | "kpi" | "members" | "planActualGap" | "holidays";
+
 function AdminDashboard(props: {
   isAdminUser: boolean;
   adminLoginAccount: string;
@@ -1513,7 +1519,8 @@ function AdminDashboard(props: {
   /** 会社休業日（管理設定で登録・削除。メンバーのシフト提出を期間内ブロック） */
   companyHolidays: CompanyHoliday[];
   setCompanyHolidays: (v: CompanyHoliday[] | ((prev: CompanyHoliday[]) => CompanyHoliday[])) => void;
-  onRefresh: () => void;
+  /** 未指定なら全データセットを再読込。書き込み先が明確な操作だけスコープを絞って渡す */
+  onRefresh: (scope?: RefreshScope[]) => Promise<void>;
   onSaveMemberRecords: (memberId: string, records: WorkRecord[]) => Promise<void>;
   onSaveMemberShifts: (memberId: string, shifts: Shift[]) => Promise<void>;
   /** 管理者による KPI 代理保存（saveKpiForUser 経由で upsert） */
@@ -2795,7 +2802,8 @@ function AdminDashboard(props: {
       setNewMemberPassword("12345");
       setNewMemberHourlyRate(DEFAULT_HOURLY_RATE);
       setNewMemberFieldErrors(null);
-      onRefresh();
+      // メンバー追加は users への行追加のみのため
+      onRefresh(["members"]);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       console.error("メンバー追加エラー:", e);
@@ -3055,7 +3063,8 @@ function AdminDashboard(props: {
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error || "保存に失敗しました");
-      await onRefresh();
+      // メンバー編集フォームの保存は users しか変えないため
+      await onRefresh(["members"]);
       if (invNum === "") {
         console.warn("[admin] メンバー保存: 請求管理番号未入力", { memberId: detailId, name: displayName });
         setInvoiceSaveHint(
@@ -3127,7 +3136,8 @@ function AdminDashboard(props: {
         });
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         if (!res.ok) throw new Error(data.error || "更新に失敗しました");
-        await onRefresh();
+        // 早朝稼働可否のトグルは users しか変えないため
+        await onRefresh(["members"]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setMemberDetailSaveError(msg);
@@ -3165,7 +3175,8 @@ function AdminDashboard(props: {
             m.id === mem.id ? { ...m, isIntern: next, hourlyRate: next ? 0 : DEFAULT_HOURLY_RATE } : m
           )
         );
-        await onRefresh();
+        // インターン区分のトグルも users しか変えないため
+        await onRefresh(["members"]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setMemberDetailSaveError(msg);
@@ -3436,7 +3447,8 @@ function AdminDashboard(props: {
         });
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         if (!res.ok) throw new Error(data.error || "時給の更新に失敗しました");
-        await onRefresh();
+        // 時給の更新は users しか変えないため
+        await onRefresh(["members"]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setMemberDetailSaveError(msg);
@@ -3474,7 +3486,8 @@ function AdminDashboard(props: {
         });
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         if (!res.ok) throw new Error(data.error || "インターン単価の更新に失敗しました");
-        await onRefresh();
+        // インターン単価の更新も users しか変えないため
+        await onRefresh(["members"]);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setMemberDetailSaveError(msg);
@@ -3536,7 +3549,8 @@ function AdminDashboard(props: {
           setRecordActivityToast({ message: res.error ?? "削除に失敗しました", isError: true });
           return;
         }
-        await onRefresh();
+        // 活動記録の削除は attendance の1行しか変えないため
+        await onRefresh(["records"]);
         setRecordActivityToast({ message: "削除しました", isError: false });
         if (recordFormRecord?.id === r.id) {
           setRecordFormRecord(null);
@@ -8300,7 +8314,8 @@ function AdminDashboard(props: {
                                       punchMissReleasedCount: missCount,
                                     });
                                     await reloadPunchMissCounts();
-                                    onRefresh();
+                                    // 押し忘れロック解除も users しか変えないため
+                                    onRefresh(["members"]);
                                     alert(`${mem.name} さんのロックを解除しました。`);
                                   } catch (e) {
                                     alert(e instanceof Error ? e.message : String(e));
@@ -8566,7 +8581,9 @@ function AdminDashboard(props: {
                         setMemberDetailSaveError(null);
                         const mems = await fetchMembersViaApi();
                         setMembers(mems ?? []);
-                        onRefresh();
+                        // 無効化（is_active=false）は users しか変えないため。attendance/shifts/kpis は
+                        // 物理削除ではなく残るため参照は引き続き有効
+                        onRefresh(["members"]);
                       } catch (e) {
                         alert(e instanceof Error ? e.message : String(e));
                       }
@@ -8598,7 +8615,8 @@ function AdminDashboard(props: {
                             await adminUpdateMemberViaApi(mem.id, { isActive: true });
                             const mems = await fetchMembersViaApi();
                             setMembers(mems ?? []);
-                            onRefresh();
+                            // 復元（is_active=true）も users しか変えないため
+                            onRefresh(["members"]);
                           } catch (e) {
                             alert(e instanceof Error ? e.message : String(e));
                           }
@@ -10169,27 +10187,32 @@ export default function DashboardPage() {
     window.history.replaceState({}, "", `${u.pathname}${qs ? `?${qs}` : ""}`);
   }, []);
 
-  const refresh = useCallback(async () => {
-    try {
-      const [records, openRecs, shifts, kpis, mems, gapDetailed, holidays] = await Promise.all([
-        loadRecords(),
-        loadOpenRecords(),
-        loadShifts(),
-        loadKpi(),
-        fetchMembersViaApi(),
-        loadPlanActualGapApprovalsDetailed(),
-        loadCompanyHolidays(),
-      ]);
-      setAllRecords(records);
-      setAllOpenRecords(openRecs);
-      setAllShifts(shifts);
-      setAllKpiRecords(kpis);
-      setMembers(mems ?? []);
-      setCompanyHolidays(holidays);
-      setPlanActualGapApprovedKeys(new Set(gapDetailed.map((r) => planActualGapApprovalKey(r.userId, r.date))));
-      setPlanActualGapResolutionByKey(
-        new Map(gapDetailed.map((r) => [planActualGapApprovalKey(r.userId, r.date), r.resolution]))
+  /**
+   * データ再読込。scope 未指定（引数なし呼び出し）なら従来どおり7種すべてを再取得する。
+   * scope を渡すと、そのスコープに対応するローダー・setter だけを Promise.all で並列実行する。
+   * 「対象がはっきりしない操作は絞らない」方針のため、scope 指定は一部の呼び出し元のみ。
+   */
+  const refresh = useCallback(async (scope?: RefreshScope[]) => {
+    const want = (s: RefreshScope) => !scope || scope.includes(s);
+    const tasks: Promise<void>[] = [];
+    if (want("records")) tasks.push(loadRecords().then(setAllRecords));
+    if (want("openRecords")) tasks.push(loadOpenRecords().then(setAllOpenRecords));
+    if (want("shifts")) tasks.push(loadShifts().then(setAllShifts));
+    if (want("kpi")) tasks.push(loadKpi().then(setAllKpiRecords));
+    if (want("members")) tasks.push(fetchMembersViaApi().then((mems) => setMembers(mems ?? [])));
+    if (want("planActualGap")) {
+      tasks.push(
+        loadPlanActualGapApprovalsDetailed().then((gapDetailed) => {
+          setPlanActualGapApprovedKeys(new Set(gapDetailed.map((r) => planActualGapApprovalKey(r.userId, r.date))));
+          setPlanActualGapResolutionByKey(
+            new Map(gapDetailed.map((r) => [planActualGapApprovalKey(r.userId, r.date), r.resolution]))
+          );
+        })
       );
+    }
+    if (want("holidays")) tasks.push(loadCompanyHolidays().then(setCompanyHolidays));
+    try {
+      await Promise.all(tasks);
     } catch (e) {
       console.error("refresh", e);
       setLoadError("データの取得に失敗しました。Supabase の設定とテーブルを確認してください。");
@@ -10602,7 +10625,8 @@ export default function DashboardPage() {
       persistOpenRecordClientBackup(uid, newOpen);
       await withNetworkRetry(async () => {
         await setOpenRecordForUser(uid, newOpen);
-        await refresh();
+        // 稼働開始は open_records しか変えないため
+        await refresh(["openRecords"]);
         const list = await loadOpenRecords();
         const canonical = getOpenRecordForUser(list, uid);
         if (canonical) persistOpenRecordClientBackup(uid, canonical);
@@ -10720,7 +10744,8 @@ export default function DashboardPage() {
         await saveRecordsForUser(uid, next, { bypassPunchTimeRestrictions: true });
         await setOpenRecordForUser(uid, null);
         persistOpenRecordClientBackup(uid, null);
-        await refresh();
+        // 稼働終了は attendance（新規レコード確定）と open_records（未終了打刻の解消）だけを変えるため
+        await refresh(["records", "openRecords"]);
       }, PUNCH_NETWORK_RETRY_OPTIONS);
       setPunchToast({ message: PUNCH_SAVED_TOAST, isError: false, prominent: true });
       if (punchCompleteTimerRef.current) window.clearTimeout(punchCompleteTimerRef.current);
@@ -10884,7 +10909,8 @@ export default function DashboardPage() {
         await saveRecordsForUser(uid, next, { bypassPunchTimeRestrictions: true });
         await setOpenRecordForUser(uid, null);
         persistOpenRecordClientBackup(uid, null);
-        await refresh();
+        // 稼働終了（開始打刻なしからの直接終了）も attendance と open_records だけを変えるため
+        await refresh(["records", "openRecords"]);
       }, PUNCH_NETWORK_RETRY_OPTIONS);
       setShowEndWithoutStartModal(false);
       setPunchToast({ message: PUNCH_SAVED_TOAST, isError: false, prominent: true });
@@ -10988,7 +11014,8 @@ export default function DashboardPage() {
       alert(typeof data.error === "string" ? data.error : "稼働予定の保存に失敗しました");
       return false;
     }
-    await refresh();
+    // シフト提出は shifts しか変えないため
+    await refresh(["shifts"]);
     return true;
   };
 
@@ -10999,7 +11026,8 @@ export default function DashboardPage() {
       const uid = currentUserId;
       const mergedUser = dedupeKpiRecordsByUserDate(newKpi.map((k) => ({ ...k, userId: uid })));
       setAllKpiRecords((prev) => [...prev.filter((k) => k.userId !== uid), ...mergedUser]);
-      await refresh();
+      // KPI 保存は kpis しか変えないため
+      await refresh(["kpi"]);
       setMemberDataToast({ message: "保存しました", isError: false });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -11034,7 +11062,8 @@ export default function DashboardPage() {
       await saveKpiForUser(uid, newKpi, { changeSource: "admin-dashboard-kpi" });
       const mergedUser = dedupeKpiRecordsByUserDate(newKpi.map((k) => ({ ...k, userId: uid })));
       setAllKpiRecords((prev) => [...prev.filter((k) => k.userId !== uid), ...mergedUser]);
-      await refresh();
+      // 管理者によるKPI代理保存も kpis しか変えないため
+      await refresh(["kpi"]);
       setMemberDataToast({ message: "KPIを保存しました", isError: false });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -11235,7 +11264,8 @@ export default function DashboardPage() {
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(typeof data.error === "string" ? data.error : "保存に失敗しました");
-      await refresh();
+      // 振込先・連絡先の保存は users（自分の行）しか変えないため
+      await refresh(["members"]);
       setMemberDataToast({ message: "振込先・連絡先を保存しました", isError: false });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -11315,7 +11345,8 @@ export default function DashboardPage() {
     setProfileConfirmBusy(true);
     try {
       await postConfirmProfile(true);
-      await refresh();
+      // 登録情報確認は users（自分の行）しか変えないため
+      await refresh(["members"]);
       setMemberDataToast({ message: "登録情報の確認ありがとうございました！", isError: false });
       setProfileConfirmDismissed(true);
     } catch (e) {
@@ -11334,7 +11365,8 @@ export default function DashboardPage() {
   const handleConfirmProfileEdit = () => {
     if (!nameSplitInputsValid) return;
     void postConfirmProfile(false)
-      .then(() => refresh())
+      // こちらも users（自分の行）しか変えないため
+      .then(() => refresh(["members"]))
       .catch(() => {
         /* 入力内容の保存失敗は次回モーダルで再収集される */
       });
@@ -12015,7 +12047,8 @@ export default function DashboardPage() {
                 bypassPunchTimeRestrictions: true,
                 bypassWorkDurationSanity: true,
               });
-              await refresh();
+              // 活動記録の管理者代理保存は attendance しか変えないため
+              await refresh(["records"]);
             }}
             onSaveMemberShifts={async (memberId, shifts) => {
               const normalized = shifts.map((s) => {
@@ -12039,7 +12072,8 @@ export default function DashboardPage() {
                 alert(typeof data.error === "string" ? data.error : "稼働予定の保存に失敗しました");
                 return;
               }
-              await refresh();
+              // 稼働予定の管理者代理保存は shifts しか変えないため
+              await refresh(["shifts"]);
             }}
             onSaveMemberKpi={handleAdminSaveMemberKpi}
             planActualGapApprovedKeys={planActualGapApprovedKeys}
