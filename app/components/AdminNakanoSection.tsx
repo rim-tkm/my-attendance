@@ -594,141 +594,9 @@ export function AdminNakanoSection() {
   return (
     <div className="space-y-6">
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-1 text-sm font-semibold text-slate-900">知識の管理</h2>
-        <p className="mb-3 text-xs text-slate-500">
-          ここに書いた内容だけを中野くんは答えます。「よくある質問のボタンとして出す」を付けた項目は、メンバーの画面にボタンとして並びます。
-        </p>
-        {knowledge.error && <p className="mb-2 text-xs text-red-600">{knowledge.error}</p>}
-
-        <details className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <summary className="cursor-pointer text-xs font-medium text-slate-700">項目を追加する</summary>
-          <div className="mt-3">
-            <KnowledgeForm
-              key={createFormKey}
-              initial={{
-                title: "",
-                body: "",
-                category: "operation",
-                parentId: null,
-                showAsStep: false,
-                isActive: true,
-                sortOrder: 0,
-              }}
-              parentOptions={parentOptionsFor(null)}
-              busy={knowledge.busy}
-              submitLabel="追加する"
-              onSubmit={async (input) => {
-                const ok = await knowledge.create(input);
-                if (ok) setCreateFormKey((v) => v + 1);
-                return ok;
-              }}
-            />
-          </div>
-        </details>
-
-        {orderedKnowledge.length === 0 ? (
-          <p className="text-sm text-slate-600">まだ知識はありません。</p>
-        ) : (
-          <div className="space-y-2">
-            {orderedKnowledge.map(({ item, depth }) => (
-              <div
-                key={item.id}
-                style={{ marginLeft: `${Math.min(depth, 6) * 20}px` }}
-                className={`rounded-lg border p-3 ${
-                  item.isActive ? "border-slate-200" : "border-slate-200 bg-slate-50"
-                }`}
-              >
-                <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                  <span className={`rounded px-2 py-0.5 text-[10px] font-medium ${categoryBadgeClass(item.category)}`}>
-                    {nakanoCategoryLabel(item.category)}
-                  </span>
-                  {item.showAsStep && (
-                    <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
-                      ステップ表示
-                    </span>
-                  )}
-                  {!item.isActive && (
-                    <span className="rounded bg-slate-200 px-2 py-0.5 text-[10px] font-medium text-slate-600">無効</span>
-                  )}
-                  <span className="text-[10px] text-slate-500">並び順 {item.sortOrder}</span>
-                </div>
-                <p className={`text-sm font-semibold ${item.isActive ? "text-slate-900" : "text-slate-500"}`}>
-                  {item.title}
-                </p>
-                <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-slate-700">{item.body}</p>
-
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    disabled={knowledge.busy}
-                    onClick={() => setEditingId(editingId === item.id ? null : item.id)}
-                    className="rounded border border-slate-300 px-3 py-1 text-[11px] text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    {editingId === item.id ? "編集を閉じる" : "編集"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={knowledge.busy}
-                    onClick={async () => {
-                      await knowledge.update(item.id, { isActive: !item.isActive });
-                    }}
-                    className="rounded border border-slate-300 px-3 py-1 text-[11px] text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    {item.isActive ? "無効にする" : "有効にする"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={knowledge.busy}
-                    onClick={async () => {
-                      if (
-                        !window.confirm(
-                          `「${item.title}」を削除しますか？\n\nこの項目にぶら下がっている子の項目もすべて一緒に削除されます。\nこの操作は取り消せません。`
-                        )
-                      )
-                        return;
-                      const ok = await knowledge.remove(item.id);
-                      if (ok && editingId === item.id) setEditingId(null);
-                    }}
-                    className="rounded border border-red-300 bg-red-50 px-3 py-1 text-[11px] text-red-700 hover:bg-red-100 disabled:opacity-50"
-                  >
-                    削除
-                  </button>
-                </div>
-
-                {editingId === item.id && (
-                  <div className="mt-3 rounded border border-slate-200 bg-slate-50 p-3">
-                    <KnowledgeForm
-                      initial={{
-                        title: item.title,
-                        body: item.body,
-                        category: item.category,
-                        parentId: item.parentId,
-                        showAsStep: item.showAsStep,
-                        isActive: item.isActive,
-                        sortOrder: item.sortOrder,
-                      }}
-                      parentOptions={parentOptionsFor(item.id)}
-                      busy={knowledge.busy}
-                      submitLabel="保存する"
-                      onSubmit={async (input) => {
-                        const ok = await knowledge.update(item.id, input);
-                        if (ok) setEditingId(null);
-                        return ok;
-                      }}
-                      onCancel={() => setEditingId(null)}
-                    />
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-sm font-semibold text-slate-900">届いた質問</h2>
         <p className="mb-3 text-xs text-slate-500">
-          ここに来た質問を見て、よくあるものをカード1に足していくと中野くんが賢くなります。
+          ここに来た質問を見て、よくあるものを一番下の「知識の管理」に足していくと中野くんが賢くなります。
         </p>
         {logs.error && <p className="mb-2 text-xs text-red-600">{logs.error}</p>}
 
@@ -876,6 +744,143 @@ export function AdminNakanoSection() {
           </>
         )}
       </section>
+
+      {/* 知識の管理は普段は畳んでおく。日々見るのは上の2枚で、ここは直したいときだけ開けばいい。 */}
+      <details className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900">
+          知識の管理（中野くんが答えられる内容）
+        </summary>
+        <div className="border-t border-slate-200 px-5 py-4">
+          <p className="mb-3 text-xs text-slate-500">
+            ここに書いた内容だけを中野くんは答えます。「よくある質問のボタンとして出す」を付けた項目は、メンバーの画面にボタンとして並びます。
+          </p>
+          {knowledge.error && <p className="mb-2 text-xs text-red-600">{knowledge.error}</p>}
+
+          <details className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <summary className="cursor-pointer text-xs font-medium text-slate-700">項目を追加する</summary>
+            <div className="mt-3">
+              <KnowledgeForm
+                key={createFormKey}
+                initial={{
+                  title: "",
+                  body: "",
+                  category: "operation",
+                  parentId: null,
+                  showAsStep: false,
+                  isActive: true,
+                  sortOrder: 0,
+                }}
+                parentOptions={parentOptionsFor(null)}
+                busy={knowledge.busy}
+                submitLabel="追加する"
+                onSubmit={async (input) => {
+                  const ok = await knowledge.create(input);
+                  if (ok) setCreateFormKey((v) => v + 1);
+                  return ok;
+                }}
+              />
+            </div>
+          </details>
+
+          {orderedKnowledge.length === 0 ? (
+            <p className="text-sm text-slate-600">まだ知識はありません。</p>
+          ) : (
+            <div className="space-y-2">
+              {orderedKnowledge.map(({ item, depth }) => (
+                <div
+                  key={item.id}
+                  style={{ marginLeft: `${Math.min(depth, 6) * 20}px` }}
+                  className={`rounded-lg border p-3 ${
+                    item.isActive ? "border-slate-200" : "border-slate-200 bg-slate-50"
+                  }`}
+                >
+                  <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                    <span className={`rounded px-2 py-0.5 text-[10px] font-medium ${categoryBadgeClass(item.category)}`}>
+                      {nakanoCategoryLabel(item.category)}
+                    </span>
+                    {item.showAsStep && (
+                      <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                        ステップ表示
+                      </span>
+                    )}
+                    {!item.isActive && (
+                      <span className="rounded bg-slate-200 px-2 py-0.5 text-[10px] font-medium text-slate-600">無効</span>
+                    )}
+                    <span className="text-[10px] text-slate-500">並び順 {item.sortOrder}</span>
+                  </div>
+                  <p className={`text-sm font-semibold ${item.isActive ? "text-slate-900" : "text-slate-500"}`}>
+                    {item.title}
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-slate-700">{item.body}</p>
+
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={knowledge.busy}
+                      onClick={() => setEditingId(editingId === item.id ? null : item.id)}
+                      className="rounded border border-slate-300 px-3 py-1 text-[11px] text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {editingId === item.id ? "編集を閉じる" : "編集"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={knowledge.busy}
+                      onClick={async () => {
+                        await knowledge.update(item.id, { isActive: !item.isActive });
+                      }}
+                      className="rounded border border-slate-300 px-3 py-1 text-[11px] text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {item.isActive ? "無効にする" : "有効にする"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={knowledge.busy}
+                      onClick={async () => {
+                        if (
+                          !window.confirm(
+                            `「${item.title}」を削除しますか？\n\nこの項目にぶら下がっている子の項目もすべて一緒に削除されます。\nこの操作は取り消せません。`
+                          )
+                        )
+                          return;
+                        const ok = await knowledge.remove(item.id);
+                        if (ok && editingId === item.id) setEditingId(null);
+                      }}
+                      className="rounded border border-red-300 bg-red-50 px-3 py-1 text-[11px] text-red-700 hover:bg-red-100 disabled:opacity-50"
+                    >
+                      削除
+                    </button>
+                  </div>
+
+                  {editingId === item.id && (
+                    <div className="mt-3 rounded border border-slate-200 bg-slate-50 p-3">
+                      <KnowledgeForm
+                        initial={{
+                          title: item.title,
+                          body: item.body,
+                          category: item.category,
+                          parentId: item.parentId,
+                          showAsStep: item.showAsStep,
+                          isActive: item.isActive,
+                          sortOrder: item.sortOrder,
+                        }}
+                        parentOptions={parentOptionsFor(item.id)}
+                        busy={knowledge.busy}
+                        submitLabel="保存する"
+                        onSubmit={async (input) => {
+                          const ok = await knowledge.update(item.id, input);
+                          if (ok) setEditingId(null);
+                          return ok;
+                        }}
+                        onCancel={() => setEditingId(null)}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </details>
     </div>
   );
 }
