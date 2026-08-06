@@ -1,5 +1,15 @@
 # SESSION_LOG
 
+## 2026-08-06（メンバー画面: 終了後KPI直行・KPI整合性チェック・終了モーダル初期値）
+
+- **依頼**: 3件の改善。①稼働終了を押した後にKPI入力を忘れる人が多いので、終了後は自動でKPIタブへ誘導する ②KPIはあり得ない数字の組み合わせ（有効コール>総コール等）や未来日付でも保存できてしまうので保存前に弾く ③「開始なしで終了」モーダルの開始時刻入力が空欄同然のデフォルトで毎回手入力が要る。
+- **変更内容**（c731966、`app/page.tsx` のみ）:
+  1. **終了後にKPIタブへ自動遷移**: 既存の `punchSubmitPhase === "end_done"` 完了フラッシュ用 `useEffect`（元は1400ms後に `idle` へ戻すだけ）に、`idle` へ戻すのと同時に `!isAdminMode && me?.isIntern !== true` なら `setTab("kpi")` する処理を追加。`currentMember`（宣言が下の方でTDZになる）は使わず、`members`/`currentUserId`（ともに `useState`、この effect より前で宣言済み）から都度 `find` して判定。依存配列に `members, currentUserId, isAdminMode` を追加。
+  2. **KPI保存前の整合性チェック**: 新関数 `validateKpiFormValues(values, dateYmd)`（`handleKpiNumberInputFocus` の直後、`KpiTab` より前に配置）で4条件を検証: 未来日付／有効コール>総コール／KC>有効コール／(決裁者+非決裁者)>KC。`followUpCreated` は関係が未確立のためチェック対象外（指示どおり）。`KpiTab` の `handleSubmit` で日付確定直後・レコード組み立て前に呼び、引っかかれば `alert` で理由を表示して保存中断（既存の週末チェックと同じ `alert` パターンに合わせた）。あわせて重複していた6フィールドの `parseKpiFieldStringToInt` 呼び出しを `parsedValues` にまとめてスプレッドに変更（バリデーションと保存レコードで同じ値を使う）。管理者代理入力（`AdminKpiProxyModal`）・予実乖離テーブルのインライン編集には触れていない（意図的にスコープ外）。
+  3. **終了モーダルの開始時刻を予定で初期化**: `handleEndClick` でモーダルを開く直前、従来は `setManualStartTimeHhmm("10:00")` 固定だった箇所を、`canonicalShiftForUserDate(allShifts, currentUserId, todayYmd)` → `getConcretePlannedSlots(shiftToday)`（どちらも予実乖離の手動編集で使っている既存ヘルパーを再利用）で当日の枠1予定開始時刻を取り、あれば `plannedSlots[0].start`、なければ従来どおり `"10:00"` を初期値にした。入力欄自体は既存のまま編集可能（`onChange` は変更なし）。
+- **検証**: `npx tsc --noEmit` ✅／`npm run build` ✅（3変更それぞれの直後、および最終通しの計4回、いずれもエラーなし）。`git show --stat HEAD` で `app/page.tsx` 1ファイルのみ変更（+36/-9）を確認。KPIの正常系（総100/有効60/KC20/決裁3/非決裁5/追いかけ40）は4条件とも非該当で保存が通ることを手動でロジック確認済み。
+- **反映**: `main` へ push 済み（c731966）。
+
 ## 2026-08-06（メンバー画面: 打刻を上部へ・振込先フォーム折りたたみ・締切表示の提出済み切替）
 
 - **依頼**: 毎日使う「稼働開始・稼働終了」ボタンが、長い「振込先・インボイス設定」フォームの下にあり、開くたびにスクロールが必要だった。ホームタブの表示順を改善。
