@@ -3493,11 +3493,13 @@ function AdminDashboard(props: {
       ),
     [closingChecklistGapRows, planActualGapApprovedKeys]
   );
-  /** ③KPI未入力: 対象月の平日に稼働実績があるのにKPIが未入力の業務委託（インターン・管理者・現在無効なメンバーは除外）
-   *  母集団は dashboardMemberSplit.general と同じ「現在有効な業務委託」基準（他のダッシュボード集計と揃える） */
+  /** ③KPI未入力: 対象月の平日に稼働実績があるのにKPIが未入力の業務委託（インターン・管理者は除外）
+   *  母集団は「現在有効な業務委託」ではなく「対象月に稼働実績がある人」全員（members全体から解決）。
+   *  対象月に稼働した人のKPI未入力は、その後で無効化されても締めの残件として残る（請求の根拠になるため）。
+   *  members に該当行が無い（削除済み）メンバーは名前を表示できないためスキップする。 */
   const closingChecklistKpiMissingRows = useMemo(() => {
     const { start, end } = closingChecklistRange;
-    const nameByGeneralId = new Map(dashboardMemberSplit.general.map((m) => [m.id, m.name]));
+    const memberById = new Map(members.map((m) => [m.id, m]));
     const kpiDoneKeys = new Set(
       allKpiRecords
         .filter((k) => k.date >= start && k.date <= end && kpiRecordHasOperationalMetrics(k))
@@ -3508,16 +3510,17 @@ function AdminDashboard(props: {
     for (const r of allRecords) {
       if (r.date < start || r.date > end) continue;
       if (isWeekendYmd(r.date)) continue;
-      const name = nameByGeneralId.get(r.userId);
-      if (name == null) continue;
+      const member = memberById.get(r.userId);
+      if (member == null) continue;
+      if (isAdminAccountMember(member) || member.isIntern === true) continue;
       const key = `${r.userId}\t${r.date}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (!kpiDoneKeys.has(key)) rows.push({ userId: r.userId, name, date: r.date });
+      if (!kpiDoneKeys.has(key)) rows.push({ userId: r.userId, name: member.name, date: r.date });
     }
     rows.sort((a, b) => (a.date === b.date ? a.name.localeCompare(b.name, "ja") : a.date.localeCompare(b.date)));
     return rows;
-  }, [allRecords, allKpiRecords, dashboardMemberSplit.general, closingChecklistRange]);
+  }, [allRecords, allKpiRecords, members, isAdminAccountMember, closingChecklistRange]);
   /** ⑤freee同期: freee連携カードが既に持っている freeeSyncLogs を共有し、二重fetchはしない */
   const closingChecklistLatestFreeeSync =
     freeeSyncLogs != null && freeeSyncLogs.length > 0 ? freeeSyncLogs[0] : null;
@@ -7851,6 +7854,9 @@ function AdminDashboard(props: {
                 </div>
                 <p className="mt-1 text-xs text-slate-500">
                   シフトの予定時間と実際の打刻・KPI入力がズレている（または実績がない）行のうち、まだ「確定」していないものです。「予実乖離」の一覧から解決してください。
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  ※ 無効化済みメンバーの分は表示されないため、退職者がいる月は「予実乖離アーカイブ」も直接確認してください。
                 </p>
                 {closingChecklistUnresolvedGapRows.length > 0 && (
                   <details className="mt-1 text-xs text-slate-600">
