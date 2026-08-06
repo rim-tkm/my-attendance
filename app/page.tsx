@@ -6001,7 +6001,7 @@ function AdminDashboard(props: {
                     align="right"
                   />
                   <AdminSortableTh
-                    label="アポ率"
+                    label="アポ率（÷KC）"
                     sortKey="apoRate"
                     sort={kpiDailySort}
                     onSort={(k) => toggleKpiDailySort(k as AdminKpiDailySortKey)}
