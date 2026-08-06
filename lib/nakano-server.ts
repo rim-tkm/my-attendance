@@ -7,7 +7,12 @@
 
 import type { Member, Shift } from "@/lib/attendance";
 import { getTodayJstDateString } from "@/lib/export-schedule";
-import { evaluateNakanoAiAccess, readNakanoLimitsFromEnv, type NakanoAccess } from "@/lib/nakano-access";
+import {
+  evaluateNakanoAiAccess,
+  isNakanoUnlimited,
+  readNakanoLimitsFromEnv,
+  type NakanoAccess,
+} from "@/lib/nakano-access";
 import { loadNakanoAiAskTimesMs } from "@/lib/nakano-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { postSlackIncomingWebhook, resolveSlackWebhookUrl } from "@/lib/slack-webhook";
@@ -25,6 +30,7 @@ type MeRow = {
   is_intern: boolean | null;
   is_active: boolean | null;
   login_account: string | null;
+  first_work_date: string | null;
 };
 
 type ShiftRow = {
@@ -50,7 +56,7 @@ export async function loadNakanoContext(userId: string, now: Date = new Date()):
   const [{ data: meRow, error: meErr }, { data: shiftRows, error: shiftErr }, askTimes] = await Promise.all([
     supabase
       .from("users")
-      .select("id, name, is_intern, is_active, login_account")
+      .select("id, name, is_intern, is_active, login_account, first_work_date")
       .eq("id", userId)
       .maybeSingle(),
     supabase
@@ -91,12 +97,35 @@ export async function loadNakanoContext(userId: string, now: Date = new Date()):
     }
   }
 
+  const limits = readNakanoLimitsFromEnv();
+
+  // 初回稼働日は手入力の first_work_date が空のことがあるので、
+  // 空なら実際の稼働記録の最古の日付を使う。こちらの方が確実。
+  let firstWorkDate = (me.first_work_date ?? "").trim().slice(0, 10) || null;
+  if (!firstWorkDate) {
+    const { data: firstRows } = await supabase
+      .from("attendance")
+      .select("date")
+      .eq("user_id", userId)
+      .order("date", { ascending: true })
+      .limit(1);
+    const d = ((firstRows ?? []) as { date: string | null }[])[0]?.date;
+    firstWorkDate = d ? String(d).slice(0, 10) : null;
+  }
+
+  const unlimited = isNakanoUnlimited({
+    firstWorkDate,
+    now,
+    graceUntilYmd: limits.unlimitedGraceUntil,
+  });
+
   const access = evaluateNakanoAiAccess({
     member,
     shift,
     now,
     aiAskTimesMs: askTimes,
-    limits: readNakanoLimitsFromEnv(),
+    limits,
+    unlimited,
   });
 
   return { member, shift, access };

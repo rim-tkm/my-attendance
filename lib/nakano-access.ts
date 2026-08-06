@@ -15,10 +15,24 @@ import { isNakanoAdmin, isNakanoAvailableTo } from "@/lib/nakano";
 // 1人あたりの上限。10/30 → 5/15 に下げたのち、時間帯制限の撤廃にあわせて時間あたりを10に戻した（2026-08-06）。
 // メンバーには回数を告知しない方針なので、上限は「気づかれずに暴走を止める」水準に置く。
 export const NAKANO_DEFAULT_HOURLY_LIMIT = 10;
-export const NAKANO_DEFAULT_DAILY_LIMIT = 15;
+// 1日15回のままだと1時間10回がほぼ効かない（2時間目以降が5回で頭打ち）ため30に合わせた。
+export const NAKANO_DEFAULT_DAILY_LIMIT = 30;
 export const NAKANO_DEFAULT_SHIFT_MARGIN_MINUTES = 30;
 
 export const NAKANO_LINE_FALLBACK = "急ぎの用件は公式LINEへお願いします。";
+
+/** 稼働開始から何ヶ月は回数無制限にするか */
+export const NAKANO_UNLIMITED_MONTHS = 1;
+
+/**
+ * 導入時点で既に稼働している人を、全員「1ヶ月目」として扱うための期限。
+ * この日までは初回稼働日に関係なく全員無制限。
+ * 既存メンバーの初回稼働日は何ヶ月も前なので、これが無いと導入初日から全員が上限付きになる。
+ */
+export const NAKANO_DEFAULT_GRACE_UNTIL = "2026-09-07";
+
+/** 上限が近いことを伝え始める使用回数（1時間あたり） */
+export const NAKANO_NOTICE_AFTER_USES = 6;
 
 export type NakanoDenyReason =
   | "not_launched"
@@ -28,13 +42,14 @@ export type NakanoDenyReason =
   | "daily_limit";
 
 export type NakanoAccess =
-  | { allowed: true; remainingHour: number; remainingDay: number }
+  | { allowed: true; remainingHour: number; remainingDay: number; unlimited: boolean }
   | {
       allowed: false;
       reason: NakanoDenyReason;
       message: string;
       remainingHour: number;
       remainingDay: number;
+      unlimited: boolean;
     };
 
 export type NakanoLimits = {
@@ -47,6 +62,8 @@ export type NakanoLimits = {
    * 環境変数を明示的に立てるまでは開かない側に倒す。
    */
   memberLaunched: boolean;
+  /** この日（YYYY-MM-DD・JST）までは全員が回数無制限 */
+  unlimitedGraceUntil: string;
 };
 
 function positiveIntFromEnv(raw: string | undefined, fallback: number): number {
@@ -70,7 +87,50 @@ export function readNakanoLimitsFromEnv(env: NodeJS.ProcessEnv = process.env): N
       NAKANO_DEFAULT_SHIFT_MARGIN_MINUTES
     ),
     memberLaunched: isTruthyEnv(env.NAKANO_LAUNCHED),
+    unlimitedGraceUntil:
+      (env.NAKANO_UNLIMITED_GRACE_UNTIL ?? "").trim() || NAKANO_DEFAULT_GRACE_UNTIL,
   };
+}
+
+/**
+ * YYYY-MM-DD の1ヶ月後を返す。月末は繰り上がらないよう丸める
+ * （1/31 の1ヶ月後は 2/31 ではなく 2/28）。
+ */
+export function addMonthsYmd(ymd: string, months: number): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return ymd;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const total = (y * 12 + (mo - 1)) + months;
+  const ny = Math.floor(total / 12);
+  const nmo = (total % 12) + 1;
+  // その月の日数に収める
+  const lastDay = new Date(Date.UTC(ny, nmo, 0)).getUTCDate();
+  const nd = Math.min(d, lastDay);
+  return `${ny}-${String(nmo).padStart(2, "0")}-${String(nd).padStart(2, "0")}`;
+}
+
+/**
+ * 回数無制限か。
+ *
+ * 稼働を始めたばかりの人ほど分からないことが多く、そこで上限に当たると
+ * 結局これまでどおり公式LINEへ流れてしまう。入口の1ヶ月は開けておく。
+ *
+ * `firstWorkDate` が無い（まだ一度も稼働していない）人も無制限にする。
+ * これから始める人なので、当然いちばん質問が多い。
+ */
+export function isNakanoUnlimited(params: {
+  firstWorkDate: string | null;
+  now: Date;
+  graceUntilYmd: string;
+}): boolean {
+  const today = getTodayJstDateString(params.now);
+  // 導入時点で在籍している人は全員この日まで無制限
+  if (today <= params.graceUntilYmd) return true;
+  const first = (params.firstWorkDate ?? "").trim();
+  if (first === "") return true;
+  return today <= addMonthsYmd(first, NAKANO_UNLIMITED_MONTHS);
 }
 
 /** JST の「その日 0:00 からの分」 */
@@ -153,8 +213,11 @@ export function evaluateNakanoAiAccess(params: {
   now: Date;
   aiAskTimesMs: number[];
   limits: NakanoLimits;
+  /** 稼働1ヶ月目などで回数無制限か。未指定は false */
+  unlimited?: boolean;
 }): NakanoAccess {
   const { member, shift, now, aiAskTimesMs, limits } = params;
+  const unlimited = params.unlimited === true;
   const nowMs = now.getTime();
   const todayYmd = getTodayJstDateString(now);
 
@@ -171,6 +234,7 @@ export function evaluateNakanoAiAccess(params: {
     message,
     remainingHour,
     remainingDay,
+    unlimited,
   });
 
   if (!isNakanoAvailableTo(member)) {
@@ -188,6 +252,11 @@ export function evaluateNakanoAiAccess(params: {
   // 費用の天井は回数上限（1時間/1日）で押さえているので、外しても上振れしない。
   // 復活させたいときは NAKANO_SHIFT_WINDOW_ENABLED を見るようにすればよい
   // （判定関数 isWithinNakanoShiftWindow はそのまま残してある）。
+
+  // 無制限の人はここで確定。対象者判定と公開前ゲートは通したうえで回数だけ免除する。
+  if (unlimited) {
+    return { allowed: true, remainingHour, remainingDay, unlimited: true };
+  }
 
   if (remainingDay <= 0) {
     return deny(
@@ -208,5 +277,5 @@ export function evaluateNakanoAiAccess(params: {
     );
   }
 
-  return { allowed: true, remainingHour, remainingDay };
+  return { allowed: true, remainingHour, remainingDay, unlimited: false };
 }

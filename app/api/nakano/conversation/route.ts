@@ -32,6 +32,7 @@ export async function GET() {
       message: ctx.access.allowed ? null : ctx.access.message,
       remainingHour: ctx.access.remainingHour,
       remainingDay: ctx.access.remainingDay,
+      unlimited: ctx.access.unlimited,
       messages: messages.map((m) => ({
         id: m.id,
         role: m.role,

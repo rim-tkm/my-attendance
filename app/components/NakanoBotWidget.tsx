@@ -11,6 +11,14 @@ const FALLBACK_ERROR = "今つながりません。急ぎの用件は公式LINE�
 /** 本人の了承を得て使用（2026-08-06）。顔写真を使う以上、必ずAIと分かる表示を添えること */
 const AVATAR_SRC = "/nakano-avatar.jpg";
 
+/**
+ * 残りがこの回数以下になったら上限があることを知らせる。
+ * 上限（1時間10回）のうち6回使った時点にあたる。
+ * 常時見せると「制限されている」印象が先に立つが、
+ * 何も言わずに突然止まるのも壊れたように見えるので、この位置で1度だけ知らせる。
+ */
+const NOTICE_REMAINING_AT = 4;
+
 type ConversationMessage = {
   id: string;
   role: "user" | "assistant";
@@ -25,6 +33,7 @@ type ConversationResponse = {
   message: string | null;
   remainingHour: number;
   remainingDay: number;
+  unlimited: boolean;
   messages: ConversationMessage[];
 };
 
@@ -63,6 +72,8 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
   const [unavailableMessage, setUnavailableMessage] = useState<string | null>(null);
   const [remainingHour, setRemainingHour] = useState<number | null>(null);
   const [remainingDay, setRemainingDay] = useState<number | null>(null);
+  /** 稼働1ヶ月目などで回数無制限か。無制限なら残り回数の案内自体を出さない */
+  const [unlimited, setUnlimited] = useState(false);
 
   const [steps, setSteps] = useState<NakanoStepNode[]>([]);
   /** 押してきたノードの連なり。末尾の children が今出すボタン */
@@ -143,6 +154,7 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
         setUnavailableMessage(data.message ?? null);
         setRemainingHour(typeof data.remainingHour === "number" ? data.remainingHour : null);
         setRemainingDay(typeof data.remainingDay === "number" ? data.remainingDay : null);
+        setUnlimited(data.unlimited === true);
         const restored: Bubble[] = (Array.isArray(data.messages) ? data.messages : [])
           .filter((m) => m != null && typeof m === "object")
           .map((m) => ({
@@ -424,7 +436,7 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
       {!noticeSeen && (
         <div className="shrink-0 border-b border-slate-200 bg-amber-50 px-4 py-3">
           <p className="text-[11px] leading-relaxed text-slate-800">
-            AIの中野くんです。人ではありません。間違えることもあります。報酬・契約に関することは、必ず担当に直接聞いてください。
+            AIの中野くんです。人ではありません。間違えることもあります。報酬・契約に関することは、必ず担当に直接聞いてください。なお、いただいたご質問は担当者が確認しています。
           </p>
           <button
             type="button"
@@ -553,9 +565,9 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
           「制限されている」印象が先に立ち、使ってほしい人が遠慮してしまうため。
           残りわずかなときだけ知らせる（何も言わずに突然止まるのは避ける）。
         */}
-        {available && remainingHour != null && remainingHour <= 2 && (
+        {available && !unlimited && remainingHour != null && remainingHour <= NOTICE_REMAINING_AT && (
           <p className="mt-1.5 text-[10px] text-slate-500">
-            続けて質問できるのはあと {remainingHour} 回です
+            続けて質問できるのはあと {remainingHour} 回です（1時間あたりの上限があります）
           </p>
         )}
       </div>

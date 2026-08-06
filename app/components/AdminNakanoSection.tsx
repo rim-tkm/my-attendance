@@ -157,6 +157,10 @@ export type AdminNakanoLogsState = {
   busy: boolean;
   error: string | null;
   escalatedOnly: boolean;
+  autoRefresh: boolean;
+  setAutoRefresh: (v: boolean) => void;
+  refresh: () => void;
+  lastLoadedAt: Date | null;
   setEscalatedOnly: (v: boolean) => void;
   loadMore: () => void;
 };
@@ -167,6 +171,8 @@ export function useAdminNakanoLogs(): AdminNakanoLogsState {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [escalatedOnly, setEscalatedOnly] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
 
   const fetchPage = useCallback(async (offset: number, only: boolean) => {
     setBusy(true);
@@ -187,6 +193,7 @@ export function useAdminNakanoLogs(): AdminNakanoLogsState {
       const next = Array.isArray(data.rows) ? data.rows : [];
       setRows((prev) => (offset === 0 ? next : prev.concat(next)));
       setHasMore(data.hasMore === true);
+      setLastLoadedAt(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -203,7 +210,34 @@ export function useAdminNakanoLogs(): AdminNakanoLogsState {
     void fetchPage(rows.length, escalatedOnly);
   }, [fetchPage, rows.length, escalatedOnly]);
 
-  return { rows, hasMore, busy, error, escalatedOnly, setEscalatedOnly, loadMore };
+  const refresh = useCallback(() => {
+    void fetchPage(0, escalatedOnly);
+  }, [fetchPage, escalatedOnly]);
+
+  // 30秒ごとに先頭から取り直す。質問が来ていることに気づけるようにするため。
+  // 「もっと見る」で読み足したぶんは先頭に戻るが、
+  // リアルタイムに見たい場面と過去を掘る場面は別なので、そこは割り切る。
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const id = window.setInterval(() => {
+      void fetchPage(0, escalatedOnly);
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [autoRefresh, fetchPage, escalatedOnly]);
+
+  return {
+    rows,
+    hasMore,
+    busy,
+    error,
+    escalatedOnly,
+    setEscalatedOnly,
+    loadMore,
+    autoRefresh,
+    setAutoRefresh,
+    refresh,
+    lastLoadedAt,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -698,15 +732,39 @@ export function AdminNakanoSection() {
         </p>
         {logs.error && <p className="mb-2 text-xs text-red-600">{logs.error}</p>}
 
-        <label className="mb-3 flex items-center gap-1.5 text-xs text-slate-700">
-          <input
-            type="checkbox"
-            checked={logs.escalatedOnly}
-            onChange={(e) => logs.setEscalatedOnly(e.target.checked)}
-            className="rounded border-slate-300"
-          />
-          担当に回されたものだけ
-        </label>
+        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+          <label className="flex items-center gap-1.5 text-xs text-slate-700">
+            <input
+              type="checkbox"
+              checked={logs.escalatedOnly}
+              onChange={(e) => logs.setEscalatedOnly(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            担当に回されたものだけ
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-slate-700">
+            <input
+              type="checkbox"
+              checked={logs.autoRefresh}
+              onChange={(e) => logs.setAutoRefresh(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            自動更新（30秒ごと）
+          </label>
+          <button
+            type="button"
+            onClick={logs.refresh}
+            disabled={logs.busy}
+            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            今すぐ更新
+          </button>
+          {logs.lastLoadedAt && (
+            <span className="text-[11px] text-slate-400">
+              最終更新 {formatJstDateTimeLabel(logs.lastLoadedAt.toISOString())}
+            </span>
+          )}
+        </div>
 
         {logs.rows.length === 0 ? (
           <p className="text-sm text-slate-600">{logs.busy ? "読み込み中です。" : "まだ質問はありません。"}</p>
