@@ -1531,6 +1531,39 @@ function parseYenCsvAmount(value: string | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** 月次締めチェックリストの行ステータス: ok=完了 warn=残件あり error=対応必須のブロック unknown=このデータからは判定できない */
+type ClosingChecklistStatus = "ok" | "warn" | "error" | "unknown";
+
+/** 月次締めチェックリストの○/⚠️/❌アイコン。unknownは○×どちらとも言えない旨を明示するためのダッシュ表示 */
+function ClosingChecklistStatusIcon({ status }: { status: ClosingChecklistStatus }) {
+  if (status === "ok") {
+    return (
+      <span className="text-base font-bold text-green-600" aria-label="完了">
+        ○
+      </span>
+    );
+  }
+  if (status === "warn") {
+    return (
+      <span className="text-base" aria-label="残件あり">
+        ⚠️
+      </span>
+    );
+  }
+  if (status === "error") {
+    return (
+      <span className="text-base" aria-label="対応が必要">
+        ❌
+      </span>
+    );
+  }
+  return (
+    <span className="text-base font-bold text-slate-400" aria-label="判定対象外">
+      －
+    </span>
+  );
+}
+
 function AdminDashboard(props: {
   isAdminUser: boolean;
   adminLoginAccount: string;
@@ -1742,6 +1775,13 @@ function AdminDashboard(props: {
 
   /** freee 外注費CSV（取引インポート形式・税理士指定）: 対象月（既定は前月） */
   const [freeeDealsMonth, setFreeeDealsMonth] = useState(() => {
+    const [y, m] = getTodayJstDateString().slice(0, 7).split("-").map(Number);
+    const prev = new Date(y, m - 2, 1);
+    return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
+  });
+
+  /** 月次締めチェックリスト: 対象月（既定は前月＝通常締め作業の対象） */
+  const [closingChecklistMonth, setClosingChecklistMonth] = useState(() => {
     const [y, m] = getTodayJstDateString().slice(0, 7).split("-").map(Number);
     const prev = new Date(y, m - 2, 1);
     return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
@@ -3423,6 +3463,64 @@ function AdminDashboard(props: {
     () => splitDashboardMembers(activeMembers, isAdminAccountMember),
     [activeMembers, isAdminAccountMember]
   );
+
+  // ─── 月次締めチェックリスト用の集計（自動判定できるものだけ。手動チェックボックスや新規テーブルは持たない） ───
+  /** 対象月の日付範囲。当月を選んだ場合は今日まで、過去月なら月末まで（getMonthDateRange の既存挙動を利用） */
+  const closingChecklistRange = useMemo(
+    () => getMonthDateRange(closingChecklistMonth, todayStr),
+    [closingChecklistMonth, todayStr]
+  );
+  /** ①本人確認: profileConfirmedMonth は「直近の確認月」しか保持しないため、当月を選んでいる時だけ判定できる */
+  const closingChecklistIsCurrentMonth = closingChecklistMonth === profileConfirmMonth;
+  /** ②予実乖離: 対象月の乖離行を再計算し、既存の承認状態（planActualGapApprovedKeys）と突き合わせて未解決のみ残す */
+  const closingChecklistGapRows = useMemo(
+    () =>
+      buildPlanActualGapRows(
+        members,
+        allShifts,
+        allRecords,
+        allKpiRecords,
+        closingChecklistRange.start,
+        closingChecklistRange.end,
+        { openRecords: allOpenRecords }
+      ),
+    [members, allShifts, allRecords, allKpiRecords, closingChecklistRange, allOpenRecords]
+  );
+  const closingChecklistUnresolvedGapRows = useMemo(
+    () =>
+      closingChecklistGapRows.filter(
+        (r) => !planActualGapApprovedKeys.has(planActualGapApprovalKey(r.userId, r.date))
+      ),
+    [closingChecklistGapRows, planActualGapApprovedKeys]
+  );
+  /** ③KPI未入力: 対象月の平日に稼働実績があるのにKPIが未入力の業務委託（インターン・管理者・現在無効なメンバーは除外）
+   *  母集団は dashboardMemberSplit.general と同じ「現在有効な業務委託」基準（他のダッシュボード集計と揃える） */
+  const closingChecklistKpiMissingRows = useMemo(() => {
+    const { start, end } = closingChecklistRange;
+    const nameByGeneralId = new Map(dashboardMemberSplit.general.map((m) => [m.id, m.name]));
+    const kpiDoneKeys = new Set(
+      allKpiRecords
+        .filter((k) => k.date >= start && k.date <= end && kpiRecordHasOperationalMetrics(k))
+        .map((k) => `${k.userId}\t${k.date}`)
+    );
+    const seen = new Set<string>();
+    const rows: { userId: string; name: string; date: string }[] = [];
+    for (const r of allRecords) {
+      if (r.date < start || r.date > end) continue;
+      if (isWeekendYmd(r.date)) continue;
+      const name = nameByGeneralId.get(r.userId);
+      if (name == null) continue;
+      const key = `${r.userId}\t${r.date}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!kpiDoneKeys.has(key)) rows.push({ userId: r.userId, name, date: r.date });
+    }
+    rows.sort((a, b) => (a.date === b.date ? a.name.localeCompare(b.name, "ja") : a.date.localeCompare(b.date)));
+    return rows;
+  }, [allRecords, allKpiRecords, dashboardMemberSplit.general, closingChecklistRange]);
+  /** ⑤freee同期: freee連携カードが既に持っている freeeSyncLogs を共有し、二重fetchはしない */
+  const closingChecklistLatestFreeeSync =
+    freeeSyncLogs != null && freeeSyncLogs.length > 0 ? freeeSyncLogs[0] : null;
 
   const dashboardGeneralMetrics = useMemo(
     () =>
@@ -7681,6 +7779,191 @@ function AdminDashboard(props: {
             </a>
             からも行えます。
           </p>
+
+          <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div className="min-w-0">
+                <span className="text-xs font-medium text-slate-600">月次締めチェックリスト</span>
+                <p className="mt-1 text-xs text-slate-500">
+                  対象月について、データから自動判定できる範囲で「締め作業に残っているもの」をまとめたものです。手動チェックはありません。○×が付かない項目（－）は、このデータからは判定できないという意味です。
+                </p>
+              </div>
+              <label className="flex min-w-0 flex-col gap-1">
+                <span className="text-xs font-medium text-slate-600">対象月</span>
+                <input
+                  type="month"
+                  value={closingChecklistMonth}
+                  onChange={(e) => setClosingChecklistMonth(e.target.value)}
+                  className="rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
+                />
+              </label>
+            </div>
+            <ul className="flex flex-col gap-2">
+              <li className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ClosingChecklistStatusIcon
+                    status={
+                      !closingChecklistIsCurrentMonth
+                        ? "unknown"
+                        : profileUnconfirmedMembers.length === 0
+                          ? "ok"
+                          : "warn"
+                    }
+                  />
+                  <span className="text-sm font-medium text-slate-800">本人確認（登録情報の月次確認）</span>
+                  <span className="text-xs text-slate-500">
+                    {closingChecklistIsCurrentMonth
+                      ? `${profileConfirmedMembers.length}/${nonAdminActiveMembers.length}名`
+                      : "当月のみ判定可"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  メンバーが登録情報（振込先・連絡先など）に間違いがないか、月1回確認したかどうかです。
+                </p>
+                {closingChecklistIsCurrentMonth ? (
+                  profileUnconfirmedMembers.length > 0 && (
+                    <details className="mt-1 text-xs text-slate-600">
+                      <summary className="cursor-pointer font-medium text-slate-700">
+                        未確認のメンバー（{profileUnconfirmedMembers.length}名）
+                      </summary>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                        {profileUnconfirmedMembers.map((m) => (
+                          <li key={m.id}>{m.name}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )
+                ) : (
+                  <p className="mt-1 text-xs text-amber-700">
+                    当月のみ判定できます。記録されるのは直近1回分の確認月のみのため、{closingChecklistMonth}{" "}
+                    のような過去月は集計できません（○×を出さずここに表示しています）。
+                  </p>
+                )}
+              </li>
+
+              <li className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ClosingChecklistStatusIcon
+                    status={closingChecklistUnresolvedGapRows.length === 0 ? "ok" : "warn"}
+                  />
+                  <span className="text-sm font-medium text-slate-800">予実乖離の未確定</span>
+                  <span className="text-xs text-slate-500">{closingChecklistUnresolvedGapRows.length}件</span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  シフトの予定時間と実際の打刻・KPI入力がズレている（または実績がない）行のうち、まだ「確定」していないものです。「予実乖離」の一覧から解決してください。
+                </p>
+                {closingChecklistUnresolvedGapRows.length > 0 && (
+                  <details className="mt-1 text-xs text-slate-600">
+                    <summary className="cursor-pointer font-medium text-slate-700">
+                      未確定の一覧（{closingChecklistUnresolvedGapRows.length}件）
+                    </summary>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                      {closingChecklistUnresolvedGapRows.map((r) => (
+                        <li key={`${r.userId}-${r.date}`}>
+                          {r.memberName} — {r.date}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </li>
+
+              <li className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ClosingChecklistStatusIcon
+                    status={closingChecklistKpiMissingRows.length === 0 ? "ok" : "warn"}
+                  />
+                  <span className="text-sm font-medium text-slate-800">KPI未入力</span>
+                  <span className="text-xs text-slate-500">{closingChecklistKpiMissingRows.length}件</span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  稼働実績（打刻）がある平日なのに、その日のKPI（営業実績）が未入力の業務委託メンバーです（インターンは打刻対象外のため集計しません）。
+                </p>
+                {closingChecklistKpiMissingRows.length > 0 && (
+                  <details className="mt-1 text-xs text-slate-600">
+                    <summary className="cursor-pointer font-medium text-slate-700">
+                      未入力の一覧（{closingChecklistKpiMissingRows.length}件）
+                    </summary>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                      {closingChecklistKpiMissingRows.map((r) => (
+                        <li key={`${r.userId}-${r.date}`}>
+                          {r.name} — {r.date}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </li>
+
+              <li className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ClosingChecklistStatusIcon
+                    status={membersWithMissingBankInfo.length === 0 ? "ok" : "error"}
+                  />
+                  <span className="text-sm font-medium text-slate-800">請求に必要な情報の不足</span>
+                  <span className="text-xs text-slate-500">{membersWithMissingBankInfo.length}名</span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  振込先（銀行名・支店名・口座番号・口座名義）・請求管理番号・電話番号のいずれかが未登録のメンバーです。請求書発行前に入力が必要です。
+                </p>
+                {membersWithMissingBankInfo.length > 0 && (
+                  <details className="mt-1 text-xs text-slate-600">
+                    <summary className="cursor-pointer font-medium text-slate-700">
+                      不足のあるメンバー（{membersWithMissingBankInfo.length}名）
+                    </summary>
+                    <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                      {membersWithMissingBankInfo.map((x) => (
+                        <li key={x.member.id}>
+                          {x.member.name}（{x.missing.join("・")}）
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </li>
+
+              <li className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ClosingChecklistStatusIcon
+                    status={
+                      freeeSyncLogs == null
+                        ? "unknown"
+                        : closingChecklistLatestFreeeSync == null
+                          ? "unknown"
+                          : closingChecklistLatestFreeeSync.ok
+                            ? "ok"
+                            : "error"
+                    }
+                  />
+                  <span className="text-sm font-medium text-slate-800">freee同期の状態</span>
+                  <span className="text-xs text-slate-500">
+                    {freeeSyncLogs == null
+                      ? "確認中…"
+                      : closingChecklistLatestFreeeSync == null
+                        ? "履歴なし"
+                        : closingChecklistLatestFreeeSync.ok
+                          ? "成功"
+                          : "失敗"}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  メンバー情報を freee（会計ソフト）の取引先へ同期する処理が、直近実行時に成功したかどうかです。失敗したままだと請求データの取り込みに支障が出ます。
+                </p>
+                {freeeSyncLogs != null && closingChecklistLatestFreeeSync == null && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    同期履歴がまだありません（一度も同期していないか、履歴の記録機能が本番でまだ有効になっていない可能性があります）。
+                  </p>
+                )}
+                {closingChecklistLatestFreeeSync != null && !closingChecklistLatestFreeeSync.ok && (
+                  <p className="mt-1 text-xs text-red-600">
+                    {formatJstDateTimeLabel(closingChecklistLatestFreeeSync.startedAt)} の同期が失敗しています
+                    {closingChecklistLatestFreeeSync.errorDetail ? `: ${closingChecklistLatestFreeeSync.errorDetail}` : ""}
+                    。上の「freee連携」から再実行してください。
+                  </p>
+                )}
+              </li>
+            </ul>
+          </div>
 
           <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
             <span className="text-xs font-medium text-slate-600">
