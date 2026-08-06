@@ -188,7 +188,7 @@ import {
   buildCompanyHolidaySuggestions,
   type CompanyHolidaySuggestion,
 } from "@/lib/company-holiday-suggestions";
-import { buildFreeeDealsCsvRows } from "@/lib/freee-deals-csv";
+import { buildFreeeDealsCsvRows, FREEE_DEALS_CSV_HEADERS } from "@/lib/freee-deals-csv";
 import { persistOpenRecordClientBackup, readOpenRecordClientBackup } from "@/lib/open-record-client-backup";
 import { withNetworkRetry } from "@/lib/network-retry";
 import { parseStartInstantJstOnWorkDate } from "@/lib/punch-jst-time";
@@ -1507,6 +1507,13 @@ function AdminNavIcon({ id }: { id: AdminSection }) {
  */
 type RefreshScope = "records" | "openRecords" | "shifts" | "kpi" | "members" | "planActualGap" | "holidays";
 
+/** freee外注費CSVの金額セル（税込yen文字列）を数値化する。カンマ混入や欠損があっても合計にNaNを混ぜない防御的パース */
+function parseYenCsvAmount(value: string | undefined): number {
+  if (value == null) return 0;
+  const n = Number(value.replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
 function AdminDashboard(props: {
   isAdminUser: boolean;
   adminLoginAccount: string;
@@ -1690,7 +1697,16 @@ function AdminDashboard(props: {
     return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`;
   });
 
-  const handleDownloadFreeeDealsCsv = () => {
+  /** freee外注費CSV: ダウンロード前に内容（件数・合計金額・税区分内訳）を確認するためのプレビュー状態 */
+  const [freeeDealsPreview, setFreeeDealsPreview] = useState<{
+    month: string;
+    rows: string[][];
+    count: number;
+    totalAmount: number;
+    taxBreakdown: { label: string; count: number; subtotal: number }[];
+  } | null>(null);
+
+  const handlePreviewFreeeDealsCsv = () => {
     if (!/^\d{4}-\d{2}$/.test(freeeDealsMonth)) {
       alert("対象月を選択してください");
       return;
@@ -1706,14 +1722,41 @@ function AdminDashboard(props: {
       alert(`${freeeDealsMonth} に支払いが発生するメンバーがいません。`);
       return;
     }
-    const csv = buildBomUtf8CsvContent(rows);
+    // 列位置はフォーマット変更に強いよう、固定indexではなくヘッダー名から引く
+    const amountIdx = FREEE_DEALS_CSV_HEADERS.indexOf("金額");
+    const taxCategoryIdx = FREEE_DEALS_CSV_HEADERS.indexOf("税区分");
+    const dataRows = rows.slice(1);
+    const taxMap = new Map<string, { count: number; subtotal: number }>();
+    let totalAmount = 0;
+    for (const row of dataRows) {
+      const amount = parseYenCsvAmount(amountIdx >= 0 ? row[amountIdx] : undefined);
+      totalAmount += amount;
+      const taxCategory = (taxCategoryIdx >= 0 ? row[taxCategoryIdx] : undefined) ?? "(不明)";
+      const entry = taxMap.get(taxCategory) ?? { count: 0, subtotal: 0 };
+      entry.count += 1;
+      entry.subtotal += amount;
+      taxMap.set(taxCategory, entry);
+    }
+    setFreeeDealsPreview({
+      month: freeeDealsMonth,
+      rows,
+      count: dataRows.length,
+      totalAmount,
+      taxBreakdown: Array.from(taxMap.entries()).map(([label, v]) => ({ label, count: v.count, subtotal: v.subtotal })),
+    });
+  };
+
+  const handleConfirmDownloadFreeeDealsCsv = () => {
+    if (freeeDealsPreview == null) return;
+    const csv = buildBomUtf8CsvContent(freeeDealsPreview.rows);
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `freee外注費_${freeeDealsMonth}.csv`;
+    a.download = `freee外注費_${freeeDealsPreview.month}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    setFreeeDealsPreview(null);
   };
 
   const handleDownloadFreeePartnersCsv = async () => {
@@ -2439,6 +2482,62 @@ function AdminDashboard(props: {
     () => activeMembers.filter((m) => (m.loginAccount ?? "").toLowerCase() !== "admin"),
     [activeMembers]
   );
+
+  /** 管理設定の集計カード共通の分母: 有効かつ管理者アカウントでないメンバー */
+  const nonAdminActiveMembers = useMemo(
+    () => activeMembers.filter((m) => (m.loginAccount ?? "").toLowerCase() !== "admin"),
+    [activeMembers]
+  );
+
+  /** 今月の登録情報確認（本人確認）の進捗。未確認者一覧は名前順 */
+  const profileConfirmMonth = getTodayJstDateString().slice(0, 7);
+  const profileConfirmedMembers = useMemo(
+    () => nonAdminActiveMembers.filter((m) => (m.profileConfirmedMonth ?? "") === profileConfirmMonth),
+    [nonAdminActiveMembers, profileConfirmMonth]
+  );
+  const profileUnconfirmedMembers = useMemo(
+    () =>
+      nonAdminActiveMembers
+        .filter((m) => (m.profileConfirmedMonth ?? "") !== profileConfirmMonth)
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, "ja")),
+    [nonAdminActiveMembers, profileConfirmMonth]
+  );
+
+  /** インボイス対応アンケートの回答内訳（各カテゴリ名前順） */
+  const invoiceIntentGroups = useMemo(() => {
+    const yes: Member[] = [];
+    const no: Member[] = [];
+    const unknown: Member[] = [];
+    const none: Member[] = [];
+    for (const m of nonAdminActiveMembers) {
+      if (m.invoiceRegistrationIntent === "yes") yes.push(m);
+      else if (m.invoiceRegistrationIntent === "no") no.push(m);
+      else if (m.invoiceRegistrationIntent === "unknown") unknown.push(m);
+      else none.push(m);
+    }
+    const byName = (a: Member, b: Member) => a.name.localeCompare(b.name, "ja");
+    return { yes: yes.sort(byName), no: no.sort(byName), unknown: unknown.sort(byName), none: none.sort(byName) };
+  }, [nonAdminActiveMembers]);
+
+  /** インボイス登録番号の現状（アンケート回答とは別軸） */
+  const invoiceRegisteredMembers = useMemo(
+    () =>
+      nonAdminActiveMembers
+        .filter((m) => (m.invoiceRegistrationNumber ?? "").trim() !== "")
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, "ja")),
+    [nonAdminActiveMembers]
+  );
+  const invoiceUnregisteredMembers = useMemo(
+    () =>
+      nonAdminActiveMembers
+        .filter((m) => (m.invoiceRegistrationNumber ?? "").trim() === "")
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, "ja")),
+    [nonAdminActiveMembers]
+  );
+
   const todayPlannedShiftList = useMemo(
     () => buildPlannedShiftListForDate(allShifts, todayStr, activeMembers),
     [allShifts, todayStr, activeMembers]
@@ -7662,6 +7761,110 @@ function AdminDashboard(props: {
             )}
           </div>
 
+          <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+            <span className="text-xs font-medium text-slate-600">今月の登録情報確認（{profileConfirmMonth}）</span>
+            <p className="text-sm text-slate-800">
+              確認済み{" "}
+              <strong className="font-semibold">
+                {profileConfirmedMembers.length}/{nonAdminActiveMembers.length}名
+              </strong>
+            </p>
+            {profileUnconfirmedMembers.length === 0 ? (
+              <p className="text-xs text-slate-500">全員確認済みです。</p>
+            ) : (
+              <details className="text-xs text-slate-600">
+                <summary className="cursor-pointer font-medium text-slate-700">
+                  未確認のメンバー（{profileUnconfirmedMembers.length}名）
+                </summary>
+                <ul className="mt-2 list-disc space-y-0.5 pl-5">
+                  {profileUnconfirmedMembers.map((m) => (
+                    <li key={m.id}>{m.name}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            <p className="text-xs text-slate-500">
+              メンバーはログイン時に月1回、登録情報の確認モーダルに応答すると{" "}
+              <code className="rounded bg-slate-200 px-1">profileConfirmedMonth</code> が今月に更新されます（対象: 有効・管理者以外）。
+            </p>
+          </div>
+
+          <div className="mb-6 flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+            <span className="text-xs font-medium text-slate-600">
+              インボイス対応アンケート（対象: 有効・管理者以外 {nonAdminActiveMembers.length}名）
+            </span>
+            <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-800">
+              <details className="text-xs text-slate-600">
+                <summary className="cursor-pointer font-medium text-slate-700">
+                  対応できる: {invoiceIntentGroups.yes.length}名
+                </summary>
+                <ul className="mt-2 list-disc space-y-0.5 pl-5">
+                  {invoiceIntentGroups.yes.map((m) => (
+                    <li key={m.id}>{m.name}</li>
+                  ))}
+                </ul>
+              </details>
+              <details className="text-xs text-slate-600">
+                <summary className="cursor-pointer font-medium text-slate-700">
+                  対応できない: {invoiceIntentGroups.no.length}名
+                </summary>
+                <ul className="mt-2 list-disc space-y-0.5 pl-5">
+                  {invoiceIntentGroups.no.map((m) => (
+                    <li key={m.id}>{m.name}</li>
+                  ))}
+                </ul>
+              </details>
+              <details className="text-xs text-slate-600">
+                <summary className="cursor-pointer font-medium text-slate-700">
+                  わからない: {invoiceIntentGroups.unknown.length}名
+                </summary>
+                <ul className="mt-2 list-disc space-y-0.5 pl-5">
+                  {invoiceIntentGroups.unknown.map((m) => (
+                    <li key={m.id}>{m.name}</li>
+                  ))}
+                </ul>
+              </details>
+              <details className="text-xs text-slate-600">
+                <summary className="cursor-pointer font-medium text-slate-700">
+                  未回答: {invoiceIntentGroups.none.length}名
+                </summary>
+                <ul className="mt-2 list-disc space-y-0.5 pl-5">
+                  {invoiceIntentGroups.none.map((m) => (
+                    <li key={m.id}>{m.name}</li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+            <div className="flex flex-col gap-2 border-t border-slate-200 pt-3">
+              <span className="text-xs font-medium text-slate-600">登録番号の登録状況（アンケート回答とは別に、現在の実際の状態）</span>
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                <details className="text-xs text-slate-600">
+                  <summary className="cursor-pointer font-medium text-slate-700">
+                    登録済み: {invoiceRegisteredMembers.length}名
+                  </summary>
+                  <ul className="mt-2 list-disc space-y-0.5 pl-5">
+                    {invoiceRegisteredMembers.map((m) => (
+                      <li key={m.id}>{m.name}</li>
+                    ))}
+                  </ul>
+                </details>
+                <details className="text-xs text-slate-600">
+                  <summary className="cursor-pointer font-medium text-slate-700">
+                    未登録: {invoiceUnregisteredMembers.length}名
+                  </summary>
+                  <ul className="mt-2 list-disc space-y-0.5 pl-5">
+                    {invoiceUnregisteredMembers.map((m) => (
+                      <li key={m.id}>{m.name}</li>
+                    ))}
+                  </ul>
+                </details>
+              </div>
+            </div>
+            <p className="text-xs text-slate-500">
+              未登録者は仕入税額控除の対象が段階的に縮小されます（経過措置の控除率は2026年10月に変更予定）。
+            </p>
+          </div>
+
           {isAdminUser && (
             <div className="mb-6 flex flex-col gap-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-4">
               <span className="text-xs font-medium text-slate-800">freee連携（取引先の自動同期）</span>
@@ -7744,22 +7947,65 @@ function AdminDashboard(props: {
                   <input
                     type="month"
                     value={freeeDealsMonth}
-                    onChange={(e) => setFreeeDealsMonth(e.target.value)}
+                    onChange={(e) => {
+                      setFreeeDealsMonth(e.target.value);
+                      setFreeeDealsPreview(null);
+                    }}
                     className="rounded border border-slate-300 bg-white px-2 py-2 text-sm text-slate-800"
                   />
                 </label>
                 <button
                   type="button"
-                  onClick={handleDownloadFreeeDealsCsv}
+                  onClick={handlePreviewFreeeDealsCsv}
                   className="rounded bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
                 >
-                  freee外注費CSVをダウンロード
+                  内容を確認
                 </button>
               </div>
               <p className="text-xs text-slate-500">
                 対象月に支払いが発生するメンバーを1人1行で出力（発生日=月末・決済期日=翌月15日・勘定科目=外注費・金額は請求書と同じ税込計算）。税区分はインボイス登録の有無で
-                「課対仕入10%」／「課対仕入（控80）10%」を自動判定します。freeeの取引インポートから取り込んでください。
+                「課対仕入10%」／「課対仕入（控80）10%」を自動判定します。freeeの取引インポートから取り込んでください。金額データのため、ダウンロード前に内容を確認できます。
               </p>
+              {freeeDealsPreview != null && (
+                <div className="flex flex-col gap-2 rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
+                  <span className="text-xs font-medium text-slate-700">{freeeDealsPreview.month} の内容確認</span>
+                  <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-slate-800">
+                    <span>
+                      件数: <strong className="font-semibold">{freeeDealsPreview.count.toLocaleString("ja-JP")}</strong>件
+                    </span>
+                    <span>
+                      合計金額:{" "}
+                      <strong className="font-semibold">{freeeDealsPreview.totalAmount.toLocaleString("ja-JP")}</strong>円
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    <span className="font-medium text-slate-700">税区分内訳:</span>
+                    <ul className="mt-1 list-disc pl-5">
+                      {freeeDealsPreview.taxBreakdown.map((t) => (
+                        <li key={t.label}>
+                          {t.label}: {t.count.toLocaleString("ja-JP")}件 / {t.subtotal.toLocaleString("ja-JP")}円
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleConfirmDownloadFreeeDealsCsv}
+                      className="w-fit rounded bg-emerald-700 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-600"
+                    >
+                      この内容でダウンロード
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFreeeDealsPreview(null)}
+                      className="w-fit rounded border border-slate-300 bg-white px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                    >
+                      閉じる
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             {bankBackfillResult != null && (
               <div
