@@ -129,6 +129,7 @@ function buildNakanoMentionPrefix(): string {
  */
 export async function notifyNakanoEscalation(params: {
   memberName: string;
+  memberAccount: string;
   question: string;
   reason: string;
   summary: string;
@@ -139,13 +140,17 @@ export async function notifyNakanoEscalation(params: {
       console.warn("[nakano] escalation slack url not configured");
       return;
     }
+    // 誰からの質問かが分からないと返信できない。氏名だけだと同姓や表示名の揺れで
+    // 特定できないことがあるので、一意に決まるログインアカウント（メール）も必ず載せる。
     const text =
       buildNakanoMentionPrefix() +
-      `🙋 中野くんが答えられない質問を受けました: ${params.memberName || "（氏名不明）"}\n` +
+      `🙋 中野くんが答えられない質問を受けました\n` +
+      `・氏名: ${params.memberName || "（氏名不明）"}\n` +
+      `・アカウント: ${params.memberAccount || "（不明）"}\n` +
       `・質問: ${params.question}\n` +
       (params.summary ? `・要約: ${params.summary}\n` : "") +
       (params.reason ? `・理由: ${params.reason}\n` : "") +
-      `本人に回答をお願いします。`;
+      `本人に回答をお願いします。前後のやりとりは管理画面の「中野くん」→「届いた質問」で確認できます。`;
     const r = await postSlackIncomingWebhook(url, { text });
     if (!r.ok) console.warn("[nakano] escalation slack failed:", r.error, r.detail);
   } catch (e) {

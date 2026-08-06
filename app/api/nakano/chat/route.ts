@@ -93,6 +93,7 @@ export async function POST(req: Request) {
   }
 
   const memberName = ctx.member.name ?? "";
+  const memberAccount = ctx.member.loginAccount ?? "";
   const remainingHour = Math.max(0, ctx.access.remainingHour - 1);
   const remainingDay = Math.max(0, ctx.access.remainingDay - 1);
 
@@ -152,6 +153,7 @@ export async function POST(req: Request) {
               send({ type: "escalated" });
               await notifyNakanoEscalation({
                 memberName,
+                memberAccount,
                 question,
                 reason: ev.reason,
                 summary: ev.summary,
