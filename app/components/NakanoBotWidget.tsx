@@ -8,6 +8,9 @@ const NOTICE_SEEN_KEY = "nakano-notice-seen";
 
 const FALLBACK_ERROR = "今つながりません。急ぎの用件は公式LINEへお願いします。";
 
+/** 本人の了承を得て使用（2026-08-06）。顔写真を使う以上、必ずAIと分かる表示を添えること */
+const AVATAR_SRC = "/nakano-avatar.jpg";
+
 type ConversationMessage = {
   id: string;
   role: "user" | "assistant";
@@ -34,19 +37,6 @@ type Bubble = {
   /** 回答待ちの仮表示。最初の text が届いたら置き換える */
   pending: boolean;
 };
-
-function ChatIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-6 w-6">
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M20 12a8 8 0 0 1-8 8H7l-3 2v-4.2A8 8 0 1 1 20 12Z"
-      />
-      <path strokeLinecap="round" d="M8.5 10.5h7M8.5 14h4.5" />
-    </svg>
-  );
-}
 
 function CloseIcon() {
   return (
@@ -391,9 +381,20 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
         type="button"
         onClick={() => setOpen(true)}
         aria-label="AIの中野くんに質問する"
-        className="fixed bottom-4 left-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-slate-800 text-white shadow-lg hover:bg-slate-700 print:hidden"
+        className="fixed bottom-4 left-4 z-40 h-14 w-14 rounded-full shadow-lg ring-2 ring-white transition hover:brightness-110 print:hidden"
       >
-        <ChatIcon />
+        <span className="relative block h-full w-full">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={AVATAR_SRC}
+            alt=""
+            className="h-full w-full rounded-full bg-slate-800 object-cover"
+          />
+          {/* 顔写真は「人が答えている」と受け取られやすいので、アイコン側にもAIと明示する */}
+          <span className="absolute -bottom-0.5 -right-0.5 rounded-full bg-slate-900 px-1.5 py-0.5 text-[9px] font-bold leading-none text-white ring-2 ring-white">
+            AI
+          </span>
+        </span>
       </button>
     );
   }
@@ -406,6 +407,8 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-white shadow-xl print:hidden sm:inset-auto sm:bottom-4 sm:left-4 sm:h-[40rem] sm:max-h-[85vh] sm:w-[28rem] sm:rounded-xl sm:border sm:border-slate-200">
       <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-4 py-3">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={AVATAR_SRC} alt="" className="h-7 w-7 rounded-full bg-slate-200 object-cover" />
         <span className="text-sm font-semibold text-slate-900">AIの中野くん</span>
         <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">AI</span>
         <button
