@@ -1,5 +1,23 @@
 # SESSION_LOG
 
+## 2026-08-06（性能P3: 操作後のrefresh()を変更データだけに絞る）
+
+- **依頼**: `app/page.tsx` の `refresh`（約21箇所の直接呼び出し＋`onRefresh` prop経由で約19箇所）が、呼ばれるたびに attendance/open_records/shifts/kpis/users/plan_actual_gap_approvals/company_holidays の7種を毎回**全件**再取得していた。KPIを1行保存しただけで全シフト・全活動記録を読み直すなど無駄が大きい（性能P3、タスク#47）。ゴールは「呼び出し元が変更したデータセットだけ指定できるようにし、指定なしなら従来どおり全件」。stale UIを避けるため保守的に、書き込み先テーブルが明確な呼び出しだけ絞る方針。
+- **変更内容**（7469f32、`app/page.tsx` のみ）:
+  1. `type RefreshScope = "records" | "openRecords" | "shifts" | "kpi" | "members" | "planActualGap" | "holidays"` を `AdminDashboard` 関数の直前に追加。
+  2. `refresh` を `(scope?: RefreshScope[]) => Promise<void>` に変更。`want(s)` ヘルパーで対象判定し、対象スコープのローダー・setterのペアだけを `tasks` 配列に積んで `Promise.all` で並列実行。引数なし呼び出しは全スコープ実行＝従来どおり全件。`try/catch`・`setLoadError` の文言は無変更。`useCallback` の依存配列は `[]` のまま（setter・importしたローダーはどれも安定参照のため）。
+  3. `AdminDashboard` props の `onRefresh` 型を `() => void` → `(scope?: RefreshScope[]) => Promise<void>` に変更（引数なし呼び出しは互換のまま）。
+  4. 書き込み先が1テーブルだけと確認できた呼び出しのみ絞り込み（各所に絞り込み理由のコメントを付与）:
+     - 打刻開始 → `["openRecords"]` ／ 打刻終了（2箇所：通常・開始なし直接終了）→ `["records","openRecords"]`
+     - メンバーのシフト提出 → `["shifts"]` ／ 管理者によるシフト代理保存 → `["shifts"]`
+     - メンバーのKPI保存・管理者によるKPI代理保存（成功パス） → `["kpi"]`
+     - 振込先・連絡先保存／月次登録情報確認（2種）→ `["members"]`
+     - 管理者による活動記録の代理保存 → `["records"]` ／ 活動記録の単体削除 → `["records"]`
+     - メンバー追加・編集フォーム保存・早朝稼働可否トグル・インターン区分トグル・時給変更・インターン単価変更・押し忘れロック解除・メンバー無効化・メンバー復元 → いずれも `/api/admin/member-update` または `/api/admin/members` 経由で `users` テーブルのみ書き込むことをAPI実装まで遡って確認した上で `["members"]`
+  5. **絞り込まず全件のままにした箇所**（書き込み先が複数テーブルに及ぶ・稀・破壊的、のいずれか）: freee同期・銀行コード一括補完・休業日登録（シフト削除を伴う）・休眠/未稼働メンバーの一括無効化・朝稼働の一括許可・予実乖離の確定と手動確定（`applyPlanActualGapResolve`/`applyPlanActualGapManualOverride` は attendance・open_records・shifts・plan_actual_gap_approvals の複数テーブルを書くと実装を読んで確認）・attendanceテーブルのRealtime購読・メンバー完全削除（`users` の物理削除は `ON DELETE CASCADE` で attendance/shifts/kpis/open_records も連鎖削除されると`supabase-schema.sql`で確認、絞ると参照ズレの恐れ）・バックアップ復元・各種エラーキャッチ内の再同期用refresh（stale状態の解消目的のため全件が安全）。
+- **検証**: `npx tsc --noEmit` ✅／`npm run build` ✅（`✓ Compiled successfully`）。全narrowed箇所を再読みし「この操作の後、画面には再読込していないデータセットに依存する表示が残っていないか」を再確認（KpiTab・ShiftDeadlineCountdown・振込先フォームの未入力判定・予実乖離テーブルなど、いずれも該当データのみ表示していることを確認）。`git show --stat HEAD` で `app/page.tsx` 1ファイルのみの変更を確認。
+- **反映**: `main` へ push 済み（7469f32）。
+
 ## 2026-08-06（性能P1: 未打刻チェックCronの読み込みを対象日だけに）
 
 - **依頼**: `/api/cron/missed-punch-start`（`vercel.json` で5分毎＝1日288回実行）が、1日分の判定にしか使わないのに `loadRecordsOrThrow`/`loadShiftsOrThrow`/`loadOpenRecordsOrThrow` で attendance/shifts/open_records を毎回**全件**ロードしていた（本番実測 約2,259/5,425/7行）。Supabase無料枠のquota超過リスク対策の一環（性能P1、タスク#45）。
