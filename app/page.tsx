@@ -311,6 +311,23 @@ function formatTime(iso: string): string {
   return d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
 }
 
+/** TIMESTAMPTZ を JST の "YYYY/MM/DD HH:mm" 表示にする（freee同期履歴など） */
+function formatJstDateTimeLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  const parts = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}/${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
 function formatDisplayDate(dateStr: string): string {
   const parts = dateStr.split("-").map(Number);
   const y = parts[0];
@@ -1608,6 +1625,34 @@ function AdminDashboard(props: {
   const [freeeSyncResult, setFreeeSyncResult] = useState<{ variant: "success" | "error"; message: string } | null>(
     null
   );
+  /** freee 同期の実行履歴（直近10件・新しい順）。未取得中は null、取得失敗時は空配列で「記録なし」と同様に表示する */
+  const [freeeSyncLogs, setFreeeSyncLogs] = useState<
+    | {
+        id: string;
+        startedAt: string;
+        triggerKind: "manual" | "cron";
+        ok: boolean;
+        companyName: string | null;
+        createdCount: number;
+        updatedCount: number;
+        errorCount: number;
+        errorDetail: string | null;
+      }[]
+    | null
+  >(null);
+
+  const refreshFreeeSyncLogs = useCallback(() => {
+    if (!isAdminUser) return;
+    void fetch("/api/admin/freee-sync-logs", { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((data: { ok?: boolean; logs?: typeof freeeSyncLogs }) => {
+        setFreeeSyncLogs(Array.isArray(data.logs) ? data.logs : []);
+      })
+      .catch(() => {
+        // マイグレーション未実行（テーブル未作成）等でも画面は落とさず「記録なし」表示にする
+        setFreeeSyncLogs([]);
+      });
+  }, [isAdminUser]);
 
   useEffect(() => {
     if (!isAdminUser) return;
@@ -1629,6 +1674,10 @@ function AdminDashboard(props: {
       alive = false;
     };
   }, [isAdminUser]);
+
+  useEffect(() => {
+    refreshFreeeSyncLogs();
+  }, [refreshFreeeSyncLogs]);
 
   // freee OAuth コールバックからの戻り（?freee=connected / error）を拾って結果表示＋URLを掃除
   useEffect(() => {
@@ -1684,6 +1733,7 @@ function AdminDashboard(props: {
       setFreeeSyncResult({ variant: "error", message: e instanceof Error ? e.message : String(e) });
     } finally {
       setFreeeSyncBusy(false);
+      refreshFreeeSyncLogs();
     }
   };
 
@@ -7905,6 +7955,57 @@ function AdminDashboard(props: {
                   {freeeSyncResult.message}
                 </div>
               )}
+              <div className="border-t border-emerald-200 pt-3">
+                <span className="text-xs font-medium text-slate-700">最終同期</span>
+                {freeeSyncLogs == null ? (
+                  <p className="mt-1 text-xs text-slate-500">確認中…</p>
+                ) : freeeSyncLogs.length === 0 ? (
+                  <p className="mt-1 text-xs text-slate-500">まだ同期の記録がありません。</p>
+                ) : (
+                  <p
+                    className={`mt-1 text-xs font-medium ${
+                      freeeSyncLogs[0].ok ? "text-slate-700" : "text-red-600"
+                    }`}
+                  >
+                    {formatJstDateTimeLabel(freeeSyncLogs[0].startedAt)}（
+                    {freeeSyncLogs[0].triggerKind === "manual" ? "手動" : "自動"}） —{" "}
+                    {freeeSyncLogs[0].ok
+                      ? `成功 / 新規 ${freeeSyncLogs[0].createdCount}名 ・ 更新 ${freeeSyncLogs[0].updatedCount}名 ・ エラー ${freeeSyncLogs[0].errorCount}名`
+                      : `失敗${freeeSyncLogs[0].errorDetail ? `: ${freeeSyncLogs[0].errorDetail}` : ""}`}
+                  </p>
+                )}
+                {freeeSyncLogs != null && freeeSyncLogs.length > 0 && (
+                  <details className="mt-2 text-xs text-slate-600">
+                    <summary className="cursor-pointer select-none font-medium text-slate-700">
+                      直近{freeeSyncLogs.length}件の同期履歴
+                    </summary>
+                    <ul className="mt-2 space-y-1.5">
+                      {freeeSyncLogs.map((log) => (
+                        <li
+                          key={log.id}
+                          className={`rounded border px-2 py-1.5 ${
+                            log.ok ? "border-slate-200 bg-white" : "border-red-200 bg-red-50 text-red-700"
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center gap-x-2">
+                            <span className="font-medium">{formatJstDateTimeLabel(log.startedAt)}</span>
+                            <span>{log.triggerKind === "manual" ? "手動" : "自動"}</span>
+                            <span>{log.ok ? "成功" : "失敗"}</span>
+                            {log.ok && (
+                              <span>
+                                新規 {log.createdCount} ・ 更新 {log.updatedCount} ・ エラー {log.errorCount}
+                              </span>
+                            )}
+                          </div>
+                          {log.errorDetail != null && log.errorDetail !== "" && (
+                            <p className="mt-0.5 whitespace-pre-wrap">{log.errorDetail}</p>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
             </div>
           )}
 

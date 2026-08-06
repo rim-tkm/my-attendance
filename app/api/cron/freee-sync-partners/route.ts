@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/cron-verify";
 import { syncAllMembersToFreee } from "@/lib/freee-partner-sync";
+import { recordFreeeSyncLog } from "@/lib/freee-sync-log";
 import { postSlackIncomingWebhook, resolveSlackWebhookUrl } from "@/lib/slack-webhook";
 
 /**
@@ -22,16 +23,19 @@ export async function GET(request: NextRequest) {
   };
 
   // 想定外の例外でも必ず Slack 通知に乗せる（未捕捉で500になると同期停止に誰も気付けない）
+  const startedAt = new Date();
   let result: Awaited<ReturnType<typeof syncAllMembersToFreee>>;
   try {
     result = await syncAllMembersToFreee();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    await recordFreeeSyncLog("cron", { ok: false, error: msg }, startedAt);
     await notifySlack(
       `⚠️ freee取引先の自動同期が想定外のエラーで停止しました: ${msg}\n管理画面の「管理設定 → freee連携」を確認してください。`
     );
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
+  await recordFreeeSyncLog("cron", result, startedAt);
 
   if (!result.ok) {
     await notifySlack(

@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
 import { syncAllMembersToFreee } from "@/lib/freee-partner-sync";
+import { recordFreeeSyncLog } from "@/lib/freee-sync-log";
 
 function isAdmin(session: { user?: { loginId?: string } } | null): boolean {
   return (session?.user?.loginId ?? "").toLowerCase() === "admin";
@@ -16,7 +17,9 @@ export async function POST() {
   if (!session?.user || !isAdmin(session)) {
     return NextResponse.json({ error: "管理者のみ利用できます" }, { status: 403 });
   }
+  const startedAt = new Date();
   const result = await syncAllMembersToFreee();
+  await recordFreeeSyncLog("manual", result, startedAt);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }
