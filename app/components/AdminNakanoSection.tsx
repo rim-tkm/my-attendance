@@ -591,6 +591,24 @@ export function AdminNakanoSection() {
     [knowledge.rows, orderedKnowledge]
   );
 
+  // 総額だけでは「使われた量」と「1問の重さ」が混ざって判断できない。
+  // 300件/日で回せるかは 1問あたりの単価で決まるので、そこを出す。
+  const yenPerQuestion = useMemo(() => {
+    const n = usage.usage?.aiQuestionCount ?? 0;
+    if (n <= 0) return 0;
+    return Math.round((usage.estimatedYen / n) * 10) / 10;
+  }, [usage.usage, usage.estimatedYen]);
+
+  // キャッシュが効いた割合。読み出しは書き込みの約1/20の単価なので、
+  // ここが下がると1問あたりの費用が跳ね上がる。費用が高いときに最初に見る数字。
+  const cacheHitLabel = useMemo(() => {
+    const read = usage.usage?.cacheReadTokens ?? 0;
+    const write = usage.usage?.cacheWriteTokens ?? 0;
+    const total = read + write;
+    if (total <= 0) return "—";
+    return `${Math.round((read / total) * 1000) / 10}%`;
+  }, [usage.usage]);
+
   return (
     <div className="space-y-6">
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -730,6 +748,26 @@ export function AdminNakanoSection() {
                   {Math.round(usage.usage.outputTokens).toLocaleString("ja-JP")}
                 </p>
               </div>
+              {/* 費用の大半はこの2つで決まる。表示していないと「なぜ高いのか」が分からない */}
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-[11px] text-slate-500">キャッシュ読み込み（安い）</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">
+                  {Math.round(usage.usage.cacheReadTokens).toLocaleString("ja-JP")}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-[11px] text-slate-500">キャッシュ書き込み（高い）</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">
+                  {Math.round(usage.usage.cacheWriteTokens).toLocaleString("ja-JP")}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[11px] text-slate-500">1問あたりの平均</p>
+                <p className="mt-1 text-lg font-semibold text-slate-900">
+                  約 {yenPerQuestion.toLocaleString("ja-JP")}
+                  <span className="ml-1 text-xs font-normal text-slate-500">円</span>
+                </p>
+              </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <p className="text-[11px] text-slate-500">概算費用</p>
                 <p className="mt-1 text-lg font-semibold text-slate-900">
@@ -739,6 +777,11 @@ export function AdminNakanoSection() {
               </div>
             </div>
             <p className="mt-2 text-[11px] text-slate-500">
+              知識はキャッシュに載せて使い回しています。キャッシュが効いた割合{" "}
+              <span className="font-semibold text-slate-700">{cacheHitLabel}</span>
+              。ここが低いほど1問あたりの費用が上がります。
+            </p>
+            <p className="mt-1 text-[11px] text-slate-500">
               Anthropicの実際の請求額とは一致しません。目安です。
             </p>
           </>
