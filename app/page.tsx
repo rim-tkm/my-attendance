@@ -2865,24 +2865,6 @@ function AdminDashboard(props: {
   ];
 
   const selectedProductivityPeriod = productivityPeriodOptions.find((p) => p.key === productivityPeriodKey) ?? productivityPeriodOptions[0];
-  // 全 KPI / 全稼働を期間で走査する重い計算。期間（文字列）と元配列が変わった時だけ再計算する。
-  const rangeKpisForProductivity = useMemo(
-    () => getKpiInDateRange(allKpiRecords, selectedProductivityPeriod.start, selectedProductivityPeriod.end),
-    [allKpiRecords, selectedProductivityPeriod.start, selectedProductivityPeriod.end]
-  );
-  const rangeTotalsForProductivity = useMemo(
-    () => getKpiTotalsFromRecords(rangeKpisForProductivity),
-    [rangeKpisForProductivity]
-  );
-  const rangeMinutesForProductivity = useMemo(
-    () =>
-      allRecords
-        .filter((r) => r.date >= selectedProductivityPeriod.start && r.date <= selectedProductivityPeriod.end)
-        .reduce((s, r) => s + r.durationMinutes, 0),
-    [allRecords, selectedProductivityPeriod.start, selectedProductivityPeriod.end]
-  );
-  const rangeApoCostMinutes =
-    rangeTotalsForProductivity.decisionMakerApo > 0 ? rangeMinutesForProductivity / rangeTotalsForProductivity.decisionMakerApo : null;
 
   // ダッシュボード表示日付に基づく集計（Supabase kpis / attendance / open_records を日付でフィルタ）
   // 全配列を選択日で走査する。dashboardDate と元配列が変わった時だけ再計算する。
