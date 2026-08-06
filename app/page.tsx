@@ -177,6 +177,8 @@ import { AnnouncementGateModal } from "@/app/components/AnnouncementGateModal";
 import { AnnouncementsTab } from "@/app/components/AnnouncementsTab";
 import { useMemberAnnouncements } from "@/app/components/useMemberAnnouncements";
 import { AdminAnnouncementsSection, useAdminAnnouncements } from "@/app/components/AdminAnnouncementsSection";
+import { AdminNakanoSection } from "@/app/components/AdminNakanoSection";
+import NakanoBotWidget from "@/app/components/NakanoBotWidget";
 import {
   buildPunchMissLineMessage,
   isPunchMissLocked,
@@ -794,6 +796,7 @@ type AdminSection =
   | "planActualGap"
   | "dormant"
   | "announcements"
+  | "nakano"
   | "settings"
   | "roi"
   | "productivityExport"
@@ -1464,6 +1467,12 @@ function AdminNavIcon({ id }: { id: AdminSection }) {
       <>
         <path d="M4 9v6h3l5 4V5L7 9H4z" />
         <path d="M16 9a4 4 0 0 1 0 6" />
+      </>
+    ),
+    nakano: (
+      <>
+        <path d="M4 5h16v10H9l-4 4V5z" />
+        <path d="M9 9h.01M13 9h.01" />
       </>
     ),
     planActualGap: (
@@ -4216,6 +4225,7 @@ function AdminDashboard(props: {
     { id: "announcements", label: "お知らせ" },
     ...(isAdminUser
       ? ([
+          { id: "nakano" as const, label: "中野くん" },
           { id: "roi" as const, label: "生産性分析（ROI）" },
           { id: "productivityExport" as const, label: "生産性CSV" },
           { id: "invoiceBatchExport" as const, label: "請求書一括記帳" },
@@ -7525,6 +7535,8 @@ function AdminDashboard(props: {
       {adminSection === "announcements" && (
         <AdminAnnouncementsSection state={adminAnnouncements} />
       )}
+
+      {adminSection === "nakano" && <AdminNakanoSection />}
 
       {adminSection === "dormant" && (
         <div className="space-y-6">
@@ -12340,6 +12352,10 @@ export default function DashboardPage() {
           onClose={() => setAnnouncementGateDismissed(true)}
         />
       )}
+      {/* インターンはシフトを持たず稼働時間帯の判定ができないため対象外（質問は従来どおり公式LINEで受ける） */}
+      <NakanoBotWidget
+        enabled={!isAdminMode && !!currentMember && !isInternMember(currentMember)}
+      />
       {memberPunchMissLocked && currentMember && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/70 p-4 print:hidden">
           <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl bg-white p-5 shadow-xl sm:p-6">

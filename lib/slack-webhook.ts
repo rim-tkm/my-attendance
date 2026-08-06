@@ -15,7 +15,8 @@ export type SlackWebhookPurpose =
   | "weekly_schedule"
   | "productivity"
   | "missed_punch_start"
-  | "kpi_missing_after_punch";
+  | "kpi_missing_after_punch"
+  | "nakano";
 
 const PURPOSE_ENV: Record<SlackWebhookPurpose, string> = {
   daily: "SLACK_WEBHOOK_DAILY_URL",
@@ -27,6 +28,7 @@ const PURPOSE_ENV: Record<SlackWebhookPurpose, string> = {
   productivity: "SLACK_WEBHOOK_PRODUCTIVITY_URL",
   missed_punch_start: "SLACK_WEBHOOK_MISSED_PUNCH_URL",
   kpi_missing_after_punch: "SLACK_WEBHOOK_KPI_MISSING_URL",
+  nakano: "SLACK_WEBHOOK_NAKANO_URL",
 };
 
 function nonemptyTrim(v: string | undefined): string | undefined {
@@ -64,6 +66,9 @@ export function resolveSlackWebhookUrl(purpose: SlackWebhookPurpose): string | u
       break;
     case "kpi_missing_after_punch":
       primary = nonemptyTrim(process.env.SLACK_WEBHOOK_KPI_MISSING_URL);
+      break;
+    case "nakano":
+      primary = nonemptyTrim(process.env.SLACK_WEBHOOK_NAKANO_URL);
       break;
     default:
       primary = undefined;
