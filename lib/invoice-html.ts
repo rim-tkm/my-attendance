@@ -8,6 +8,7 @@ import {
   sumInternConfirmedAppsForMonth,
 } from "@/lib/invoice-intern";
 import { formatInvoiceRegistrationDisplayLine } from "@/lib/invoice-registration-number";
+import { paymentDueYmdForYearMonth } from "@/lib/payment-due-date";
 
 /** 請求書No.を [西暦4桁][月2桁][請求管理番号3桁] で生成（例: 202603001） */
 export function getInvoiceNumber(yearMonth: string, managementNumber: string | null | undefined): string {
@@ -19,14 +20,15 @@ export function getInvoiceNumber(yearMonth: string, managementNumber: string | n
   return `${year}${month}${padded}`;
 }
 
-/** 対象月の翌月15日を支払期限として返す（例: 2026-03 → 2026/04/15） */
+/**
+ * 対象月の翌月15日を支払期限として返す（例: 2026-03 → 2026/04/15）。
+ * 15日が土日祝なら前営業日に前倒し（lib/payment-due-date.ts、2026-08-06 管理者判断）。
+ */
 export function getPaymentDueDate(yearMonth: string): string {
-  const [y, m] = yearMonth.split("-").map(Number);
-  const next = new Date(y, m, 15);
-  const yy = next.getFullYear();
-  const mm = String(next.getMonth() + 1).padStart(2, "0");
-  const dd = String(next.getDate()).padStart(2, "0");
-  return `${yy}/${mm}/${dd}`;
+  const [y, m, d] = paymentDueYmdForYearMonth(yearMonth).split("-").map(Number);
+  const mm = String(m).padStart(2, "0");
+  const dd = String(d).padStart(2, "0");
+  return `${y}/${mm}/${dd}`;
 }
 
 /** 委託料単価を税込として合計→小計・消費税を逆算（各ユーザーの時給 × 実稼働時間） */

@@ -8,6 +8,7 @@ import {
   type WorkRecord,
 } from "@/lib/attendance";
 import { buildInvoicePdfModelForMember } from "@/lib/invoice-html";
+import { paymentDueYmdForYearMonth } from "@/lib/payment-due-date";
 
 export type InvoiceBatchExportRow = {
   clientName: string;
@@ -33,13 +34,13 @@ export function formatSlashDate(y: number, month: number, day: number): string {
   return `${y}/${month}/${day}`;
 }
 
-/** 一括記帳スプレッドシート「入金日」: 請求対象月の翌月15日（例: 2026-06 → 2026/7/15） */
+/**
+ * 一括記帳スプレッドシート「入金日」: 請求対象月の翌月15日（例: 2026-06 → 2026/7/15）。
+ * 15日が土日祝なら前営業日に前倒し（lib/payment-due-date.ts、2026-08-06 管理者判断）。
+ */
 export function paymentDateForYearMonth(yearMonth: string): string {
-  const [yStr, mStr] = yearMonth.split("-");
-  const y = Number(yStr);
-  const m = Number(mStr);
-  const next = new Date(y, m, 15);
-  return formatSlashDate(next.getFullYear(), next.getMonth() + 1, next.getDate());
+  const [y, m, d] = paymentDueYmdForYearMonth(yearMonth).split("-").map(Number);
+  return formatSlashDate(y, m, d);
 }
 
 export function invoiceDateForYearMonth(yearMonth: string): string {

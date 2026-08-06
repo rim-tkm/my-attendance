@@ -1,10 +1,12 @@
 import type { KpiRecord, Member, WorkRecord } from "@/lib/attendance";
 import { sumBillableMinutesForUserMonth } from "@/lib/attendance";
 import { calcMemberMonthlyPayYen, isInternMember, splitTaxInclusiveLineAmount } from "@/lib/invoice-intern";
+import { paymentDueYmdForYearMonth } from "@/lib/payment-due-date";
 
 /**
  * freee の「取引（支出）インポート」形式で月次外注費 CSV を生成する（税理士・大槻さん指定のフォーマット）。
- * - 発生日=対象月の末日、決済期日=翌月15日（末日締め・翌月15日払いの運用値）
+ * - 発生日=対象月の末日、決済期日=翌月15日（末日締め・翌月15日払いの運用値。土日祝は前営業日に前倒し。
+ *   lib/payment-due-date.ts 参照。2026-08-06 管理者判断）
  * - 金額は税込（請求書と同じ計算: 一般=時給×稼働時間、インターン=確定数×単価）
  * - 税区分はインボイス登録番号の有無で判定（あり=課対仕入10% / なし=経過措置の課対仕入（控80）10%）
  * - 税額は請求書 PDF と同一の端数処理（税込→税抜=floor(総額/1.1)、税額=差分。サンプル 55000→5000 と一致）
@@ -29,14 +31,14 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-/** 対象月（YYYY-MM）の末日・翌月15日を YYYY/MM/DD で返す */
+/** 対象月（YYYY-MM）の末日・翌月15日（土日祝なら前営業日に前倒し）を YYYY/MM/DD で返す */
 export function freeeDealDatesForMonth(yearMonth: string): { occurredOn: string; dueOn: string } {
   const [y, m] = yearMonth.split("-").map(Number);
   const lastDay = new Date(y, m, 0).getDate();
-  const due = new Date(y, m, 15); // m は 1 始まりなので Date(y, m, …) = 翌月
+  const [dueY, dueM, dueD] = paymentDueYmdForYearMonth(yearMonth).split("-").map(Number);
   return {
     occurredOn: `${y}/${pad2(m)}/${pad2(lastDay)}`,
-    dueOn: `${due.getFullYear()}/${pad2(due.getMonth() + 1)}/${pad2(due.getDate())}`,
+    dueOn: `${dueY}/${pad2(dueM)}/${pad2(dueD)}`,
   };
 }
 
