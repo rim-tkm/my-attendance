@@ -7,7 +7,13 @@ import {
   type Shift,
   type WorkRecord,
 } from "@/lib/attendance";
-import { getUsersDb, loadMembers, loadOpenRecordsOrThrow, loadRecordsOrThrow, loadShiftsOrThrow } from "@/lib/supabase-data";
+import {
+  getUsersDb,
+  loadMembers,
+  loadOpenRecordsForDateOrThrow,
+  loadRecordsForDateOrThrow,
+  loadShiftsForDateOrThrow,
+} from "@/lib/supabase-data";
 import { getSupabase } from "@/lib/supabase";
 
 function readGraceMinutes(): number {
@@ -336,16 +342,18 @@ export async function runMissedPunchSlotReminders(options?: {
 
   // 読取失敗を [] に潰す通常ローダーを使うと「全員未打刻」に見えて誤アラートが
   // 一斉送信されるため、失敗したらこの実行自体を中断する（監査指摘 2026-08-05）。
+  // この Cron は対象日（dateYmd）1日分の判定しかしないため、attendance/shifts/open_records は
+  // 全件ではなく対象日だけを取得する日付限定ローダーを使う（性能対策 2026-08-06）。
   let membersOrNull: Awaited<ReturnType<typeof loadMembers>>;
-  let records: Awaited<ReturnType<typeof loadRecordsOrThrow>>;
-  let shifts: Awaited<ReturnType<typeof loadShiftsOrThrow>>;
-  let openRecs: Awaited<ReturnType<typeof loadOpenRecordsOrThrow>>;
+  let records: Awaited<ReturnType<typeof loadRecordsForDateOrThrow>>;
+  let shifts: Awaited<ReturnType<typeof loadShiftsForDateOrThrow>>;
+  let openRecs: Awaited<ReturnType<typeof loadOpenRecordsForDateOrThrow>>;
   try {
     [membersOrNull, records, shifts, openRecs] = await Promise.all([
       loadMembers(),
-      loadRecordsOrThrow(),
-      loadShiftsOrThrow(),
-      loadOpenRecordsOrThrow(),
+      loadRecordsForDateOrThrow(dateYmd),
+      loadShiftsForDateOrThrow(dateYmd),
+      loadOpenRecordsForDateOrThrow(dateYmd),
     ]);
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
