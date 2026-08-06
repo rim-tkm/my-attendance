@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import type { PostgrestError } from "@supabase/supabase-js";
 import type { CompanyHoliday, Member, WorkRecord, OpenRecord, Shift, KpiRecord } from "@/lib/attendance";
 import {
   assertWorkRecordsDurationWithinHardCap,
@@ -843,28 +844,108 @@ const SHIFT_SELECT_COLUMNS = "id,user_id,date,start_planned,end_planned,start_pl
 const KPI_SELECT_COLUMNS =
   "id,user_id,date,start_time,total_calls,valid_calls,kc_count,follow_up_created,decision_maker_apo,non_decision_maker_apo,confirmed_dm,confirmed_non_dm,kpi_missing_slack_notified_at";
 
+/** 全件ページング取得の並列度上限。総件数が伸びても同時に投げるページ数を小さく
+ *  抑え、Supabase/PostgREST への同時接続が際限なく増えないようにする。 */
+const PAGE_FETCH_CONCURRENCY = 4;
+
+type PagedPageResult<T> = { data: T[] | null; error: PostgrestError | null; count: number | null };
+
+/**
+ * 全件ページング取得の共通ヘルパー（attendance/shifts/kpis の3テーブルで共用）。
+ *
+ * 1ページ目だけ `count: "exact"` を付けて取得し、PostgREST が返す総件数
+ * （Content-Range由来）を使って残りページ数を把握する。総件数確認用の
+ * 別クエリは発行しない。総件数が1ページに収まる場合はそのまま返し、
+ * 追加リクエストは発生しない（少人数期間・小規模テーブルは従来どおり1リクエスト）。
+ *
+ * 収まらない場合は残りページを PAGE_FETCH_CONCURRENCY 件ずつバッチに分けて並列取得する。
+ * ただし「あるページの行数が SUPABASE_SELECT_PAGE_SIZE 未満だった時点でそこが最終ページ」
+ * という、従来の逐次ループと同じ終了条件をページ順に判定して打ち切る。1ページ目取得後に
+ * 行の増減があっても総件数とズレて過不足が出ないようにするための保険。
+ *
+ * order 句は fetchPage 側で毎回同一に指定してもらう前提（呼び出し元で固定）。
+ * range() がページごとに重複・欠落しないのはこの前提があってこそなので、
+ * fetchPage を差し替える時は order を絶対に変えないこと。
+ *
+ * エラー時は、逐次ループで同じページが失敗した場合と同じ状態（=そのページより前の
+ * ページ分だけを積んだ配列）を `onError` に渡す。[] にするか・そのまま返すか等の
+ * 最終判断は呼び出し元ごとに異なるため `onError` に委ねる。
+ */
+async function loadAllRowsPaged<T>(
+  fetchPage: (from: number, withCount: boolean) => PromiseLike<PagedPageResult<T>>,
+  onError: (error: PostgrestError, partial: T[]) => T[]
+): Promise<T[]> {
+  const first = await fetchPage(0, true);
+  if (first.error) {
+    return onError(first.error, []);
+  }
+  const out: T[] = first.data ?? [];
+
+  // 1ページ目が満杯でなければ、そこが最終ページ（従来の逐次ループと同じ判定）
+  if (out.length < SUPABASE_SELECT_PAGE_SIZE) {
+    return out;
+  }
+
+  const total = first.count;
+  // count が取れなかった異常系（通常は count:"exact" 指定時は必ず返る）。
+  // 総件数が分からず並列化の計画が立てられないため、安全側で従来の逐次取得にフォールバックする。
+  if (total === null) {
+    console.warn("loadAllRowsPaged: count is null, falling back to sequential paging");
+    let from = SUPABASE_SELECT_PAGE_SIZE;
+    for (;;) {
+      const page = await fetchPage(from, false);
+      if (page.error) return onError(page.error, out);
+      const chunk = page.data ?? [];
+      if (chunk.length === 0) break;
+      out.push(...chunk);
+      if (chunk.length < SUPABASE_SELECT_PAGE_SIZE) break;
+      from += SUPABASE_SELECT_PAGE_SIZE;
+    }
+    return out;
+  }
+
+  // 残りページの開始位置一覧（1ページ目は取得済みなので2ページ目以降のみ）
+  const remainingStarts: number[] = [];
+  for (let from = SUPABASE_SELECT_PAGE_SIZE; from < total; from += SUPABASE_SELECT_PAGE_SIZE) {
+    remainingStarts.push(from);
+  }
+
+  for (let i = 0; i < remainingStarts.length; i += PAGE_FETCH_CONCURRENCY) {
+    const batch = remainingStarts.slice(i, i + PAGE_FETCH_CONCURRENCY);
+    const results = await Promise.all(batch.map((from) => fetchPage(from, false)));
+
+    for (const page of results) {
+      if (page.error) {
+        return onError(page.error, out);
+      }
+      const chunk = page.data ?? [];
+      out.push(...chunk);
+      if (chunk.length < SUPABASE_SELECT_PAGE_SIZE) {
+        // 逐次ループと同じ終了条件。バッチ内でこれより後ろのページが既に
+        // 届いていても、逐次実行なら到達しなかったはずなので破棄して打ち切る。
+        return out;
+      }
+    }
+  }
+
+  return out;
+}
+
 async function loadAllAttendanceRows(
   supabase: NonNullable<ReturnType<typeof getSupabase>>
 ): Promise<DbAttendance[]> {
-  const out: DbAttendance[] = [];
-  let from = 0;
-  for (;;) {
-    const { data, error } = await supabase
-      .from("attendance")
-      .select(ATTENDANCE_SELECT_COLUMNS)
-      .order("date", { ascending: false })
-      .range(from, from + SUPABASE_SELECT_PAGE_SIZE - 1);
-    if (error) {
+  return loadAllRowsPaged<DbAttendance>(
+    (from, withCount) =>
+      supabase
+        .from("attendance")
+        .select(ATTENDANCE_SELECT_COLUMNS, withCount ? { count: "exact" } : undefined)
+        .order("date", { ascending: false })
+        .range(from, from + SUPABASE_SELECT_PAGE_SIZE - 1),
+    (error, partial) => {
       console.warn("loadRecords pagination error:", error);
-      return out.length > 0 ? out : [];
+      return partial.length > 0 ? partial : [];
     }
-    const chunk = data ?? [];
-    if (chunk.length === 0) break;
-    out.push(...chunk);
-    if (chunk.length < SUPABASE_SELECT_PAGE_SIZE) break;
-    from += SUPABASE_SELECT_PAGE_SIZE;
-  }
-  return out;
+  );
 }
 
 export async function loadRecords(): Promise<WorkRecord[]> {
@@ -992,47 +1073,33 @@ export async function saveOpenRecords(records: OpenRecord[]): Promise<void> {
 
 /** PostgREST の 1 リクエスト行上限を超えないようページングして全件取得 */
 async function loadAllShiftRows(supabase: NonNullable<ReturnType<typeof getSupabase>>): Promise<DbShift[]> {
-  const out: DbShift[] = [];
-  let from = 0;
-  for (;;) {
-    const { data, error } = await supabase
-      .from("shifts")
-      .select(SHIFT_SELECT_COLUMNS)
-      .order("date", { ascending: false })
-      .range(from, from + SUPABASE_SELECT_PAGE_SIZE - 1);
-    if (error) {
+  return loadAllRowsPaged<DbShift>(
+    (from, withCount) =>
+      supabase
+        .from("shifts")
+        .select(SHIFT_SELECT_COLUMNS, withCount ? { count: "exact" } : undefined)
+        .order("date", { ascending: false })
+        .range(from, from + SUPABASE_SELECT_PAGE_SIZE - 1),
+    (error, partial) => {
       console.warn("loadShifts pagination error:", error);
-      return out.length > 0 ? out : [];
+      return partial.length > 0 ? partial : [];
     }
-    const chunk = data ?? [];
-    if (chunk.length === 0) break;
-    out.push(...chunk);
-    if (chunk.length < SUPABASE_SELECT_PAGE_SIZE) break;
-    from += SUPABASE_SELECT_PAGE_SIZE;
-  }
-  return out;
+  );
 }
 
 async function loadAllKpiRows(supabase: NonNullable<ReturnType<typeof getSupabase>>): Promise<DbKpi[]> {
-  const out: DbKpi[] = [];
-  let from = 0;
-  for (;;) {
-    const { data, error } = await supabase
-      .from("kpis")
-      .select(KPI_SELECT_COLUMNS)
-      .order("date", { ascending: false })
-      .range(from, from + SUPABASE_SELECT_PAGE_SIZE - 1);
-    if (error) {
+  return loadAllRowsPaged<DbKpi>(
+    (from, withCount) =>
+      supabase
+        .from("kpis")
+        .select(KPI_SELECT_COLUMNS, withCount ? { count: "exact" } : undefined)
+        .order("date", { ascending: false })
+        .range(from, from + SUPABASE_SELECT_PAGE_SIZE - 1),
+    (error, partial) => {
       console.warn("loadKpi pagination error:", error);
-      return out.length > 0 ? out : [];
+      return partial.length > 0 ? partial : [];
     }
-    const chunk = data ?? [];
-    if (chunk.length === 0) break;
-    out.push(...chunk);
-    if (chunk.length < SUPABASE_SELECT_PAGE_SIZE) break;
-    from += SUPABASE_SELECT_PAGE_SIZE;
-  }
-  return out;
+  );
 }
 
 export async function loadShifts(): Promise<Shift[]> {
