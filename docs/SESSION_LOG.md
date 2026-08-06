@@ -1,5 +1,17 @@
 # SESSION_LOG
 
+## 2026-08-06（性能P1: 未打刻チェックCronの読み込みを対象日だけに）
+
+- **依頼**: `/api/cron/missed-punch-start`（`vercel.json` で5分毎＝1日288回実行）が、1日分の判定にしか使わないのに `loadRecordsOrThrow`/`loadShiftsOrThrow`/`loadOpenRecordsOrThrow` で attendance/shifts/open_records を毎回**全件**ロードしていた（本番実測 約2,259/5,425/7行）。Supabase無料枠のquota超過リスク対策の一環（性能P1、タスク#45）。
+- **事前確認した安全性**: `collectMissedPunchStartCandidates`/`collectMissedPunchEndCandidates`（`lib/missed-punch-start-reminder.ts`）はどちらも内部で `dateYmd` 以外の行を捨てている（`hasOpenRecordOnDate`／`canonicalShiftForUserDate`／`records.filter(r => r.date === dateYmd)`／`opensByUser` 構築時の `if (o.date !== dateYmd) continue`）。よって全件ロード→自前フィルタと、日付限定ロード後は結果的に同じ行集合になる。
+- **変更内容**（db5da6d、`lib/supabase-data.ts` と `lib/missed-punch-start-reminder.ts` のみ）:
+  1. `lib/supabase-data.ts` に日付限定の厳格ローダーを3つ追加: `loadRecordsForDateOrThrow(dateYmd)` / `loadShiftsForDateOrThrow(dateYmd)`（既存 `ATTENDANCE_SELECT_COLUMNS`/`SHIFT_SELECT_COLUMNS` を再利用し `.eq("date", dateYmd)`）／`loadOpenRecordsForDateOrThrow(dateYmd)`。1日分の行数はメンバー数程度（現状170人未満）でPostgRESTの1000行上限に届かないためページング無し。**いずれもDB読取失敗時は`throw`**（`[]`を返して「全員未打刻」に誤判定させないため。既存 `loadOpenRecordsOrThrow` は内部で `safeQuery`（エラーを`[]`に潰す）を使っており厳格版としては不完全だったため、新ローダーはこれを使わず直接クエリしてthrowする形にした＝既知の既存不整合として今回は温存・報告のみ）。
+  2. `lib/missed-punch-start-reminder.ts` の `runMissedPunchSlotReminders` 内、`Promise.all` の3読み込みを新ローダー（`dateYmd`渡し）に差し替え。`loadMembers()`・`try/catch`によるfail-safe（読取失敗時 `{ok:false, error:"DB read failed"}`）・`membersOrNull===null`チェックは無変更。
+- **検証**: `npx tsc --noEmit` ✅／`npm run build` ✅（`✓ Compiled successfully`）。`git show --stat HEAD` で対象2ファイルのみ変更を確認。デプロイ後、本番Cronエンドポイントへ未認証で `curl` →`401`（変更前と同じ挙動＝認証ガードは無傷、デプロイは反映済み）を確認。
+- **効果**: 1回あたり約7,900行→数百行、1日あたり約226万行の読み込みが約97%減の見込み（実クエリ量はSupabaseダッシュボード側のログで別途確認要）。
+- **既存の全件版 `loadRecordsOrThrow`/`loadShiftsOrThrow`/`loadOpenRecordsOrThrow` は本Cronが唯一の呼び出し元だったため、現在コードベース内で未使用**（削除はスコープ外につき見送り。他タスクで使う可能性を考慮しそのまま残置）。
+- **反映**: `main` へ push 済み（db5da6d）。
+
 ## 2026-08-06（メンバー画面: 終了後KPI直行・KPI整合性チェック・終了モーダル初期値）
 
 - **依頼**: 3件の改善。①稼働終了を押した後にKPI入力を忘れる人が多いので、終了後は自動でKPIタブへ誘導する ②KPIはあり得ない数字の組み合わせ（有効コール>総コール等）や未来日付でも保存できてしまうので保存前に弾く ③「開始なしで終了」モーダルの開始時刻入力が空欄同然のデフォルトで毎回手入力が要る。
