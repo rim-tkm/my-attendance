@@ -181,14 +181,12 @@ export function evaluateNakanoAiAccess(params: {
     return deny("not_launched", `AIの中野くんは準備中です。${NAKANO_LINE_FALLBACK}`);
   }
 
-  // 管理者は試運転・運用確認のため稼働時間帯の制限を受けない。
-  // 回数上限は管理者にも適用する（暴走時の歯止めを1つも外さないため）。
-  if (!isNakanoAdmin(member) && !isWithinNakanoShiftWindow(now, shift, limits.marginMinutes)) {
-    return deny(
-      "outside_shift_window",
-      `今は稼働時間外です。よくある質問は見られます。${NAKANO_LINE_FALLBACK}`
-    );
-  }
+  // 稼働時間帯の制限は 2026-08-06 に撤廃した。
+  // 「公式LINEに連絡する前にまず中野くんへ」という運用方針にした以上、
+  // 時間外に聞けないままだと、その人はLINEに行くしかなくなり方針が破綻するため。
+  // 費用の天井は回数上限（1時間/1日）で押さえているので、外しても上振れしない。
+  // 復活させたいときは NAKANO_SHIFT_WINDOW_ENABLED を見るようにすればよい
+  // （判定関数 isWithinNakanoShiftWindow はそのまま残してある）。
 
   if (remainingDay <= 0) {
     return deny(
