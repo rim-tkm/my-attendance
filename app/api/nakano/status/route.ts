@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
+import { readNakanoLimitsFromEnv } from "@/lib/nakano-access";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export const dynamic = "force-dynamic";
@@ -19,6 +20,12 @@ export async function GET() {
   const session = await getServerSession(authOptions);
   const userId = (session?.user as { id?: string } | undefined)?.id;
   if (!userId) {
+    return NextResponse.json({ ok: true, ready: false });
+  }
+
+  // 公開前は管理者だけに出す。ボタンが出ている＝公開済み、と一目で分かる状態にしておく。
+  const isAdmin = ((session?.user as { loginId?: string } | undefined)?.loginId ?? "").toLowerCase() === "admin";
+  if (!readNakanoLimitsFromEnv().memberLaunched && !isAdmin) {
     return NextResponse.json({ ok: true, ready: false });
   }
 

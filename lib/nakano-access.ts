@@ -20,6 +20,7 @@ export const NAKANO_DEFAULT_SHIFT_MARGIN_MINUTES = 30;
 export const NAKANO_LINE_FALLBACK = "急ぎの用件は公式LINEへお願いします。";
 
 export type NakanoDenyReason =
+  | "not_launched"
   | "not_eligible"
   | "outside_shift_window"
   | "hourly_limit"
@@ -39,6 +40,12 @@ export type NakanoLimits = {
   hourlyLimit: number;
   dailyLimit: number;
   marginMinutes: number;
+  /**
+   * メンバーへ公開済みか。既定は false（管理者だけが使える試運転状態）。
+   * 公開は取り返しがつかない（全メンバーの画面に一斉に出る）ので、
+   * 環境変数を明示的に立てるまでは開かない側に倒す。
+   */
+  memberLaunched: boolean;
 };
 
 function positiveIntFromEnv(raw: string | undefined, fallback: number): number {
@@ -46,6 +53,11 @@ function positiveIntFromEnv(raw: string | undefined, fallback: number): number {
   if (!Number.isFinite(n)) return fallback;
   const i = Math.floor(n);
   return i > 0 ? i : fallback;
+}
+
+function isTruthyEnv(raw: string | undefined): boolean {
+  const t = (raw ?? "").trim().toLowerCase();
+  return t === "1" || t === "true" || t === "yes";
 }
 
 export function readNakanoLimitsFromEnv(env: NodeJS.ProcessEnv = process.env): NakanoLimits {
@@ -56,6 +68,7 @@ export function readNakanoLimitsFromEnv(env: NodeJS.ProcessEnv = process.env): N
       env.NAKANO_SHIFT_MARGIN_MINUTES,
       NAKANO_DEFAULT_SHIFT_MARGIN_MINUTES
     ),
+    memberLaunched: isTruthyEnv(env.NAKANO_LAUNCHED),
   };
 }
 
@@ -160,7 +173,12 @@ export function evaluateNakanoAiAccess(params: {
   });
 
   if (!isNakanoAvailableTo(member)) {
-    return deny("not_eligible", `中野くんはご利用いただけません。${NAKANO_LINE_FALLBACK}`);
+    return deny("not_eligible", `AIの中野くんはご利用いただけません。${NAKANO_LINE_FALLBACK}`);
+  }
+
+  // 公開前は管理者だけ。試運転を続けつつ、メンバーには一切出さない。
+  if (!limits.memberLaunched && !isNakanoAdmin(member)) {
+    return deny("not_launched", `AIの中野くんは準備中です。${NAKANO_LINE_FALLBACK}`);
   }
 
   // 管理者は試運転・運用確認のため稼働時間帯の制限を受けない。

@@ -38,7 +38,10 @@ export async function POST(req: Request) {
     if (!ctx) {
       return NextResponse.json({ ok: false, error: "メンバーが見つかりません" }, { status: 404 });
     }
-    if (ctx.access.allowed === false && ctx.access.reason === "not_eligible") {
+    if (
+      ctx.access.allowed === false &&
+      (ctx.access.reason === "not_eligible" || ctx.access.reason === "not_launched")
+    ) {
       return NextResponse.json({ ok: false, error: ctx.access.message }, { status: 403 });
     }
 

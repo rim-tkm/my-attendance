@@ -27,7 +27,10 @@ export async function GET() {
       return NextResponse.json({ ok: false, error: "メンバーが見つかりません" }, { status: 404 });
     }
     // 対象外（インターン・無効メンバー）には知識そのものを渡さない。
-    if (ctx.access.allowed === false && ctx.access.reason === "not_eligible") {
+    if (
+      ctx.access.allowed === false &&
+      (ctx.access.reason === "not_eligible" || ctx.access.reason === "not_launched")
+    ) {
       return NextResponse.json({ ok: false, error: ctx.access.message }, { status: 403 });
     }
 
