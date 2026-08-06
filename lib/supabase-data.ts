@@ -878,16 +878,8 @@ export async function loadRecords(): Promise<WorkRecord[]> {
   }
 }
 
-/** loadRecords の厳格版。DB読取に失敗したら [] に潰さず throw する（未打刻アラート等の誤発火防止用） */
-export async function loadRecordsOrThrow(): Promise<WorkRecord[]> {
-  const supabase = getSupabase();
-  if (!supabase) throw new Error("データベースに接続できません");
-  const rows = await loadAllAttendanceRows(supabase);
-  return dedupeWorkRecordsByUserDateStart(rows.map(toWorkRecord));
-}
-
 /**
- * loadRecordsOrThrow の日付限定・厳格版。5分毎に動く未打刻チェック Cron 用に、
+ * 活動記録の日付限定・厳格版。5分毎に動く未打刻チェック Cron 用に、
  * 指定日（YYYY-MM-DD）の attendance 行のみ取得する。対象日の行数はメンバー数程度
  * （現状170人未満）で PostgREST の1000行上限に届かないため、ページングは行わない。
  * DB読取に失敗したら [] に潰さず throw する（未打刻アラート等の誤発火防止用）
@@ -952,16 +944,8 @@ export async function loadOpenRecords(): Promise<OpenRecord[]> {
   }
 }
 
-/** loadOpenRecords の厳格版。DB読取に失敗したら [] に潰さず throw する */
-export async function loadOpenRecordsOrThrow(): Promise<OpenRecord[]> {
-  const supabase = getSupabase();
-  if (!supabase) throw new Error("データベースに接続できません");
-  const rows = await safeQuery<DbOpenRecord>(supabase.from("open_records").select("*"));
-  return rows.map(toOpenRecord);
-}
-
 /**
- * loadOpenRecordsOrThrow の日付限定・厳格版。5分毎に動く未打刻チェック Cron 用に、
+ * 未終了打刻の日付限定・厳格版。5分毎に動く未打刻チェック Cron 用に、
  * 指定日（YYYY-MM-DD）の open_records 行のみ取得する。対象日の行数はメンバー数程度
  * （現状170人未満）で PostgREST の1000行上限に届かないため、ページングは行わない。
  * safeQuery はエラーを [] に潰してしまう（誤アラートの原因になる）ため使わず、
@@ -1062,16 +1046,8 @@ export async function loadShifts(): Promise<Shift[]> {
   }
 }
 
-/** loadShifts の厳格版。DB読取に失敗したら [] に潰さず throw する */
-export async function loadShiftsOrThrow(): Promise<Shift[]> {
-  const supabase = getSupabase();
-  if (!supabase) throw new Error("データベースに接続できません");
-  const rows = await loadAllShiftRows(supabase);
-  return dedupeShiftsByUserDate(rows.map(toShift));
-}
-
 /**
- * loadShiftsOrThrow の日付限定・厳格版。5分毎に動く未打刻チェック Cron 用に、
+ * 稼働予定の日付限定・厳格版。5分毎に動く未打刻チェック Cron 用に、
  * 指定日（YYYY-MM-DD）の shifts 行のみ取得する。対象日の行数はメンバー数程度
  * （現状170人未満）で PostgREST の1000行上限に届かないため、ページングは行わない。
  * DB読取に失敗したら [] に潰さず throw する（未打刻アラート等の誤発火防止用）
