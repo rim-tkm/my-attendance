@@ -390,7 +390,7 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        aria-label="中野くんに質問する"
+        aria-label="AIの中野くんに質問する"
         className="fixed bottom-4 left-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-slate-800 text-white shadow-lg hover:bg-slate-700 print:hidden"
       >
         <ChatIcon />
@@ -406,7 +406,7 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-white shadow-xl print:hidden sm:inset-auto sm:bottom-4 sm:left-4 sm:h-[40rem] sm:max-h-[85vh] sm:w-[28rem] sm:rounded-xl sm:border sm:border-slate-200">
       <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-4 py-3">
-        <span className="text-sm font-semibold text-slate-900">中野くん</span>
+        <span className="text-sm font-semibold text-slate-900">AIの中野くん</span>
         <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">AI</span>
         <button
           type="button"
@@ -421,7 +421,7 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
       {!noticeSeen && (
         <div className="shrink-0 border-b border-slate-200 bg-amber-50 px-4 py-3">
           <p className="text-[11px] leading-relaxed text-slate-800">
-            中野くんはAIです。間違えることもあります。報酬・契約に関することは、必ず担当に直接聞いてください。
+            AIの中野くんです。人ではありません。間違えることもあります。報酬・契約に関することは、必ず担当に直接聞いてください。
           </p>
           <button
             type="button"

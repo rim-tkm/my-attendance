@@ -4225,7 +4225,7 @@ function AdminDashboard(props: {
     { id: "announcements", label: "お知らせ" },
     ...(isAdminUser
       ? ([
-          { id: "nakano" as const, label: "中野くん" },
+          { id: "nakano" as const, label: "AIの中野くん" },
           { id: "roi" as const, label: "生産性分析（ROI）" },
           { id: "productivityExport" as const, label: "生産性CSV" },
           { id: "invoiceBatchExport" as const, label: "請求書一括記帳" },
