@@ -12,8 +12,9 @@ import { timeToMinutes } from "@/lib/attendance";
 import { getTodayJstDateString } from "@/lib/export-schedule";
 import { isNakanoAdmin, isNakanoAvailableTo } from "@/lib/nakano";
 
-export const NAKANO_DEFAULT_HOURLY_LIMIT = 10;
-export const NAKANO_DEFAULT_DAILY_LIMIT = 30;
+// 1人あたりの上限。運用判断で 10/30 から引き下げた（2026-08-06）。
+export const NAKANO_DEFAULT_HOURLY_LIMIT = 5;
+export const NAKANO_DEFAULT_DAILY_LIMIT = 15;
 export const NAKANO_DEFAULT_SHIFT_MARGIN_MINUTES = 30;
 
 export const NAKANO_LINE_FALLBACK = "急ぎの用件は公式LINEへお願いします。";

@@ -77,7 +77,11 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
   const [steps, setSteps] = useState<NakanoStepNode[]>([]);
   /** 押してきたノードの連なり。末尾の children が今出すボタン */
   const [stepPath, setStepPath] = useState<NakanoStepNode[]>([]);
-  const [stepsCollapsed, setStepsCollapsed] = useState(false);
+  /**
+   * よくある質問の開閉。会話の下に固定表示し、開いてもそこだけがスクロールする。
+   * 会話と同じスクロール領域に置くと、項目数が多いぶん回答が画面外へ押し上げられてしまう。
+   */
+  const [stepsOpen, setStepsOpen] = useState(true);
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -195,7 +199,7 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [bubbles, stepPath, stepsCollapsed, open]);
+  }, [bubbles, open]);
 
   const patchBubble = useCallback((key: string, patch: Partial<Bubble>) => {
     setBubbles((prev) => prev.map((b) => (b.key === key ? { ...b, ...patch } : b)));
@@ -219,7 +223,7 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
 
   const resetSteps = useCallback(() => {
     setStepPath([]);
-    setStepsCollapsed(false);
+    setStepsOpen(true);
   }, []);
 
   const handleStepClick = useCallback(
@@ -252,7 +256,7 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
 
   const handleUnresolved = useCallback(() => {
     setStepPath([]);
-    setStepsCollapsed(true);
+    setStepsOpen(false);
     // 次の操作が自由入力なのは明らかなので、そのまま打ち始められるようにする
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   }, []);
@@ -321,6 +325,8 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
     ]);
     setInput("");
     setSending(true);
+    // 回答を読むのが目的なので、よくある質問は畳んで会話の表示領域を広げる
+    setStepsOpen(false);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -385,7 +391,7 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
         type="button"
         onClick={() => setOpen(true)}
         aria-label="中野くんに質問する"
-        className="fixed bottom-4 right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-slate-800 text-white shadow-lg hover:bg-slate-700 print:hidden"
+        className="fixed bottom-4 left-4 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-slate-800 text-white shadow-lg hover:bg-slate-700 print:hidden"
       >
         <ChatIcon />
       </button>
@@ -398,7 +404,7 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
   const canSend = available && !sending && input.trim().length > 0;
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-white shadow-xl print:hidden sm:inset-auto sm:bottom-4 sm:right-4 sm:h-[32rem] sm:max-h-[80vh] sm:w-96 sm:rounded-xl sm:border sm:border-slate-200">
+    <div className="fixed inset-0 z-40 flex flex-col bg-white shadow-xl print:hidden sm:inset-auto sm:bottom-4 sm:left-4 sm:h-[40rem] sm:max-h-[85vh] sm:w-[28rem] sm:rounded-xl sm:border sm:border-slate-200">
       <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-4 py-3">
         <span className="text-sm font-semibold text-slate-900">中野くん</span>
         <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">AI</span>
@@ -434,8 +440,8 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
               <div
                 className={
                   b.role === "user"
-                    ? "whitespace-pre-wrap rounded-lg bg-slate-800 px-3 py-2 text-xs leading-relaxed text-white"
-                    : `whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed ${
+                    ? "whitespace-pre-wrap rounded-lg bg-slate-800 px-3 py-2 text-sm leading-relaxed text-white"
+                    : `whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm leading-relaxed ${
                         b.pending ? "text-slate-500" : "text-slate-800"
                       }`
                 }
@@ -443,69 +449,70 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
                 {b.content}
               </div>
               {b.escalated && (
-                <p className="mt-1 text-[10px] text-slate-500">担当に届けました</p>
+                <p className="mt-1 text-[11px] text-slate-500">担当に届けました</p>
               )}
             </div>
           </div>
         ))}
 
-        {!stepsCollapsed && steps.length > 0 && (
-          <div className="space-y-1.5 pt-1">
-            {options.length > 0 && (
-              <p className="text-[10px] font-medium text-slate-500">よくある質問</p>
-            )}
-            {options.map((node) => (
-              <button
-                key={node.id}
-                type="button"
-                onClick={() => handleStepClick(node)}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-left text-xs text-slate-700 hover:bg-slate-50"
-              >
-                {node.title}
-              </button>
-            ))}
+      </div>
 
-            {atLeaf && (
-              <div className="flex flex-col gap-1.5 pt-1">
+      {steps.length > 0 && (
+        <div className="shrink-0 border-t border-slate-200 px-4 py-2">
+          <button
+            type="button"
+            onClick={() => setStepsOpen((v) => !v)}
+            className="flex w-full items-center justify-between rounded-lg px-1 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <span>よくある質問から探す</span>
+            <span className="text-[10px] text-slate-400">{stepsOpen ? "閉じる" : "開く"}</span>
+          </button>
+
+          {stepsOpen && (
+            <div className="mt-1 max-h-52 space-y-1.5 overflow-y-auto pr-1">
+              {options.map((node) => (
+                <button
+                  key={node.id}
+                  type="button"
+                  onClick={() => handleStepClick(node)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  {node.title}
+                </button>
+              ))}
+
+              {atLeaf && (
+                <div className="flex flex-col gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={resetSteps}
+                    className="w-full rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+                  >
+                    これで解決しました
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUnresolved}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    解決しなかった・別のことを聞く
+                  </button>
+                </div>
+              )}
+
+              {stepPath.length > 0 && !atLeaf && (
                 <button
                   type="button"
                   onClick={resetSteps}
-                  className="w-full rounded-lg bg-slate-800 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700"
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
                 >
-                  これで解決しました
+                  最初に戻る
                 </button>
-                <button
-                  type="button"
-                  onClick={handleUnresolved}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 hover:bg-slate-50"
-                >
-                  解決しなかった・別のことを聞く
-                </button>
-              </div>
-            )}
-
-            {stepPath.length > 0 && !atLeaf && (
-              <button
-                type="button"
-                onClick={resetSteps}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
-              >
-                最初に戻る
-              </button>
-            )}
-          </div>
-        )}
-
-        {stepsCollapsed && steps.length > 0 && (
-          <button
-            type="button"
-            onClick={resetSteps}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
-          >
-            よくある質問に戻る
-          </button>
-        )}
-      </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="shrink-0 border-t border-slate-200 px-4 py-3">
         {!available && unavailableMessage && (
@@ -527,13 +534,13 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
               void send();
             }}
             placeholder={available ? "質問を入力（Shift+Enterで改行）" : "今は質問できません"}
-            className="min-h-[2.5rem] flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60"
+            className="min-h-[3rem] flex-1 resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60"
           />
           <button
             type="button"
             disabled={!canSend}
             onClick={() => void send()}
-            className="rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {sending ? "送信中…" : "送信"}
           </button>
