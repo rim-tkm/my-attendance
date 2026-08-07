@@ -91,6 +91,40 @@ export async function findNakanoEscalationBySlackTs(
   return data ? toNakanoEscalation(data as DbNakanoEscalation) : null;
 }
 
+/**
+ * LINE返信の送信権を取る。取れた呼び出しだけが push してよい
+ * （モーダルの押し直し・担当2人の同時操作による二重送信を防ぐ）。
+ *
+ * line_replied_at は ESCALATION_COLUMNS に含めていない（selectしていない）。
+ * この列は supabase-migration-nakano-escalations-line-replied.sql で追加されるため、
+ * 未実行の環境で select に混ぜると「列が存在しない」で落ちる。claim/releaseは
+ * update だけなので、select対象に足さなくても動く。安全側に倒して足さない。
+ */
+export async function claimLineReply(escalationId: string): Promise<boolean> {
+  const supabase = db();
+  const { data, error } = await supabase
+    .from("nakano_escalations")
+    .update({ line_replied_at: new Date().toISOString() })
+    .eq("id", escalationId)
+    .is("line_replied_at", null)
+    .select("id")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data !== null;
+}
+
+/** push失敗時にclaimを戻す（再試行できるように）。失敗はwarnログのみ（claimしたまま残っても再試行がブロックされるだけで実害は小さい） */
+export async function releaseLineReply(escalationId: string): Promise<void> {
+  const supabase = db();
+  const { error } = await supabase
+    .from("nakano_escalations")
+    .update({ line_replied_at: null })
+    .eq("id", escalationId);
+  if (error) {
+    console.warn("[nakano-loop] claim解除に失敗:", error.message);
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * 承認待ちドラフト
  * ------------------------------------------------------------------ */

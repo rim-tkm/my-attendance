@@ -75,6 +75,9 @@ export async function lineReplyText(
  * プッシュ送信（課金対象。フリープランは月200通）。
  * リトライしない: プッシュは冪等でなく、タイムアウト誤判定での二重送信は
  * メンバー体験を直接損ねる。失敗は呼び出し側（担当のモーダル）に返して人が判断する。
+ *
+ * view_submissionの3秒応答制限内に失敗を返すため、fetchに2.5sのタイムアウトを付ける
+ * （タイムアウト時はrejectしてok:falseになり、呼び出し側でclaimLineReplyが解除され再試行できる）。
  */
 export async function linePushText(
   lineUserId: string,
@@ -89,6 +92,7 @@ export async function linePushText(
       },
       body: JSON.stringify({ to: lineUserId, messages: [{ type: "text", text }] }),
       cache: "no-store",
+      signal: AbortSignal.timeout(2500),
     });
     if (!res.ok) {
       const body = (await res.text().catch(() => "")).slice(0, 200);

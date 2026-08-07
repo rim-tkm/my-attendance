@@ -117,12 +117,21 @@ export async function POST(req: Request) {
 
   // 連携状態はここでは「モーダルに何を出すか」の判定にだけ使う。実際の送信可否は
   // view_submission 側で改めて取り直して判定する（モーダル放置中の状態変化・改竄対策。設計書§4）。
-  let lineLink: { lineUserId: string; name: string } | null = null;
+  //
+  // 取得失敗（例外）は「未連携」と区別する: 未連携なら「知識追加のみ」のモーダルを出してよいが、
+  // 取得失敗のままそのモーダルを出すと、本当は連携済みなのにLINE送信の選択肢を欠いたまま
+  // 進めてしまう（=手動LINEの二度手間や送り忘れ）。例外時はモーダルを開かず、担当に押し直しを促す。
+  let lineLink: { lineUserId: string; name: string } | null;
   try {
     lineLink = await getLineLinkByUserId(escalation.userId);
   } catch (e) {
     console.warn("[nakano-loop] line link lookup failed:", e instanceof Error ? e.message : String(e));
-    lineLink = null;
+    await slackBotPostMessage({
+      channel,
+      threadTs: ts,
+      text: "連携状態を確認できませんでした。もう一度ボタンを押してください",
+    }).catch(() => undefined);
+    return NextResponse.json({ ok: true });
   }
 
   const optionsBlock = lineLink
@@ -160,6 +169,19 @@ export async function POST(req: Request) {
     close: { type: "plain_text", text: "キャンセル" },
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: `*質問:* ${escalation.question}` } },
+      ...(lineLink
+        ? [
+            {
+              type: "context",
+              elements: [
+                {
+                  type: "mrkdwn",
+                  text: `送信先: ${lineLink.name || "本人"}さん（LINE連携済み）`,
+                },
+              ],
+            },
+          ]
+        : []),
       {
         type: "input",
         block_id: "answer_block",
@@ -243,20 +265,30 @@ async function handleViewSubmission(payload: Record<string, unknown>): Promise<R
         ? userObj.name
         : "担当者";
 
-  // options_block は optional な checkboxes なので、1つもチェックしていないと
-  // selected_options が存在しない（undefined）ことがある。安全に既定[]へ倒す。
-  const optionsBlock = (values.options_block ?? {}) as Record<string, unknown>;
-  const optionsInput = (optionsBlock.options_input ?? {}) as Record<string, unknown>;
-  const selectedOptions = Array.isArray(optionsInput.selected_options)
-    ? (optionsInput.selected_options as Record<string, unknown>[])
-    : [];
-  const selectedValues = new Set(
-    selectedOptions
-      .map((o) => o.value)
-      .filter((v): v is string => typeof v === "string")
-  );
-  const sendLine = selectedValues.has(LINE_OPTION.value);
-  const saveKnowledge = selectedValues.has(KNOWLEDGE_OPTION.value);
+  // values.options_block === undefined は、この選択UIをデプロイする前に開かれていた旧モーダル
+  // （trigger_idの発行からsubmitまで開きっぱなしにされていたケース）。
+  // 旧モーダルには選択UIが無いため、従来の知識化のみとして処理する（LINE送信はしない）。
+  let sendLine: boolean;
+  let saveKnowledge: boolean;
+  if (values.options_block === undefined) {
+    sendLine = false;
+    saveKnowledge = true;
+  } else {
+    // options_block は optional な checkboxes なので、1つもチェックしていないと
+    // selected_options が存在しない（undefined）ことがある。安全に既定[]へ倒す。
+    const optionsBlock = values.options_block as Record<string, unknown>;
+    const optionsInput = (optionsBlock.options_input ?? {}) as Record<string, unknown>;
+    const selectedOptions = Array.isArray(optionsInput.selected_options)
+      ? (optionsInput.selected_options as Record<string, unknown>[])
+      : [];
+    const selectedValues = new Set(
+      selectedOptions
+        .map((o) => o.value)
+        .filter((v): v is string => typeof v === "string")
+    );
+    sendLine = selectedValues.has(LINE_OPTION.value);
+    saveKnowledge = selectedValues.has(KNOWLEDGE_OPTION.value);
+  }
 
   const result = await runNakanoReplyFromModal({ channel, ts, answer, responderName, sendLine, saveKnowledge });
   if (result.kind === "errors") {

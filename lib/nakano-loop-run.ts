@@ -15,9 +15,11 @@
 
 import { generateKnowledgeDraft } from "@/lib/nakano-draft";
 import {
+  claimLineReply,
   findActiveDraftByEscalationId,
   findNakanoEscalationBySlackTs,
   insertNakanoKnowledgeDraft,
+  releaseLineReply,
 } from "@/lib/nakano-loop-data";
 import { getLineLinkByUserId } from "@/lib/line-link-data";
 import { linePushText } from "@/lib/line-bot";
@@ -159,9 +161,10 @@ export async function runNakanoReplyFromModal(params: {
   const { channel, ts, answer, responderName, sendLine, saveKnowledge } = params;
 
   if (!sendLine && !saveKnowledge) {
+    // チェックボックス（options_block）の下にエラーを出したいので、そのブロックのキーで返す
     return {
       kind: "errors",
-      errors: { answer_block: "送信先（LINE）か知識追加のどちらかを選んでください" },
+      errors: { options_block: "送信先（LINE）か知識追加のどちらかを選んでください" },
     };
   }
 
@@ -191,9 +194,23 @@ export async function runNakanoReplyFromModal(params: {
           },
         };
       }
+
+      // 送信権のclaim（押し直し・担当2人の同時操作で同じ回答が2通LINEに飛ぶ実経路をここで塞ぐ）。
+      // 取れなかった＝既に他の呼び出しが送信済み（またはpush中）なので、ここで送らずに終える。
+      const claimed = await claimLineReply(escalation.id);
+      if (!claimed) {
+        return {
+          kind: "errors",
+          errors: { options_block: "この質問には既にLINEで回答済みです（重複送信を防ぎました）" },
+        };
+      }
+
       const pushed = await linePushText(lineLink.lineUserId, `ご質問いただいた件、担当より回答します😊\n\n${answer}`);
       if (!pushed.ok) {
         console.warn("[nakano-loop] LINE push failed:", pushed.error);
+        // claimを戻して再試行できるようにする（このpush失敗ではLINEは届いていないため、
+        // claimを残したままだと担当が直しても二度と送れなくなる）
+        await releaseLineReply(escalation.id);
         return {
           kind: "errors",
           errors: {
@@ -202,7 +219,7 @@ export async function runNakanoReplyFromModal(params: {
           },
         };
       }
-      lineSentToName = lineLink.name || "本人";
+      lineSentToName = lineLink.name !== "" ? `${lineLink.name}さん` : "本人";
     }
 
     // ② 知識ドラフト作成（要求されていれば）。LINE送信が既に成功している場合、
@@ -210,6 +227,9 @@ export async function runNakanoReplyFromModal(params: {
     // 続行してスレッド記録に「知識追加は失敗」を添えるだけにとどめる。
     let knowledgeSaved = false;
     let knowledgeFailed = false;
+    // 重複（findActiveDraftByEscalationIdがヒット）は実エラーではないので分けて扱う。
+    // 「失敗しました」と表示すると、実際は既に登録済みなのに担当が📚でやり直して混乱するため。
+    let knowledgeDuplicate = false;
     if (saveKnowledge) {
       try {
         const existing = await findActiveDraftByEscalationId(escalation.id);
@@ -220,7 +240,7 @@ export async function runNakanoReplyFromModal(params: {
               errors: { answer_block: "この質問の文案は既に承認待ちまたは登録済みです" },
             };
           }
-          knowledgeFailed = true;
+          knowledgeDuplicate = true;
         } else {
           const rawAnswer = `回答者: ${responderName}\n${answer}`;
           // permalink取得は失敗しても致命ではない一方、views.open→view_submission応答は
@@ -253,9 +273,12 @@ export async function runNakanoReplyFromModal(params: {
     // ③ スレッド記録（best-effort。失敗しても本体処理は成立している）
     let threadText: string;
     if (lineSentToName !== null) {
-      threadText = `📤 ${lineSentToName}さん宛にLINEで回答を送信しました（回答者: ${responderName}）\n> ${answer}`;
+      // lineSentToName は既に「○○さん」または「本人」の形（fix8: 氏名未設定時に「本人さん」にならないよう呼び出し元で組み立て済み）
+      threadText = `📤 ${lineSentToName}宛にLINEで回答を送信しました（回答者: ${responderName}）\n> ${answer}`;
       if (knowledgeSaved) {
         threadText += "\n📚 知識の承認待ちにも入れました";
+      } else if (knowledgeDuplicate) {
+        threadText += "\n（知識は既に承認待ち・登録済みです）";
       } else if (knowledgeFailed) {
         threadText += "\n（知識追加は失敗しました。📚リアクションでやり直せます）";
       }

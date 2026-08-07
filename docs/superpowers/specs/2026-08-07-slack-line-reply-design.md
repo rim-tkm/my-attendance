@@ -44,6 +44,8 @@
 - **課金**: フリープラン=月200通。超過するとLINE APIがエラーを返す → モーダルにエラー表示
   → スレッドにも残らないので、担当は手動LINEに切替え。月間通数はLINE公式アカウント管理画面で確認
   （アプリ内カウンタは作らない。エスカレ件数は管理画面「担当に回した数」で近似できるため）
+- `getLineLinkByUserId` が `is_active` を見ないのは意図どおり: 「質問した本人に返す」文脈では、
+  退職済みでも紐付けが残っていれば回答を届けたい（送信可否をactiveで絞る理由が無い）
 
 ## 4. モーダルの変更（app/api/webhooks/slack-interactive）
 
@@ -77,9 +79,24 @@
 | 送信後のドラフト作成失敗 | warn（LINEは届いている。スレッド記録に「知識追加は失敗」を添える） |
 | スレッド記録失敗 | warn（本体処理は成立） |
 | 未連携なのにsend_lineが来た（改竄・状態変化） | 送信時の再確認で弾いてerrors |
+| 押し直し・担当2人の同時操作 | `nakano_escalations.line_replied_at` のclaimで二重送信防止（後勝ちは弾かれerrors、push失敗時はclaimを戻して再試行可） |
 
 ## 7. スコープ外（今回はやらない）
 
 - 月間通数のアプリ内カウンタ（LINE管理画面で足りる。超過が常態化したらプラン変更かカウンタ追加を判断）
 - 一斉送信・リマインド送信（個別回答のみ）
 - 既読管理・返信の取り込み（メンバーの返信は従来どおり手動チャット＋中野くんへ誘導）
+
+## 改訂メモ（2026-08-07 レビュー対応）
+
+- LINE送信の冪等ガードを追加: `nakano_escalations` に `line_replied_at` を追加
+  （`supabase-migration-nakano-escalations-line-replied.sql`）し、push直前に
+  `claimLineReply`/`releaseLineReply`（`lib/nakano-loop-data.ts`）で送信権をclaimする。
+  押し直し・担当2人の同時操作による二重LINE送信を防ぐ
+- モーダルに送信先名を表示（連携済み時、質問の下にcontextブロックで「送信先: ○○さん（LINE連携済み）」）
+- 重複ドラフト検出時は「失敗」ではなく「既に登録済み」の文言に変更（実エラーと区別）
+- 両方OFFエラーの表示先を `answer_block` から `options_block` に変更（チェックボックスの下に出るように）
+- `getLineLinkByUserId` の例外時（未連携との区別）はモーダルを開かず、スレッドに再試行を促す案内をbest-effortで投稿
+- デプロイ前に開かれていた旧モーダル（`options_block` 無し）からの送信は、従来どおり知識化のみとして処理
+- `linePushText` の fetch に2.5sタイムアウトを追加（view_submissionの3秒制限内に失敗を返すため）
+- 氏名未設定時の表記を「本人さん」ではなく「本人」に修正
