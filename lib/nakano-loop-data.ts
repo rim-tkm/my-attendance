@@ -9,7 +9,7 @@
 
 import { getUsersDb } from "@/lib/supabase-data";
 import { insertNakanoKnowledge } from "@/lib/nakano-data";
-import { normalizeNakanoCategory, type NakanoKnowledge } from "@/lib/nakano";
+import type { NakanoKnowledge } from "@/lib/nakano";
 
 function db() {
   const supabase = getUsersDb();
@@ -55,6 +55,8 @@ function toNakanoEscalation(r: DbNakanoEscalation): NakanoEscalation {
   };
 }
 
+// 書き込み時は必ず会話がある（エスカレはチャット中にしか起きない）ので input は non-null。
+// 読み取り型が null 許可なのは会話削除後の SET NULL のため。
 export async function insertNakanoEscalation(input: {
   conversationId: string;
   userId: string;
@@ -204,28 +206,61 @@ export async function approveNakanoDraft(
   id: string,
   input: { title: string; body: string }
 ): Promise<NakanoKnowledge> {
-  const knowledge = await insertNakanoKnowledge({
-    title: input.title,
-    body: input.body,
-    category: normalizeNakanoCategory("operation"),
-    parentId: null,
-    showAsStep: false,
-    isActive: true,
-    sortOrder: 0,
-  });
   const supabase = db();
-  const { error } = await supabase
+
+  // 先に「承認権」を取る。pending→approved に更新できた呼び出しだけが知識を作れる。
+  // 順序を逆（知識INSERT→UPDATE）にすると、二重クリックや同時承認で
+  // 知識が重複作成され、孤児が中野くんの回答に混入する。
+  const { data: claimed, error: claimError } = await supabase
     .from("nakano_knowledge_drafts")
     .update({
       status: "approved",
       draft_title: input.title,
       draft_body: input.body,
-      approved_knowledge_id: knowledge.id,
       updated_at: new Date().toISOString(),
     })
     .eq("id", id)
-    .eq("status", "pending");
-  if (error) throw new Error(error.message);
+    .eq("status", "pending")
+    .select(DRAFT_COLUMNS)
+    .maybeSingle();
+  if (claimError) throw new Error(claimError.message);
+  if (!claimed) throw new Error("この文案は既に処理済みです（承認済みまたは却下済み）");
+
+  let knowledge: NakanoKnowledge;
+  try {
+    knowledge = await insertNakanoKnowledge({
+      title: input.title,
+      body: input.body,
+      category: "operation",
+      parentId: null,
+      showAsStep: false,
+      isActive: true,
+      sortOrder: 0,
+    });
+  } catch (e) {
+    // 知識を作れなかったら承認を取り消して pending に戻す（再承認できるように）。
+    // この巻き戻しまで失敗したら「approved なのに知識が無い」状態になるが、
+    // ログに残るので運用で気づける（supabase-js にトランザクションは無い）。
+    const { error: revertError } = await supabase
+      .from("nakano_knowledge_drafts")
+      .update({ status: "pending", updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("status", "approved");
+    if (revertError) {
+      console.error("[nakano-loop] 承認の巻き戻しに失敗:", revertError.message);
+    }
+    throw e;
+  }
+
+  // 知識IDの反映は best-effort。失敗しても知識と承認は成立している。
+  const { error: linkError } = await supabase
+    .from("nakano_knowledge_drafts")
+    .update({ approved_knowledge_id: knowledge.id, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (linkError) {
+    console.error("[nakano-loop] approved_knowledge_id の保存に失敗:", linkError.message);
+  }
+
   return knowledge;
 }
 
