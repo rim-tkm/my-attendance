@@ -28,6 +28,8 @@ export function verifyLineSignature(params: {
   rawBody: string;
   signature: string;
 }): boolean {
+  // secret が空文字だと HMAC が「無鍵」と等価になり検証の意味を失うため、fail-closed で明示的に弾く
+  if (params.channelSecret === "") return false;
   const digest = createHmac("sha256", params.channelSecret).update(params.rawBody).digest("base64");
   const a = Buffer.from(digest);
   const b = Buffer.from(params.signature);

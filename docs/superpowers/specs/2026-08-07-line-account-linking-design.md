@@ -52,25 +52,34 @@
 | カラム | 型 | 内容 |
 |---|---|---|
 | line_user_id | TEXT NULL UNIQUE | LINEのuserId（U始まり33字）。UNIQUEで「1つのLINEに複数メンバー」を防ぐ |
-| line_link_code | TEXT NULL UNIQUE | 紐付けコード（例: RIM-4823）。発行時に採番 |
+| line_link_code | TEXT NULL UNIQUE | 紐付けコード（例: RIM-7F3K9QCD）。発行時に採番。紐付け成立時にNULLへ戻す（一度きり） |
 | line_linked_at | TIMESTAMPTZ NULL | 紐付け完了日時 |
 
-- コード形式: `RIM-` + 4桁数字。衝突時は再抽選（UNIQUE制約が最終防衛）
-- 対象: `is_active = true` の全メンバー（インターン含む。LINE連絡は全員共通のため）
+- コード形式: `RIM-` + 8文字。文字集合は `23456789ABCDEFGHJKMNPQRSTVWXYZ`（紛らわしい 0/1/I/O/L/U を除いた30字）。
+  空間は 30^8 ≒ 6.5×10^11 で総当たり不能（旧仕様の4桁数字＝1万通りは数百回の試行で他人の枠を奪えたため2026-08-07に改訂）。
+  乱数は `crypto.randomInt`（`Math.random` は不使用）。衝突時は再抽選（UNIQUE制約が最終防衛）
+- コードは一度きり: 紐付け成立時に `line_link_code` をNULLに戻す。再連携が必要な場合は管理画面から再発行する
+- 対象: `is_active = true` の全メンバー（インターン含む。LINE連絡は全員共通のため）。退職（`is_active = false`）後はコードが残っていても紐付け不可
 
 ## 5. Webhook `/api/webhooks/line-userid`
 
 1. **署名検証**: ヘッダ `x-line-signature` と、channel secret による rawBody の HMAC-SHA256(base64) を
-   `timingSafeEqual` で比較。secret未設定は500・不一致は401（Slack受け口と同じ流儀）
-2. `events[]` を走査。`type === "message"` かつ `message.type === "text"` のみ対象
-3. テキストを正規化（trim・全角英数→半角・大文字化）してコード形式 `RIM-\d{4}` に一致するか判定。
-   一致しないメッセージは**完全に無視**（通常の人間宛てチャット。誤反応させない）
-4. コードで `users.line_link_code` を検索:
-   - 見つからない → reply「コードが見つかりませんでした。お手数ですが担当にご確認ください🙇‍♂️」
-   - 見つかった:
-     - その users 行に既に別の line_user_id が入っている → reply「このコードは既に使用されています。担当にご確認ください」
-     - 送信者の userId が**別のメンバー**に紐付いている → reply「このLINEは別のアカウントと連携済みです。担当にご確認ください」
-     - 正常 → `line_user_id` / `line_linked_at` を保存し、reply「登録できました😊 （氏名）さんとして連携しました」
+   `timingSafeEqual` で比較。secret未設定は500・不一致は401（Slack受け口と同じ流儀）。channelSecretが空文字の場合も
+   `verifyLineSignature` 内でfail-closed（`false`）にする
+2. `events[]` を走査。`type === "message"` かつ `message.type === "text"` かつ `source.type === "user"`（1:1トークのみ。
+   グループ/ルームで晒されたコードでの紐付けを防ぐ）のみ対象
+3. テキストを正規化（trim・全角英数→半角・ハイフン類の表記ゆれ吸収・大文字化）してコード形式 `RIM-[0-9A-Z]{8}` に
+   一致するか判定。一致しないメッセージは**完全に無視**（通常の人間宛てチャット。誤反応させない）
+4. 判定順序（オラクル化防止のため冪等チェックを先行させる）:
+   1. 送信者の `line_user_id` で検索し、既に**誰か**に紐付いていれば reply「すでに連携済みです😊」で終了
+      （コード照合前。LINE再送・コード再送を吸収する）
+   2. コードで `users.line_link_code`（`is_active = true` 限定）を検索。見つからなければ統一失敗文言
+   3. 条件付きUPDATE（`line_user_id IS NULL` の行だけ）で紐付け。失敗（使用済み/同時送信の競合）なら統一失敗文言
+   4. 成功 → `line_user_id` / `line_linked_at` を保存し `line_link_code` をNULLに戻す（一度きり化）。
+      reply「登録できました😊 （氏名）さんとして連携しました」＋管理者へSlack通知（best-effort）
+   - **統一失敗文言**（見つからない/使用済み/退職者コードのいずれも同一）:
+     「このコードでは連携できませんでした。お手数ですが担当にご確認ください🙇‍♂️」
+     区別は外部に応答として漏らさず、`console.warn` にのみ理由を残す（総当たりオラクル化の防止）
 5. reply は必ず**reply API**（無料）。push は使わない
 6. 常に200を返す（LINEの再送で多重処理しないよう、既連携チェックが冪等性を担保）
 
@@ -79,9 +88,13 @@
 `AdminSection` に新セクション `"line"` を追加（型 → navItems → AdminNavIcon → 表示ブロックの4点セット）。
 中身は別コンポーネント（`app/components/AdminLineLinkSection.tsx`）に切り出す（page.tsx肥大化対策）。
 
-- 一覧: 氏名／コード／状態（連携済み・未連携）／連携日時。未連携を上に
+- 一覧: 氏名／コード／状態（連携済み・未連携）／連携日時。未連携を上に。`is_active=false` でも
+  `line_user_id` が残っている行（退職済みだが紐付けが残る行）は「無効メンバー」バッジ付きで表示する
 - ボタン「コードを一括発行」: 未発行のアクティブメンバー全員に採番（confirm付き）
-- 行操作「連携を取り消す」: `line_user_id`/`line_linked_at` をNULLに（confirm付き。誤紐付けの救済）
+- 行操作「連携を取り消す」: `line_user_id`/`line_linked_at` をNULLに（confirm付き。誤紐付けの救済。
+  取り消し時点で既に `line_link_code` はNULLのため、再連携させるには下の再発行が必要）
+- 行操作「コード再発行」: `reissueLineLinkCode` で新しいコードを採番して上書き（confirm付き。古いコードは失効）。
+  取り消し後の再案内や、コード紛失時に使う
 - 案内文テンプレをコピーできる欄（コード差し込み済みの文面）
 
 API: `/api/admin/line-links`（GET一覧・POST一括発行）、`/api/admin/line-links/[id]`（PATCH取り消し）。
@@ -115,3 +128,20 @@ API: `/api/admin/line-links`（GET一覧・POST一括発行）、`/api/admin/lin
 3. LINE Developers → Messaging API設定 → Webhook URL に
    `https://my-attendance-rho.vercel.app/api/webhooks/line-userid` を設定 → 検証 → Webhook利用ON
 4. 管理画面でコード一括発行 → まず管理者自身で実機テスト → メンバーへ順次案内
+
+---
+
+**2026-08-07 セキュリティレビューにより改訂: コード8文字化・一度きり・オラクル排除・アトミック化・1:1限定**
+
+- コードを `RIM-` + 4桁数字 → `RIM-` + 8文字（30字集合・`crypto.randomInt`）へ（§4）。
+  4桁数字＝1万通りは総当たりで他人の紐付け枠を奪えたため
+- 紐付け成立時に `line_link_code` をNULLに戻し、コードを一度きりにした（§4・§5）
+- 失敗系の返信文言を1種類に統一し、コードの「未発行/使用済み/退職者」を外部に判定させない
+  オラクルを塞いだ（§5）。区別は `console.warn` のみに残す
+- 冪等チェック（送信者のLINEが既に誰かと紐付いているか）をコード照合より先に行うよう順序変更（§5）
+- `linkLineUser` を「`line_user_id IS NULL` の行だけ更新」の条件付きUPDATEにし、同時送信時の
+  後勝ち上書きを防止（アトミック化）
+- `source.type !== "user"` を除外し、グループ/ルームでの紐付けを禁止（1:1トーク限定）
+- 退職者（`is_active = false`）のコードでは紐付けできないようにした
+- 連携成功時に管理者へSlack通知（best-effort）を追加。誤紐付けに人間が気付ける最後の砦
+- 管理画面に「コード再発行」を追加（§6）。取り消し後・紛失時の再案内に使う

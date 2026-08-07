@@ -119,12 +119,42 @@ export function AdminLineLinkSection() {
     [load]
   );
 
+  const handleReissue = useCallback(
+    async (row: LineLinkRow) => {
+      if (!window.confirm(`${row.name}さんのコードを再発行します。古いコードは使えなくなります。よろしいですか？`)) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const res = await fetch(`/api/admin/line-links/${encodeURIComponent(row.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ action: "reissue" }),
+        });
+        const data = (await res.json().catch(() => null)) as { ok?: boolean; code?: string; error?: string } | null;
+        if (!res.ok || !data?.ok) {
+          throw new Error(data?.error || "再発行に失敗しました");
+        }
+        window.alert(`新しいコード: ${data.code ?? ""}`);
+        await load();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load]
+  );
+
   return (
     <div className="space-y-6">
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-900">LINE連携</h2>
         <p className="mt-1 text-xs text-slate-500">
           メンバーの公式LINEとアプリのアカウントを紐付けます。コードを発行し、下の案内文をメンバーに送ってください。
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          「取り消す」を押すとコードもNULLになるため、取り消し後に再連携してもらう場合は「コード再発行」で新しいコードを案内し直してください。
         </p>
 
         {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
@@ -191,6 +221,11 @@ export function AdminLineLinkSection() {
                             インターン
                           </span>
                         )}
+                        {!row.isActive && (
+                          <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+                            無効メンバー
+                          </span>
+                        )}
                       </td>
                       <td className="py-2 pr-3 text-slate-700">
                         {row.lineLinkCode ?? <span className="text-slate-400">未発行</span>}
@@ -208,16 +243,26 @@ export function AdminLineLinkSection() {
                       </td>
                       <td className="py-2 pr-3 text-slate-600">{formatJstDateTimeLabel(row.lineLinkedAt)}</td>
                       <td className="py-2">
-                        {linked && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {linked && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void handleUnlink(row)}
+                              className="rounded border border-red-300 bg-red-50 px-3 py-1 text-[11px] text-red-700 hover:bg-red-100 disabled:opacity-50"
+                            >
+                              取り消す
+                            </button>
+                          )}
                           <button
                             type="button"
                             disabled={busy}
-                            onClick={() => void handleUnlink(row)}
-                            className="rounded border border-red-300 bg-red-50 px-3 py-1 text-[11px] text-red-700 hover:bg-red-100 disabled:opacity-50"
+                            onClick={() => void handleReissue(row)}
+                            className="rounded border border-slate-300 bg-white px-3 py-1 text-[11px] text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                           >
-                            取り消す
+                            コード再発行
                           </button>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   );
