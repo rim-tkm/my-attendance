@@ -12,6 +12,9 @@ import {
 import type { NakanoLogRow, NakanoUsage } from "@/lib/nakano-data";
 
 const LOGS_PAGE_SIZE = 50;
+// 「A: 回答」を折りたたむ目安（約3行相当）。質問は少し緩めにする。
+const ANSWER_COLLAPSE_THRESHOLD = 150;
+const QUESTION_COLLAPSE_THRESHOLD = 200;
 
 /* ------------------------------------------------------------------ *
  * 知識
@@ -188,12 +191,15 @@ export function useAdminNakanoLogs(): AdminNakanoLogsState {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
 
-  const fetchPage = useCallback(async (offset: number, only: boolean) => {
+  // escalatedOnly はサーバーには渡さない。質問と回答をペアにしたあと、
+  // 「回答がescalatedのペアだけ」をクライアント側で絞り込む（表示側の useMemo）。
+  // サーバー側で escalated=true の行だけ取ると、回答（assistant）は残っても
+  // 対になる質問（user、escalated=false）が丸ごと取れず、ペアが組めなくなるため。
+  const fetchPage = useCallback(async (offset: number) => {
     setBusy(true);
     setError(null);
     try {
       const params = new URLSearchParams({ limit: String(LOGS_PAGE_SIZE), offset: String(offset) });
-      if (only) params.set("escalatedOnly", "1");
       const res = await fetch(`/api/admin/nakano/logs?${params.toString()}`, { credentials: "include" });
       const data = (await res.json().catch(() => ({}))) as {
         rows?: NakanoLogRow[];
@@ -215,18 +221,17 @@ export function useAdminNakanoLogs(): AdminNakanoLogsState {
     }
   }, []);
 
-  // 絞り込みを切り替えたら先頭から取り直す。
   useEffect(() => {
-    void fetchPage(0, escalatedOnly);
-  }, [fetchPage, escalatedOnly]);
+    void fetchPage(0);
+  }, [fetchPage]);
 
   const loadMore = useCallback(() => {
-    void fetchPage(rows.length, escalatedOnly);
-  }, [fetchPage, rows.length, escalatedOnly]);
+    void fetchPage(rows.length);
+  }, [fetchPage, rows.length]);
 
   const refresh = useCallback(() => {
-    void fetchPage(0, escalatedOnly);
-  }, [fetchPage, escalatedOnly]);
+    void fetchPage(0);
+  }, [fetchPage]);
 
   // 30秒ごとに先頭から取り直す。質問が来ていることに気づけるようにするため。
   // 「もっと見る」で読み足したぶんは先頭に戻るが、
@@ -234,10 +239,10 @@ export function useAdminNakanoLogs(): AdminNakanoLogsState {
   useEffect(() => {
     if (!autoRefresh) return;
     const id = window.setInterval(() => {
-      void fetchPage(0, escalatedOnly);
+      void fetchPage(0);
     }, 30_000);
     return () => window.clearInterval(id);
-  }, [autoRefresh, fetchPage, escalatedOnly]);
+  }, [autoRefresh, fetchPage]);
 
   return {
     rows,
@@ -361,6 +366,126 @@ function formatJstDateTimeLabel(iso: string): string {
   }).formatToParts(d);
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("year")}/${get("month")}/${get("day")} ${get("hour")}:${get("minute")}`;
+}
+
+/* ------------------------------------------------------------------ *
+ * 会話ログ：質問と回答のペア表示
+ * ------------------------------------------------------------------ */
+
+export type NakanoLogPair = {
+  id: string;
+  conversationId: string;
+  createdAt: string;
+  memberName: string;
+  source: NakanoLogRow["source"];
+  question: NakanoLogRow | null;
+  answer: NakanoLogRow | null;
+};
+
+/**
+ * 質問(user)→直後の回答(assistant) を、同じ会話(conversation_id)の中でペアにする。
+ * 「隣接している行」ではなく「同じ会話」を条件にするのは、同時刻に複数人が
+ * 使うと行が入り乱れ、単純な隣接推定ではペアが崩れるため。
+ * ページの境界で片方だけしか読み込まれていない場合は、質問だけ／回答だけの
+ * 単独カードとして返す（呼び出し側で「回答なし」等の表示にする）。
+ */
+function pairNakanoLogRows(rowsNewestFirst: NakanoLogRow[]): NakanoLogPair[] {
+  const rowsOldestFirst = [...rowsNewestFirst].reverse();
+  const pairs: NakanoLogPair[] = [];
+  const pendingQuestion = new Map<string, NakanoLogRow>();
+
+  const flushUnanswered = (conversationId: string) => {
+    const q = pendingQuestion.get(conversationId);
+    if (!q) return;
+    pairs.push({
+      id: q.id,
+      conversationId,
+      createdAt: q.createdAt,
+      memberName: q.memberName,
+      source: q.source,
+      question: q,
+      answer: null,
+    });
+    pendingQuestion.delete(conversationId);
+  };
+
+  for (const row of rowsOldestFirst) {
+    if (row.role === "user") {
+      // 前の質問がまだ回答されないまま次の質問が来た＝結局回答されなかった質問として確定させる。
+      flushUnanswered(row.conversationId);
+      pendingQuestion.set(row.conversationId, row);
+      continue;
+    }
+    const question = pendingQuestion.get(row.conversationId);
+    if (question) {
+      pendingQuestion.delete(row.conversationId);
+      pairs.push({
+        id: question.id,
+        conversationId: row.conversationId,
+        createdAt: row.createdAt,
+        memberName: question.memberName,
+        source: question.source,
+        question,
+        answer: row,
+      });
+    } else {
+      // 対応する質問がこのページの読み込み範囲より前（ページ境界）。回答だけの単独カードにする。
+      pairs.push({
+        id: row.id,
+        conversationId: row.conversationId,
+        createdAt: row.createdAt,
+        memberName: row.memberName,
+        source: row.source,
+        question: null,
+        answer: row,
+      });
+    }
+  }
+  // 読み込み範囲の一番新しい側で、まだ回答が届いていない質問。
+  for (const q of Array.from(pendingQuestion.values())) {
+    pairs.push({
+      id: q.id,
+      conversationId: q.conversationId,
+      createdAt: q.createdAt,
+      memberName: q.memberName,
+      source: q.source,
+      question: q,
+      answer: null,
+    });
+  }
+
+  pairs.sort((a, b) => (a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : 0));
+  return pairs;
+}
+
+function splitLongText(text: string, threshold: number): { head: string; rest: string } | null {
+  if (text.length <= threshold) return null;
+  return { head: text.slice(0, threshold), rest: text.slice(threshold) };
+}
+
+/** 長文は先頭だけ見せ、残りは <details>/<summary> で「続きを読む」にする。状態は持たない。 */
+function CollapsibleText({
+  text,
+  threshold,
+  textClassName,
+}: {
+  text: string;
+  threshold: number;
+  textClassName: string;
+}) {
+  const split = splitLongText(text, threshold);
+  if (!split) {
+    return <p className={`whitespace-pre-wrap ${textClassName}`}>{text}</p>;
+  }
+  return (
+    <div>
+      <p className={`whitespace-pre-wrap ${textClassName}`}>{split.head}…</p>
+      <details className="mt-0.5">
+        <summary className="cursor-pointer text-[11px] text-slate-400 hover:text-slate-600">続きを読む</summary>
+        <p className={`mt-1 whitespace-pre-wrap ${textClassName}`}>{split.rest}</p>
+      </details>
+    </div>
+  );
 }
 
 function categoryBadgeClass(c: NakanoCategory): string {
@@ -782,6 +907,12 @@ export function AdminNakanoSection() {
 
   const orderedKnowledge = useMemo(() => flattenNakanoKnowledge(knowledge.rows), [knowledge.rows]);
 
+  const logPairs = useMemo(() => pairNakanoLogRows(logs.rows), [logs.rows]);
+  const visibleLogPairs = useMemo(
+    () => (logs.escalatedOnly ? logPairs.filter((p) => p.answer?.escalated === true) : logPairs),
+    [logPairs, logs.escalatedOnly]
+  );
+
   const parentOptionsFor = useCallback(
     (excludeId: string | null): KnowledgeParentOption[] => {
       const excluded = excludeId ? collectSelfAndDescendants(knowledge.rows, excludeId) : new Set<string>();
@@ -853,32 +984,56 @@ export function AdminNakanoSection() {
           )}
         </div>
 
-        {logs.rows.length === 0 ? (
-          <p className="text-sm text-slate-600">{logs.busy ? "読み込み中です。" : "まだ質問はありません。"}</p>
+        {visibleLogPairs.length === 0 ? (
+          <p className="text-sm text-slate-600">
+            {logs.busy
+              ? "読み込み中です。"
+              : logs.escalatedOnly
+                ? "表示中の範囲には担当対応の質問はありません（過去の分は下の「もっと見る」で確認できます）。"
+                : "まだ質問はありません。"}
+          </p>
         ) : (
           <div className="space-y-2">
-            {logs.rows.map((m) => (
-              <div key={m.id} className="rounded-lg border border-slate-200 p-3">
-                <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                  <span className="text-[10px] text-slate-500">{formatJstDateTimeLabel(m.createdAt)}</span>
-                  <span className="text-[10px] font-medium text-slate-700">{m.memberName}</span>
-                  <span
-                    className={`rounded px-2 py-0.5 text-[10px] font-medium ${
-                      m.role === "user" ? "bg-slate-100 text-slate-700" : "bg-sky-100 text-sky-800"
-                    }`}
-                  >
-                    {m.role === "user" ? "メンバーの質問" : "中野くんの回答"}
-                  </span>
+            {visibleLogPairs.map((pair) => (
+              <div key={pair.id} className="rounded-lg border border-slate-200 p-3">
+                <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] text-slate-500">{formatJstDateTimeLabel(pair.createdAt)}</span>
+                  <span className="text-[10px] font-medium text-slate-700">{pair.memberName}</span>
                   <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-                    {m.source === "step" ? "よくある質問の操作" : "AI"}
+                    {pair.source === "step" ? "よくある質問の操作" : "AI"}
                   </span>
-                  {m.escalated && (
+                  {pair.answer?.escalated && (
                     <span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
                       担当に回した
                     </span>
                   )}
                 </div>
-                <p className="whitespace-pre-wrap text-xs leading-relaxed text-slate-700">{m.content}</p>
+
+                <div>
+                  <p className="text-[10px] font-semibold text-slate-400">Q</p>
+                  {pair.question ? (
+                    <CollapsibleText
+                      text={pair.question.content}
+                      threshold={QUESTION_COLLAPSE_THRESHOLD}
+                      textClassName="text-xs font-medium leading-relaxed text-slate-900"
+                    />
+                  ) : (
+                    <p className="text-xs text-slate-400">（この回答に対応する質問は表示範囲外です）</p>
+                  )}
+                </div>
+
+                <div className="mt-2">
+                  <p className="text-[10px] font-semibold text-slate-400">A</p>
+                  {pair.answer ? (
+                    <CollapsibleText
+                      text={pair.answer.content}
+                      threshold={ANSWER_COLLAPSE_THRESHOLD}
+                      textClassName="text-xs leading-relaxed text-slate-600"
+                    />
+                  ) : (
+                    <p className="text-xs text-slate-400">（回答なし）</p>
+                  )}
+                </div>
               </div>
             ))}
           </div>
