@@ -943,6 +943,9 @@ export function AdminNakanoSection() {
 
   return (
     <div className="space-y-6">
+      {/* 承認待ちは「管理者に行動を求めるもの」なので、最上部に置く（0件なら出ない） */}
+      <DraftsCard />
+
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-sm font-semibold text-slate-900">届いた質問</h2>
         <p className="mb-3 text-xs text-slate-500">
@@ -1196,8 +1199,6 @@ export function AdminNakanoSection() {
           )}
         </div>
       </section>
-
-      <DraftsCard />
 
       {/* 知識の管理は普段は畳んでおく。日々見るのは上の2枚で、ここは直したいときだけ開けばいい。 */}
       <details className="rounded-xl border border-slate-200 bg-white shadow-sm">
