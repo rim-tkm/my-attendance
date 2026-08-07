@@ -91,6 +91,7 @@ Slackスレッド回答に📚を付けると知識文案が作られ、承認�
    - Verified になることを確認する
    - Subscribe to bot events に `reaction_added` を追加して Save
 4. **Botを対象チャンネル（`ai-中野くん-溢れた質問` 等）に招待済みであること**を確認する。
+5. **Botに必要なスコープが付与されていること**を確認する: `chat:write` / `reactions:read` / `channels:history`（対象チャンネルがプライベートチャンネルなら `channels:history` の代わりに `groups:history` も必要）。**不足していると📚を押すたびに「知識化の処理に失敗しました」という障害通知がSlackに飛ぶ**（原因が分かりにくいので要注意）。
 
 **順序の注意**: 手順②より先に③（Request URL登録）をやると、`SLACK_SIGNING_SECRET` が無い状態でURL検証を受けるため失敗する。**必ず②→③の順**で進める。
 

@@ -250,3 +250,21 @@ export async function notifyNakanoOutage(detail: string): Promise<void> {
     // 障害通知自体の失敗は握りつぶす（元の障害の方が重要）
   }
 }
+
+/**
+ * 知識化（📚）の処理失敗を管理者に知らせる。
+ * notifyNakanoOutage はメンバー影響ありの文面なので流用しない（誤読で無駄な調査を招く）。
+ */
+export async function notifyNakanoLoopFailure(detail: string): Promise<void> {
+  try {
+    const url = resolveSlackWebhookUrl("nakano");
+    if (!url) return;
+    await postSlackIncomingWebhook(url, {
+      text:
+        buildNakanoMentionPrefix() +
+        `⚠️ 知識化（📚）の処理に失敗しました。\n・詳細: ${detail}\nメンバーへの影響はありません。📚を一度外して付け直すと再実行されます。`,
+    });
+  } catch {
+    // 通知自体の失敗は握りつぶす（元の失敗の方が重要）
+  }
+}

@@ -11,7 +11,7 @@ Slackで担当が中野くんのエスカレスレッドに回答し、その返
 - `lib/nakano-draft.ts` — 質問＋Slack回答から知識文案をAIで整形（JSON抽出・切り詰め検知込み）
 - `app/api/webhooks/slack-events/route.ts` — Slackイベント受信（署名検証・`reaction_added`受信・📚で文案生成）
 - `app/api/admin/nakano/drafts/route.ts` / `[id]/route.ts` — 承認待ち一覧・承認（編集込み）・却下API
-- `AdminNakanoSection` の DraftsCard（`app/page.tsx`）— 管理画面の承認待ちUI
+- `AdminNakanoSection` の DraftsCard（`app/components/AdminNakanoSection.tsx`）— 管理画面の承認待ちUI
 - `supabase-migration-nakano-knowledge-loop.sql` — テーブル `nakano_escalations` / `nakano_knowledge_drafts`
 
 ### 設計書・計画書

@@ -5,12 +5,13 @@ import {
   findNakanoEscalationBySlackTs,
   insertNakanoKnowledgeDraft,
 } from "@/lib/nakano-loop-data";
-import { notifyNakanoOutage } from "@/lib/nakano-server";
+import { notifyNakanoLoopFailure } from "@/lib/nakano-server";
 import {
   getNakanoSlackChannelId,
   slackBotFetchThreadReplies,
   slackBotGetPermalink,
   slackBotPostMessage,
+  slackBotResolveThreadParentTs,
   verifySlackSignature,
 } from "@/lib/slack-bot";
 
@@ -84,14 +85,22 @@ export async function POST(req: Request) {
 
   // 処理中に何が起きても Slack には 200 を返す（エラーを返すと再送で多重処理になる）
   try {
-    const escalation = await findNakanoEscalationBySlackTs(channel, ts);
+    let effectiveTs = ts;
+    let escalation = await findNakanoEscalationBySlackTs(channel, ts);
     if (!escalation) {
-      // エスカレ通知以外への📚、または対応表に記録が無い投稿（Webhook時代・記録失敗）。
-      // 黙っていると担当は「押したのに無反応」で困るので、必ず理由を返す。
+      // 担当は「良い回答（＝スレッド内の返信）」に📚を付けることが多い。
+      // 返信に付いた場合は親（エスカレ通知）へ辿って引き直す。
+      const parentTs = await slackBotResolveThreadParentTs(channel, ts);
+      if (parentTs && parentTs !== ts) {
+        escalation = await findNakanoEscalationBySlackTs(channel, parentTs);
+        if (escalation) effectiveTs = parentTs;
+      }
+    }
+    if (!escalation) {
       await slackBotPostMessage({
         channel,
         threadTs: ts,
-        text: "この投稿は知識化の対象外です（エスカレーション通知にのみ📚が使えます。古い通知や記録に失敗した通知も対象外です）",
+        text: "この投稿からは元の質問を特定できませんでした（エスカレーション通知とそのスレッドでのみ📚が使えます。Bot導入前の古い通知も対象外です）",
       });
       return NextResponse.json({ ok: true });
     }
@@ -100,7 +109,7 @@ export async function POST(req: Request) {
     if (existing) {
       await slackBotPostMessage({
         channel,
-        threadTs: ts,
+        threadTs: effectiveTs,
         text:
           existing.status === "approved"
             ? "この質問は既に知識に登録されています（重複登録を防ぐため何もしませんでした）"
@@ -109,11 +118,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true });
     }
 
-    const replies = await slackBotFetchThreadReplies(channel, ts);
+    const replies = await slackBotFetchThreadReplies(channel, effectiveTs);
     if (replies.length === 0) {
       await slackBotPostMessage({
         channel,
-        threadTs: ts,
+        threadTs: effectiveTs,
         text: "先にこのスレッドに回答を書いてから📚を付けてください",
       });
       return NextResponse.json({ ok: true });
@@ -133,7 +142,7 @@ export async function POST(req: Request) {
       draftBody = rawAnswer;
     }
 
-    const permalink = await slackBotGetPermalink(channel, ts);
+    const permalink = await slackBotGetPermalink(channel, effectiveTs);
     await insertNakanoKnowledgeDraft({
       escalationId: escalation.id,
       question: escalation.question,
@@ -145,7 +154,7 @@ export async function POST(req: Request) {
 
     await slackBotPostMessage({
       channel,
-      threadTs: ts,
+      threadTs: effectiveTs,
       text: "📚 知識の文案を作りました。管理画面の「中野くん」→「承認待ち」から確認・承認してください",
     });
     return NextResponse.json({ ok: true });
@@ -159,7 +168,7 @@ export async function POST(req: Request) {
       threadTs: ts,
       text: "知識化の処理に失敗しました。お手数ですが、📚を一度外してから付け直してください",
     }).catch(() => undefined);
-    await notifyNakanoOutage(`知識化の処理に失敗: ${detail}`);
+    await notifyNakanoLoopFailure(`知識化の処理に失敗: ${detail}`);
     return NextResponse.json({ ok: true });
   }
 }

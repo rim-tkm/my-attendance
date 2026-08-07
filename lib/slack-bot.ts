@@ -122,6 +122,29 @@ export async function slackBotPostMessage(params: {
   }
 }
 
+/**
+ * ある投稿が属するスレッドの親tsを返す。
+ * 📚がスレッド内の返信に付けられたとき、親（エスカレ通知）へ辿るために使う。
+ * conversations.replies は返信のtsを渡してもスレッド全体を返し、先頭が親になる。
+ */
+export async function slackBotResolveThreadParentTs(
+  channel: string,
+  ts: string
+): Promise<string | null> {
+  try {
+    const r = await callSlackApiGet("conversations.replies", { channel, ts, limit: "1" });
+    if (r.ok !== true) return null;
+    const messages = Array.isArray(r.messages) ? (r.messages as Record<string, unknown>[]) : [];
+    const first = messages[0];
+    if (!first) return null;
+    const threadTs = typeof first.thread_ts === "string" ? first.thread_ts : null;
+    const firstTs = typeof first.ts === "string" ? first.ts : null;
+    return threadTs ?? firstTs;
+  } catch {
+    return null;
+  }
+}
+
 /** 投稿へのパーマリンク。失敗しても致命ではないので null を返す */
 export async function slackBotGetPermalink(channel: string, messageTs: string): Promise<string | null> {
   try {
