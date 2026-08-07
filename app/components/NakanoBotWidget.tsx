@@ -449,6 +449,29 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
       )}
 
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+        {/* 会話がまだ無い初回は、フッターの控えめな見出しでは気づかれないので、
+            会話エリアの先頭で「よくある質問」を主役として大きく出す。
+            一度でも吹き出しが増えたら消え、以降はフッター側が遷移を引き継ぐ。 */}
+        {bubbles.length === 0 && steps.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-sm leading-relaxed text-slate-600">
+              下のボタンから選ぶと、その場ですぐ答えが出ます。見つからないときは、いちばん下の入力欄から自由に質問できます。
+            </p>
+            <div className="space-y-1.5">
+              {steps.map((node) => (
+                <button
+                  key={node.id}
+                  type="button"
+                  onClick={() => handleStepClick(node)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-left text-sm font-medium text-slate-800 shadow-sm hover:border-slate-400 hover:bg-slate-50"
+                >
+                  {node.title}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {bubbles.map((b) => (
           <div key={b.key} className={b.role === "user" ? "flex justify-end" : "flex justify-start"}>
             <div className="max-w-[85%]">
@@ -472,7 +495,9 @@ export default function NakanoBotWidget({ enabled }: { enabled: boolean }) {
 
       </div>
 
-      {steps.length > 0 && (
+      {/* 初回は上の大きなカードで出しているので、フッターの重複は出さない。
+          会話が始まって以降だけ、遷移用の控えめな見出しとして表示する。 */}
+      {steps.length > 0 && bubbles.length > 0 && (
         <div className="shrink-0 border-t border-slate-200 px-4 py-2">
           <button
             type="button"
