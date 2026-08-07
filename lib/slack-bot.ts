@@ -50,7 +50,13 @@ export function verifySlackSignature(params: {
 
 type SlackApiResult = { ok: boolean; error?: string } & Record<string, unknown>;
 
-/** POST系（chat.postMessage 等）。429/5xx/ネットワーク例外は最大3回リトライ */
+/**
+ * POST系（chat.postMessage 等）。429/5xx/ネットワーク例外は最大3回リトライ。
+ *
+ * 注意: chat.postMessage は冪等ではないため、リトライで稀に二重投稿になりうる。
+ * ここでは「エスカレ通知が届かない」方が「同じ通知が2回届く」より実害が大きいので、
+ * リトライを優先する（重複はSlack上で無害）。
+ */
 async function callSlackApiPost(method: string, payload: Record<string, unknown>): Promise<SlackApiResult> {
   return withNetworkRetry(
     async () => {
@@ -61,23 +67,35 @@ async function callSlackApiPost(method: string, payload: Record<string, unknown>
           Authorization: `Bearer ${botToken()}`,
         },
         body: JSON.stringify(payload),
+        cache: "no-store",
       });
-      if (res.status === 429 || res.status >= 500) throw new Error(`HTTP ${res.status}`);
+      if (res.status === 429 || res.status >= 500) {
+        console.error("[slack-bot]", method, "HTTP", res.status);
+        throw new Error(`HTTP ${res.status}`);
+      }
       return (await res.json()) as SlackApiResult;
     },
     { maxAttempts: 3, baseDelayMs: 500, perAttemptTimeoutMs: 10_000 }
   );
 }
 
-/** GET系（conversations.replies 等） */
+/**
+ * GET系（conversations.replies 等）。
+ * Next.js App Router は GET fetch を既定でキャッシュするため、`cache: "no-store"` で
+ * 明示的に無効化する（conversations.replies が古い返信一覧を返すのを防ぐ）。
+ */
 async function callSlackApiGet(method: string, params: Record<string, string>): Promise<SlackApiResult> {
   const qs = new URLSearchParams(params).toString();
   return withNetworkRetry(
     async () => {
       const res = await fetch(`https://slack.com/api/${method}?${qs}`, {
         headers: { Authorization: `Bearer ${botToken()}` },
+        cache: "no-store",
       });
-      if (res.status === 429 || res.status >= 500) throw new Error(`HTTP ${res.status}`);
+      if (res.status === 429 || res.status >= 500) {
+        console.error("[slack-bot]", method, "HTTP", res.status);
+        throw new Error(`HTTP ${res.status}`);
+      }
       return (await res.json()) as SlackApiResult;
     },
     { maxAttempts: 3, baseDelayMs: 500, perAttemptTimeoutMs: 10_000 }
@@ -94,7 +112,10 @@ export async function slackBotPostMessage(params: {
     const body: Record<string, unknown> = { channel: params.channel, text: params.text };
     if (params.threadTs) body.thread_ts = params.threadTs;
     const r = await callSlackApiPost("chat.postMessage", body);
-    if (r.ok !== true) return { ok: false, error: String(r.error ?? "unknown") };
+    if (r.ok !== true) {
+      console.error("[slack-bot] chat.postMessage failed:", String(r.error ?? "unknown"));
+      return { ok: false, error: String(r.error ?? "unknown") };
+    }
     return { ok: true, ts: String(r.ts ?? "") };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -116,6 +137,12 @@ export async function slackBotGetPermalink(channel: string, messageTs: string): 
 /**
  * スレッドの返信本文を時刻順で返す。
  * 親投稿（エスカレ通知）と Bot 自身の投稿（案内文）は除く。人間の回答だけが欲しい。
+ *
+ * 他の関数（slackBotPostMessage / slackBotGetPermalink）と違い、失敗時は throw する設計。
+ * 呼び出し側が「API呼び出し自体の失敗」と「スレッドに返信が0件だった」を区別する必要があるため。
+ *
+ * limit: "50" — エスカレスレッドの人間の返信が50件を超える運用は想定しない。
+ * 超えた場合は Slack API のページング仕様上、古い方から欠落する。
  */
 export async function slackBotFetchThreadReplies(channel: string, threadTs: string): Promise<string[]> {
   const r = await callSlackApiGet("conversations.replies", { channel, ts: threadTs, limit: "50" });
