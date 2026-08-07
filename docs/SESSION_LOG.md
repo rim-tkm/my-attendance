@@ -1,5 +1,42 @@
 # SESSION_LOG
 
+## 2026-08-07（その3）中野くん知識ループの実装（Slackスレッド回答→📚→承認→知識化）
+
+### 何を作ったか
+Slackで担当が中野くんのエスカレスレッドに回答し、その返信に**📚リアクション**を付けると、AIが質問と回答から知識文案（タイトル＋本文）を自動生成。管理画面の承認待ち一覧に出て、**承認して初めて本番知識（`nakano_knowledge`）に入る**（却下も可）。これで「Slackで答えた内容」が中野くんの回答精度に還元されるループができた。
+
+主要ファイル:
+- `lib/slack-bot.ts` — Slack Bot APIクライアント（投稿ts取得・署名検証・スレッド取得・permalink取得）
+- `lib/nakano-loop-data.ts` — エスカレ対応表・承認待ちドラフトのデータ層（作成・承認・却下）
+- `lib/nakano-draft.ts` — 質問＋Slack回答から知識文案をAIで整形（JSON抽出・切り詰め検知込み）
+- `app/api/webhooks/slack-events/route.ts` — Slackイベント受信（署名検証・`reaction_added`受信・📚で文案生成）
+- `app/api/admin/nakano/drafts/route.ts` / `[id]/route.ts` — 承認待ち一覧・承認（編集込み）・却下API
+- `AdminNakanoSection` の DraftsCard（`app/page.tsx`）— 管理画面の承認待ちUI
+- `supabase-migration-nakano-knowledge-loop.sql` — テーブル `nakano_escalations` / `nakano_knowledge_drafts`
+
+### 設計書・計画書
+- `docs/superpowers/specs/2026-08-07-nakano-knowledge-loop-design.md`
+- `docs/superpowers/plans/2026-08-07-nakano-knowledge-loop.md`
+
+### レビューで直した主な欠陥
+- **二重承認の知識重複レース**: 同一ドラフトを2人がほぼ同時に承認すると知識が2件できる可能性 → 承認処理をステータス確保先行に変更（コミット `2871b48`）
+- **Bot失敗時の通知消失**: Bot投稿が失敗すると担当への通知自体が消えていた → Webhookへのフォールバックを追加（コミット `756cbc0`）
+- **知識化失敗の無音化**: 📚を付けても文案生成が失敗すると何も起きず気づけない → エラー診断情報を追加しJSON抽出を頑健化（コミット `6f6dcd8`）
+- **`maxDuration`未設定＋SDK既定timeout10分の組み合わせ**: Vercel Functionsのデフォルト実行時間を超えて処理が中断されうる → `app/api/webhooks/slack-events/route.ts` に `export const maxDuration = 60` を設定
+- **承認後の再📚重複**: 承認済みのエスカレに再度📚を押すと重複ドラフトができる可能性 → 重複チェックを強化（コミット `3daf50a`）
+- **rejectの無音成功**: 却下ボタンでエラーが起きても画面に反映されず一覧が古いまま → エラー後に承認待ち一覧を取り直すよう修正（コミット `16ec873`）
+
+### 実行済みSQL
+- テーブル2つ（`nakano_escalations` / `nakano_knowledge_drafts`）は**本番実行済み**。
+- **部分ユニークインデックス `uniq_nakano_drafts_pending_escalation`（同一エスカレへのpendingドラフトを1件に制限）は、ユーザーが実行したか未確認。** 次に触る人は先に確認すること。未実行なら `supabase-migration-nakano-knowledge-loop.sql` の該当CREATE INDEX文をSupabase SQL Editorで実行する。
+
+### 申し送り
+1. **Vercel環境変数3つ（`SLACK_BOT_TOKEN` / `SLACK_SIGNING_SECRET` / `SLACK_NAKANO_CHANNEL_ID`）＋Redeploy → Event Subscriptions登録**（手順は `docs/DEPLOY.md` §6）。まだ本番結線されていない。
+2. **実機E2E確認**: エスカレ→Bot投稿→スレッド回答→📚→承認待ちに出る→承認→中野くんが即答、の一連を通しで確認したい。
+3. Slackアプリは作成済み（`nakano-knowledge-bot`）・トークン取得済み。
+4. LINE周知は8/7昼明け予定（本件とは別件、`docs/SESSION_LOG.md` 上の「その1」参照）。
+5. LINE連携（userId収集）は `docs/LINE_USERID_LINKING_RESEARCH.md` 参照・未着手。
+
 ## 2026-08-07（その2）FAQ導線の強化＋エスカレーション取りこぼしの修正
 
 ### ① よくある質問ボタンの利用0件 → 導線を強化（コミット 45c3aa6）

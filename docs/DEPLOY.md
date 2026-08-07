@@ -77,7 +77,28 @@
 
 ---
 
-## 6. Supabase（データ）関連
+## 6. 中野くん知識ループ（Slack Bot）の本番結線手順
+
+Slackスレッド回答に📚を付けると知識文案が作られ、承認すると本番知識になる機能。コードは既にpush済みでも、以下の結線が終わるまでは**エスカレ通知が従来のWebhook投稿のまま**（知識化は無効）。
+
+1. **コードをpush**（Vercel自動デプロイ）。
+2. **Vercelに環境変数3つを設定してRedeploy**（Project Settings → Environment Variables）:
+   - `SLACK_BOT_TOKEN`
+   - `SLACK_SIGNING_SECRET`
+   - `SLACK_NAKANO_CHANNEL_ID`
+3. **Slackアプリの Event Subscriptions で Request URL を登録**:
+   - Request URL: `https://my-attendance-rho.vercel.app/api/webhooks/slack-events`
+   - Verified になることを確認する
+   - Subscribe to bot events に `reaction_added` を追加して Save
+4. **Botを対象チャンネル（`ai-中野くん-溢れた質問` 等）に招待済みであること**を確認する。
+
+**順序の注意**: 手順②より先に③（Request URL登録）をやると、`SLACK_SIGNING_SECRET` が無い状態でURL検証を受けるため失敗する。**必ず②→③の順**で進める。
+
+チャンネルIDの調べ方: Slackでチャンネル名を右クリック →「チャンネル詳細を表示」→ 一番下にある `C` から始まるID。
+
+---
+
+## 7. Supabase（データ）関連
 
 - スキーマ変更は Supabase 管理画面の「SQL Editor」で実行。`supabase-migration-*.sql` にファイルも残す。
 - **本番データの直接変更/削除は不可逆**。必ずユーザー確認のもとで。バックアップ/復元用スクリプトは `scripts/` にある。
