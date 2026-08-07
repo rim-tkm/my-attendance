@@ -10009,7 +10009,14 @@ function ShiftTab(props: {
       if (isViewingWeekContainingTodayJst && dateStr <= todayJstYmd) return true;
       if (dateStr < todayJstYmd) return true;
       const f =
-        weekForm[dateStr] || { s1: SHIFT_WEEKDAY_DEFAULT_START, e1: SHIFT_WEEKDAY_DEFAULT_END, s2: "", e2: "" };
+        weekForm[dateStr] || {
+          // 表示側の既定値と揃える（14時制限メンバーは14:00始まり）。ズレると
+          // フォーム未構築の一瞬だけ判定が食い違う
+          s1: restrictMorningStart ? "14:00" : SHIFT_WEEKDAY_DEFAULT_START,
+          e1: SHIFT_WEEKDAY_DEFAULT_END,
+          s2: "",
+          e2: "",
+        };
       return adminShiftDayCanSave(f, restrictMorningStart);
     });
   }, [targetStart, weekDates, weekForm, isViewingWeekContainingTodayJst, todayJstYmd, restrictMorningStart, companyHolidays]);
@@ -10043,8 +10050,11 @@ function ShiftTab(props: {
       }
       const s = map.get(dateStr);
       const isNone = s && s.startPlanned === ENTRY_NONE;
+      // 14時制限のメンバーは既定値も14:00にする。10:00のままだと「触っていない日」が
+      // 制限違反になり、週全体が保存できなくなる（2026-08-07 実事故：関さんが保存不可に）
+      const defaultStart = restrictMorningStart ? "14:00" : SHIFT_WEEKDAY_DEFAULT_START;
       next[dateStr] = {
-        s1: isNone ? ENTRY_NONE : s ? s.startPlanned : SHIFT_WEEKDAY_DEFAULT_START,
+        s1: isNone ? ENTRY_NONE : s ? s.startPlanned : defaultStart,
         e1: isNone ? ENTRY_NONE : s ? s.endPlanned : SHIFT_WEEKDAY_DEFAULT_END,
         s2: s && s.startPlanned2 ? s.startPlanned2 : "",
         e2: s && s.endPlanned2 ? s.endPlanned2 : "",
@@ -10419,7 +10429,9 @@ function ShiftTab(props: {
                 isPastDeadline
                   ? "この週の提出期限を過ぎています。別の週を選ぶか、管理者にご相談ください。"
                   : !memberShiftWeekCanSubmit
-                    ? "稼働予定は10:00〜22:00の範囲で入力してください"
+                    ? restrictMorningStart
+                      ? "入力できない時間帯の日があります。開始は14:00以降で入力し、稼働しない日は「なし」を選んでください"
+                      : "入力できない時間帯の日があります。稼働予定は10:00〜22:00で入力し、稼働しない日は「なし」を選んでください"
                     : undefined
               }
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-700 px-4 py-2.5 font-medium text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
