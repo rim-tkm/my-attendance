@@ -179,6 +179,7 @@ import { useMemberAnnouncements } from "@/app/components/useMemberAnnouncements"
 import { AdminAnnouncementsSection, useAdminAnnouncements } from "@/app/components/AdminAnnouncementsSection";
 import { AdminNakanoSection } from "@/app/components/AdminNakanoSection";
 import NakanoBotWidget from "@/app/components/NakanoBotWidget";
+import { AdminLineLinkSection } from "@/app/components/AdminLineLinkSection";
 import {
   buildPunchMissLineMessage,
   isPunchMissLocked,
@@ -797,6 +798,7 @@ type AdminSection =
   | "dormant"
   | "announcements"
   | "nakano"
+  | "line"
   | "settings"
   | "roi"
   | "productivityExport"
@@ -1473,6 +1475,12 @@ function AdminNavIcon({ id }: { id: AdminSection }) {
       <>
         <path d="M4 5h16v10H9l-4 4V5z" />
         <path d="M9 9h.01M13 9h.01" />
+      </>
+    ),
+    line: (
+      <>
+        <path d="M4 5h16v10H9l-4 4V5z" />
+        <path d="M8 8.5v4M12 8.5v4M16 8.5v4" />
       </>
     ),
     planActualGap: (
@@ -4226,6 +4234,7 @@ function AdminDashboard(props: {
     ...(isAdminUser
       ? ([
           { id: "nakano" as const, label: "AIの中野くん" },
+          { id: "line" as const, label: "LINE連携" },
           { id: "roi" as const, label: "生産性分析（ROI）" },
           { id: "productivityExport" as const, label: "生産性CSV" },
           { id: "invoiceBatchExport" as const, label: "請求書一括記帳" },
@@ -7537,6 +7546,8 @@ function AdminDashboard(props: {
       )}
 
       {adminSection === "nakano" && <AdminNakanoSection />}
+
+      {adminSection === "line" && <AdminLineLinkSection />}
 
       {adminSection === "dormant" && (
         <div className="space-y-6">
