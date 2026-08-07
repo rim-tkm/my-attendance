@@ -1,7 +1,7 @@
 import { getServerSession } from "next-auth";
 import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
-import { buildNakanoKnowledgeText } from "@/lib/nakano";
+import { buildNakanoKnowledgeText, looksLikeNakanoDeferral } from "@/lib/nakano";
 import { NAKANO_LINE_FALLBACK } from "@/lib/nakano-access";
 import { streamNakanoReply, type NakanoHistoryTurn } from "@/lib/nakano-client";
 import {
@@ -167,6 +167,22 @@ export async function POST(req: Request) {
             outputTokens = ev.outputTokens;
             truncated = ev.stopReason === "max_tokens";
           }
+        }
+
+        // 安全網: モデルが escalate_to_admin を呼ばず「担当に確認して折り返します」等の
+        // 一文だけを本文に書いた場合、本来のトリガー（ツール呼び出し）が発火せず、
+        // Slack通知もラベルも出ないまま質問が失われる（2026-08-07 に実データで確認）。
+        // ツール未使用でも本文が担当対応を示していれば、ここで拾って必ず担当に回す。
+        if (!escalated && looksLikeNakanoDeferral(fullText)) {
+          escalated = true;
+          send({ type: "escalated" });
+          await notifyNakanoEscalation({
+            memberName,
+            memberAccount,
+            question,
+            reason: "AIが本文で担当対応を案内したがツール未使用のため、安全網で自動エスカレーション",
+            summary: "",
+          });
         }
 
         if (truncated) {
