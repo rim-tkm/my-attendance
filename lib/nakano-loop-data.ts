@@ -146,8 +146,11 @@ function toNakanoKnowledgeDraft(r: DbNakanoKnowledgeDraft): NakanoKnowledgeDraft
   };
 }
 
-/** 📚の重複押下で二重作成しないためのチェック */
-export async function findPendingDraftByEscalationId(
+/**
+ * 📚の重複押下・承認後の再押下で二重作成しないためのチェック。
+ * rejected は除外する（却下済みなら作り直してよい）。pending / approved が残っていれば再作成しない。
+ */
+export async function findActiveDraftByEscalationId(
   escalationId: string
 ): Promise<NakanoKnowledgeDraft | null> {
   const supabase = db();
@@ -155,7 +158,8 @@ export async function findPendingDraftByEscalationId(
     .from("nakano_knowledge_drafts")
     .select(DRAFT_COLUMNS)
     .eq("escalation_id", escalationId)
-    .eq("status", "pending")
+    .neq("status", "rejected")
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -266,10 +270,15 @@ export async function approveNakanoDraft(
 
 export async function rejectNakanoDraft(id: string): Promise<void> {
   const supabase = db();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("nakano_knowledge_drafts")
     .update({ status: "rejected", updated_at: new Date().toISOString() })
     .eq("id", id)
-    .eq("status", "pending");
+    .eq("status", "pending")
+    .select("id")
+    .maybeSingle();
   if (error) throw new Error(error.message);
+  // 0行更新は「他の管理者が先に処理した」ケース。黙って成功にすると
+  // 実際は承認済みなのに「却下しました」と誤表示される。
+  if (!data) throw new Error("この文案は既に処理済みです（承認済みまたは却下済み）");
 }

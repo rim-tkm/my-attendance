@@ -18,7 +18,9 @@ export async function generateKnowledgeDraft(params: {
   rawAnswer: string;
 }): Promise<{ title: string; body: string }> {
   if (!isNakanoConfigured()) throw new NakanoNotConfiguredError();
-  const client = new Anthropic();
+  // SDK既定のtimeout10分だとVercelの関数上限に先に殺されcatchすら走らない。
+  // 整形は失敗しても生文フォールバックがあるので早めに諦める
+  const client = new Anthropic({ timeout: 20_000, maxRetries: 1 });
   const model = (process.env.NAKANO_DRAFT_MODEL ?? "").trim() || DRAFT_DEFAULT_MODEL;
 
   const res = await client.messages.create({

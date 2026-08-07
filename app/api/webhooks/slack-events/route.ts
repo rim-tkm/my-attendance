@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { generateKnowledgeDraft } from "@/lib/nakano-draft";
 import {
+  findActiveDraftByEscalationId,
   findNakanoEscalationBySlackTs,
-  findPendingDraftByEscalationId,
   insertNakanoKnowledgeDraft,
 } from "@/lib/nakano-loop-data";
+import { notifyNakanoOutage } from "@/lib/nakano-server";
 import {
   getNakanoSlackChannelId,
   slackBotFetchThreadReplies,
@@ -14,6 +15,8 @@ import {
 } from "@/lib/slack-bot";
 
 export const dynamic = "force-dynamic";
+// AI整形とSlack API数回で既定の関数上限を超えうる
+export const maxDuration = 60;
 
 /**
  * Slack Events API の受け口。📚（:books:）リアクションで知識化を起動する。
@@ -93,12 +96,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true });
     }
 
-    const existing = await findPendingDraftByEscalationId(escalation.id);
+    const existing = await findActiveDraftByEscalationId(escalation.id);
     if (existing) {
       await slackBotPostMessage({
         channel,
         threadTs: ts,
-        text: "この質問の文案は既に承認待ちにあります。管理画面の「中野くん」→「承認待ち」を確認してください",
+        text:
+          existing.status === "approved"
+            ? "この質問は既に知識に登録されています（重複登録を防ぐため何もしませんでした）"
+            : "この質問の文案は既に承認待ちにあります。管理画面の「中野くん」→「承認待ち」を確認してください",
       });
       return NextResponse.json({ ok: true });
     }
@@ -144,7 +150,16 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ ok: true });
   } catch (e) {
-    console.error("[nakano-loop] event handling failed:", e instanceof Error ? e.message : String(e));
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error("[nakano-loop] event handling failed:", detail);
+    // 逆引き失敗には案内を返すのに、より深刻な障害が無音なのは非対称。
+    // 再送は無視される設計なので、担当が📚を付け直せるよう必ず知らせる
+    await slackBotPostMessage({
+      channel,
+      threadTs: ts,
+      text: "知識化の処理に失敗しました。お手数ですが、📚を一度外してから付け直してください",
+    }).catch(() => undefined);
+    await notifyNakanoOutage(`知識化の処理に失敗: ${detail}`);
     return NextResponse.json({ ok: true });
   }
 }

@@ -38,3 +38,7 @@ CREATE TABLE IF NOT EXISTS public.nakano_knowledge_drafts (
 ALTER TABLE public.nakano_knowledge_drafts ENABLE ROW LEVEL SECURITY;
 CREATE INDEX IF NOT EXISTS idx_nakano_drafts_status
   ON public.nakano_knowledge_drafts (status);
+
+-- 同一エスカレに pending のドラフトは1件まで（📚同時押下の競合をDB層でも防ぐ）
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_nakano_drafts_pending_escalation
+  ON public.nakano_knowledge_drafts (escalation_id) WHERE status = 'pending';
