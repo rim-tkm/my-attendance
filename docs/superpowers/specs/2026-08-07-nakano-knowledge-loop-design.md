@@ -109,7 +109,9 @@ Bot `chat.postMessage` に切り替える。Bot投稿なら投稿ID（`ts`）が
 1. **署名検証**（`SLACK_SIGNING_SECRET`。Slack公式の v0 署名方式）。不正は401
 2. `url_verification`（初回チャレンジ）に応答
 3. `reaction_added` かつ絵文字が `books`（📚）かつ対象チャンネルのみ処理。他は200で無視
-4. Slackの3秒タイムアウト対策: 先に200を返し、処理は `waitUntil` で継続
+4. Slackの3秒タイムアウト対策: 再送リクエスト（`x-slack-retry-num` ヘッダ付き）は即200で無視し、
+   初回リクエスト内で同期処理する。3秒を超えてSlackが再送しても、再送側は上記で無視され、
+   二重作成は pending 重複チェックでも防がれる（新規ライブラリ `waitUntil` を増やさないため）
 5. `item.ts` で `nakano_escalations` を逆引き
    - 見つからない → スレッドに「この投稿は知識化の対象外です」とBotで返信して終了
 6. `conversations.replies` でスレッド返信を取得（Bot自身の投稿を除く、時刻順に連結）
