@@ -185,11 +185,30 @@ export async function notifyNakanoEscalation(params: {
       `本人に回答をお願いします。前後のやりとりは管理画面の「中野くん」→「届いた質問」で確認できます。`;
     // 📚案内はBot経路だけに付ける。Webhook投稿はtsが取れず nakano_escalations に残らないため、
     // 📚を押しても知識化が起きない。案内だけ出すと担当が混乱する。
-    const KNOWLEDGE_HINT_LINE = "このスレッドに回答を書いて 📚 を付けると、中野くんの知識の文案になります。";
+    // ボタン（Interactivity）も同じ理由でBot経路だけに出す。
+    const KNOWLEDGE_HINT_LINE =
+      "スレッドに回答を書いてから、上の「📚 知識の文案を作る」ボタンを押してください（📚リアクションでも同じことができます）。";
 
     const channelId = getNakanoSlackChannelId();
     if (isSlackBotConfigured() && channelId) {
-      const r = await slackBotPostMessage({ channel: channelId, text: `${baseText}\n${KNOWLEDGE_HINT_LINE}` });
+      // 文字で📚を送ってしまう誤操作が実運用で多かったため、リアクションに加えてボタンでも起動できるようにする。
+      // text はblocks非対応クライアント向けのフォールバック文字列（従来どおり baseText + ヒント行）。
+      const sectionText = `${baseText}\n${KNOWLEDGE_HINT_LINE}`;
+      const blocks = [
+        { type: "section", text: { type: "mrkdwn", text: sectionText } },
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "📚 知識の文案を作る", emoji: true },
+              action_id: "nakano_make_knowledge",
+              style: "primary",
+            },
+          ],
+        },
+      ];
+      const r = await slackBotPostMessage({ channel: channelId, text: sectionText, blocks });
       if (r.ok) {
         if (!r.ts) {
           // ts無しでは逆引きできない行になるだけなので、対応表には残さない。

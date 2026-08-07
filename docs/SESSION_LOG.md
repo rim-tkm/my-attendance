@@ -1,5 +1,24 @@
 # SESSION_LOG
 
+## 2026-08-07（その4）中野くん知識ループにボタン起動を追加（📚リアクション誤操作対策）
+
+### 何を作ったか・なぜ
+「その3」で作った📚リアクション起動が実運用で**「文字で📚を送ってしまう」誤操作が多い**と判明。エスカレ通知に**「📚 知識の文案を作る」ボタン**を追加し、押すだけで同じ知識化フローが起動するようにした。📚リアクション経路は変更せず両対応。
+
+主要ファイル:
+- `lib/nakano-loop-run.ts`（新規）— 知識化の本体 `runNakanoKnowledgeCapture({channel, ts})`。旧`app/api/webhooks/slack-events/route.ts`の「channel/ts確定後の処理」をそのまま移した共通関数。📚リアクションとボタンの両方から呼ばれる
+- `app/api/webhooks/slack-events/route.ts` — 署名検証・イベント絞り込み・再送無視のみ残し、本体は`runNakanoKnowledgeCapture`呼び出しに委譲
+- `app/api/webhooks/slack-interactive/route.ts`（新規）— Slack Interactivity（`block_actions`）の受け口。`payload=`形式のform-encodedボディを署名検証してから`nakano_make_knowledge`アクションだけ処理
+- `lib/slack-bot.ts` — `slackBotPostMessage` に optional `blocks` を追加
+- `lib/nakano-server.ts` — `notifyNakanoEscalation` のBot投稿にボタン付きblocksを追加。ヒント文言も「ボタンを押してください（📚リアクションでも同じことができます）」に更新
+
+### 検証
+`npx tsc --noEmit` / `npm run build` ともに成功。
+
+### 申し送り
+1. **本番結線が未了**: Slackアプリの「Interactivity & Shortcuts」をOnにし、Request URLに `https://my-attendance-rho.vercel.app/api/webhooks/slack-interactive` を設定する必要がある（手順は `docs/DEPLOY.md` §6の追記部分）。これをやるまでボタンは反応しない（📚リアクション経路は従来通り動く）。
+2. 実機確認はまだ（ボタンを実際に押しての一連の流れは未テスト）。
+
 ## 2026-08-07（その3）中野くん知識ループの実装（Slackスレッド回答→📚→承認→知識化）
 
 ### 何を作ったか

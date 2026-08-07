@@ -97,6 +97,12 @@ Slackスレッド回答に📚を付けると知識文案が作られ、承認�
 
 チャンネルIDの調べ方: Slackでチャンネル名を右クリック →「チャンネル詳細を表示」→ 一番下にある `C` から始まるID。
 
+6. **Slackアプリの「Interactivity & Shortcuts」をOnにして Request URL を登録**（📚リアクションの誤操作対策として追加した「📚 知識の文案を作る」ボタン用。Event Subscriptions とは別設定）:
+   - 左メニュー → Interactivity & Shortcuts → Interactivity を On
+   - Request URL: `https://my-attendance-rho.vercel.app/api/webhooks/slack-interactive`
+   - Save。Event Subscriptionsと違い、Onにした時点ではURL検証（`url_verification`）は走らない。ボタンを実際に1回押して動作確認するのが確実。
+   - 署名検証は Event Subscriptions と同じ `SLACK_SIGNING_SECRET` を使うので、③まで終わっていれば追加の環境変数は不要。
+
 ---
 
 ## 7. Supabase（データ）関連

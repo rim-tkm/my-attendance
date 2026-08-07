@@ -107,10 +107,12 @@ export async function slackBotPostMessage(params: {
   channel: string;
   text: string;
   threadTs?: string;
+  blocks?: unknown[];
 }): Promise<{ ok: true; ts: string } | { ok: false; error: string }> {
   try {
     const body: Record<string, unknown> = { channel: params.channel, text: params.text };
     if (params.threadTs) body.thread_ts = params.threadTs;
+    if (params.blocks) body.blocks = params.blocks;
     const r = await callSlackApiPost("chat.postMessage", body);
     if (r.ok !== true) {
       console.error("[slack-bot] chat.postMessage failed:", String(r.error ?? "unknown"));

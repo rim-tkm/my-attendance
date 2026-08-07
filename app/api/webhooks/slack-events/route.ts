@@ -1,19 +1,6 @@
 import { NextResponse } from "next/server";
-import { generateKnowledgeDraft } from "@/lib/nakano-draft";
-import {
-  findActiveDraftByEscalationId,
-  findNakanoEscalationBySlackTs,
-  insertNakanoKnowledgeDraft,
-} from "@/lib/nakano-loop-data";
-import { notifyNakanoLoopFailure } from "@/lib/nakano-server";
-import {
-  getNakanoSlackChannelId,
-  slackBotFetchThreadReplies,
-  slackBotGetPermalink,
-  slackBotPostMessage,
-  slackBotResolveThreadParentTs,
-  verifySlackSignature,
-} from "@/lib/slack-bot";
+import { runNakanoKnowledgeCapture } from "@/lib/nakano-loop-run";
+import { getNakanoSlackChannelId, verifySlackSignature } from "@/lib/slack-bot";
 
 export const dynamic = "force-dynamic";
 // AI整形とSlack API数回で既定の関数上限を超えうる
@@ -83,92 +70,8 @@ export async function POST(req: Request) {
   const channel = item.channel as string;
   const ts = item.ts as string;
 
-  // 処理中に何が起きても Slack には 200 を返す（エラーを返すと再送で多重処理になる）
-  try {
-    let effectiveTs = ts;
-    let escalation = await findNakanoEscalationBySlackTs(channel, ts);
-    if (!escalation) {
-      // 担当は「良い回答（＝スレッド内の返信）」に📚を付けることが多い。
-      // 返信に付いた場合は親（エスカレ通知）へ辿って引き直す。
-      const parentTs = await slackBotResolveThreadParentTs(channel, ts);
-      if (parentTs && parentTs !== ts) {
-        escalation = await findNakanoEscalationBySlackTs(channel, parentTs);
-        if (escalation) effectiveTs = parentTs;
-      }
-    }
-    if (!escalation) {
-      await slackBotPostMessage({
-        channel,
-        threadTs: ts,
-        text: "この投稿からは元の質問を特定できませんでした（エスカレーション通知とそのスレッドでのみ📚が使えます。Bot導入前の古い通知も対象外です）",
-      });
-      return NextResponse.json({ ok: true });
-    }
-
-    const existing = await findActiveDraftByEscalationId(escalation.id);
-    if (existing) {
-      await slackBotPostMessage({
-        channel,
-        threadTs: effectiveTs,
-        text:
-          existing.status === "approved"
-            ? "この質問は既に知識に登録されています（重複登録を防ぐため何もしませんでした）"
-            : "この質問の文案は既に承認待ちにあります。管理画面の「中野くん」→「承認待ち」を確認してください",
-      });
-      return NextResponse.json({ ok: true });
-    }
-
-    const replies = await slackBotFetchThreadReplies(channel, effectiveTs);
-    if (replies.length === 0) {
-      await slackBotPostMessage({
-        channel,
-        threadTs: effectiveTs,
-        text: "先にこのスレッドに回答を書いてから📚を付けてください",
-      });
-      return NextResponse.json({ ok: true });
-    }
-    const rawAnswer = replies.join("\n");
-
-    // 整形に失敗しても素材（担当の回答）を失わないことを最優先にする
-    let draftTitle: string;
-    let draftBody: string;
-    try {
-      const draft = await generateKnowledgeDraft({ question: escalation.question, rawAnswer });
-      draftTitle = draft.title;
-      draftBody = draft.body;
-    } catch (e) {
-      console.warn("[nakano-loop] AI整形に失敗。生文のまま保存:", e instanceof Error ? e.message : String(e));
-      draftTitle = escalation.question.slice(0, 30);
-      draftBody = rawAnswer;
-    }
-
-    const permalink = await slackBotGetPermalink(channel, effectiveTs);
-    await insertNakanoKnowledgeDraft({
-      escalationId: escalation.id,
-      question: escalation.question,
-      rawAnswer,
-      draftTitle,
-      draftBody,
-      slackPermalink: permalink,
-    });
-
-    await slackBotPostMessage({
-      channel,
-      threadTs: effectiveTs,
-      text: "📚 知識の文案を作りました。管理画面の「中野くん」→「承認待ち」から確認・承認してください",
-    });
-    return NextResponse.json({ ok: true });
-  } catch (e) {
-    const detail = e instanceof Error ? e.message : String(e);
-    console.error("[nakano-loop] event handling failed:", detail);
-    // 逆引き失敗には案内を返すのに、より深刻な障害が無音なのは非対称。
-    // 再送は無視される設計なので、担当が📚を付け直せるよう必ず知らせる
-    await slackBotPostMessage({
-      channel,
-      threadTs: ts,
-      text: "知識化の処理に失敗しました。お手数ですが、📚を一度外してから付け直してください",
-    }).catch(() => undefined);
-    await notifyNakanoLoopFailure(`知識化の処理に失敗: ${detail}`);
-    return NextResponse.json({ ok: true });
-  }
+  // 本体処理は lib/nakano-loop-run.ts に集約（ボタン起動 route と共通）。
+  // どんな失敗でも throw しない実装なので、ここでは待って200を返すだけでよい。
+  await runNakanoKnowledgeCapture({ channel, ts });
+  return NextResponse.json({ ok: true });
 }
