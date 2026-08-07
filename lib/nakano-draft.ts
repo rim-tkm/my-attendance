@@ -10,7 +10,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 
-const DRAFT_DEFAULT_MODEL = "claude-haiku-4-5";
+const DRAFT_DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 
 export async function generateKnowledgeDraft(params: {
   question: string;
