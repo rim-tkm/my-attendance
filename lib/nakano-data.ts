@@ -9,6 +9,7 @@
  * 設計: docs/superpowers/specs/2026-08-06-nakano-bot-design.md
  */
 
+import { getTodayJstDateString } from "@/lib/export-schedule";
 import { getUsersDb } from "@/lib/supabase-data";
 import {
   toNakanoKnowledge,
@@ -396,4 +397,83 @@ export async function loadNakanoUsageForMonth(monthYm: string): Promise<NakanoUs
   }
 
   return usage;
+}
+
+/** 1日ぶんの使用状況。日付は JST の YYYY-MM-DD */
+export type NakanoDailyUsage = {
+  date: string;
+  aiQuestionCount: number;
+  stepUseCount: number;
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+};
+
+/**
+ * 直近 days 日ぶんを日別に集計する（当日を含む・新しい順で返す）。
+ *
+ * 月合計だけだと「今日いくら使ったか」が分からず、
+ * 「1日いくらまで」という運用ルールの判断ができないので分けている。
+ * 質問が無かった日も 0 の行を返す（表から日付が抜けると増減が読めない）。
+ */
+export async function loadNakanoDailyUsage(days: number, now: Date = new Date()): Promise<NakanoDailyUsage[]> {
+  const supabase = db();
+  const span = Math.max(1, Math.min(Math.round(days), 90));
+
+  // JST の「今日」を基準に、span 日前の 00:00(JST) から今までを見る。
+  const startYmd = getTodayJstDateString(new Date(now.getTime() - (span - 1) * 86_400_000));
+  const startIso = new Date(`${startYmd}T00:00:00+09:00`).toISOString();
+
+  const byDate = new Map<string, NakanoDailyUsage>();
+  // 空の日も並ぶように、先に枠を作っておく。
+  for (let i = 0; i < span; i += 1) {
+    const ymd = getTodayJstDateString(new Date(now.getTime() - i * 86_400_000));
+    byDate.set(ymd, {
+      date: ymd,
+      aiQuestionCount: 0,
+      stepUseCount: 0,
+      inputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 0,
+    });
+  }
+
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("nakano_messages")
+      .select("role, source, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, created_at")
+      .gte("created_at", startIso)
+      .order("created_at", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+
+    const rows = (data ?? []) as {
+      role: string | null;
+      source: string | null;
+      input_tokens: number | null;
+      cache_read_tokens: number | null;
+      cache_write_tokens: number | null;
+      output_tokens: number | null;
+      created_at: string;
+    }[];
+
+    for (const r of rows) {
+      const ymd = getTodayJstDateString(new Date(r.created_at));
+      const cur = byDate.get(ymd);
+      // 枠外（未来日時など想定外の行）は捨てる。表の合計がずれる方が困る。
+      if (!cur) continue;
+      if (r.role === "user" && r.source === "ai") cur.aiQuestionCount += 1;
+      if (r.role === "user" && r.source === "step") cur.stepUseCount += 1;
+      cur.inputTokens += r.input_tokens ?? 0;
+      cur.cacheReadTokens += r.cache_read_tokens ?? 0;
+      cur.cacheWriteTokens += r.cache_write_tokens ?? 0;
+      cur.outputTokens += r.output_tokens ?? 0;
+    }
+
+    if (rows.length < PAGE_SIZE) break;
+  }
+
+  return Array.from(byDate.values()).sort((a, b) => (a.date < b.date ? 1 : -1));
 }

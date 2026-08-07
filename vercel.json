@@ -15,6 +15,10 @@
     {
       "path": "/api/cron/freee-sync-partners",
       "schedule": "30 20 * * *"
+    },
+    {
+      "path": "/api/cron/nakano-cost-alert",
+      "schedule": "0 12 * * *"
     }
   ]
 }

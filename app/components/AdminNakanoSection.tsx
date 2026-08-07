@@ -244,11 +244,22 @@ export function useAdminNakanoLogs(): AdminNakanoLogsState {
  * 使用状況
  * ------------------------------------------------------------------ */
 
+/** 日別の費用。1日あたりの上限で運用を判断するために使う */
+export type NakanoDailyCost = {
+  date: string;
+  aiQuestionCount: number;
+  stepUseCount: number;
+  yen: number;
+  cacheHitRate: number | null;
+};
+
 export type AdminNakanoUsageState = {
   month: string;
   setMonth: (v: string) => void;
   usage: NakanoUsage | null;
   estimatedYen: number;
+  daily: NakanoDailyCost[];
+  dailyAlertYen: number;
   busy: boolean;
   error: string | null;
 };
@@ -257,6 +268,8 @@ export function useAdminNakanoUsage(): AdminNakanoUsageState {
   const [month, setMonth] = useState<string>(() => currentJstMonth());
   const [usage, setUsage] = useState<NakanoUsage | null>(null);
   const [estimatedYen, setEstimatedYen] = useState(0);
+  const [daily, setDaily] = useState<NakanoDailyCost[]>([]);
+  const [dailyAlertYen, setDailyAlertYen] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -273,17 +286,22 @@ export function useAdminNakanoUsage(): AdminNakanoUsageState {
         const data = (await res.json().catch(() => ({}))) as {
           usage?: NakanoUsage;
           estimatedYen?: number;
+          daily?: NakanoDailyCost[];
+          dailyAlertYen?: number;
           error?: string;
         };
         if (cancelled) return;
         if (!res.ok || !data.usage) {
           setUsage(null);
           setEstimatedYen(0);
+          setDaily([]);
           setError(data.error || "読み込みに失敗しました");
           return;
         }
         setUsage(data.usage);
         setEstimatedYen(typeof data.estimatedYen === "number" ? data.estimatedYen : 0);
+        setDaily(Array.isArray(data.daily) ? data.daily : []);
+        setDailyAlertYen(typeof data.dailyAlertYen === "number" ? data.dailyAlertYen : 0);
       } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : String(e));
@@ -298,7 +316,7 @@ export function useAdminNakanoUsage(): AdminNakanoUsageState {
     };
   }, [month]);
 
-  return { month, setMonth, usage, estimatedYen, busy, error };
+  return { month, setMonth, usage, estimatedYen, daily, dailyAlertYen, busy, error };
 }
 
 /* ------------------------------------------------------------------ *
@@ -786,6 +804,59 @@ export function AdminNakanoSection() {
             </p>
           </>
         )}
+
+        {/* 1日あたりの上限で運用を判断するための表。対象月とは関係なく常に直近7日を出す */}
+        <div className="mt-5 border-t border-slate-200 pt-4">
+          <h3 className="text-xs font-semibold text-slate-800">1日ごとの費用（直近7日）</h3>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            {usage.dailyAlertYen > 0
+              ? `1日 ${usage.dailyAlertYen.toLocaleString("ja-JP")}円 を超えた日は赤で表示し、その日の21時にSlackへ通知します。`
+              : "上の対象月に関わらず、常に直近7日を表示します。"}
+          </p>
+
+          {usage.daily.length === 0 ? (
+            <p className="mt-2 text-sm text-slate-600">{usage.busy ? "読み込み中です。" : "データがありません。"}</p>
+          ) : (
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full min-w-[30rem] text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 text-[11px] text-slate-500">
+                    <th className="py-1.5 pr-3 font-medium">日付</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">概算費用</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">AIへの質問</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">ボタン利用</th>
+                    <th className="py-1.5 text-right font-medium">キャッシュ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usage.daily.map((d, i) => {
+                    const over = usage.dailyAlertYen > 0 && d.yen > usage.dailyAlertYen;
+                    return (
+                      <tr key={d.date} className="border-b border-slate-100 last:border-0">
+                        <td className="py-1.5 pr-3 text-slate-700">
+                          {d.date.slice(5).replace("-", "/")}
+                          {i === 0 && <span className="ml-1 text-[10px] text-slate-400">今日</span>}
+                        </td>
+                        <td
+                          className={`py-1.5 pr-3 text-right font-semibold ${
+                            over ? "text-red-600" : "text-slate-900"
+                          }`}
+                        >
+                          {d.yen.toLocaleString("ja-JP")} 円
+                        </td>
+                        <td className="py-1.5 pr-3 text-right text-slate-700">{d.aiQuestionCount}</td>
+                        <td className="py-1.5 pr-3 text-right text-slate-700">{d.stepUseCount}</td>
+                        <td className="py-1.5 text-right text-slate-500">
+                          {d.cacheHitRate == null ? "—" : `${Math.round(d.cacheHitRate * 100)}%`}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </section>
 
       {/* 知識の管理は普段は畳んでおく。日々見るのは上の2枚で、ここは直したいときだけ開けばいい。 */}
