@@ -16,6 +16,8 @@ import {
 import { loadNakanoAiAskTimesMs } from "@/lib/nakano-data";
 import { getSupabaseAdmin } from "@/lib/supabase-admin";
 import { postSlackIncomingWebhook, resolveSlackWebhookUrl } from "@/lib/slack-webhook";
+import { getNakanoSlackChannelId, isSlackBotConfigured, slackBotPostMessage } from "@/lib/slack-bot";
+import { insertNakanoEscalation } from "@/lib/nakano-loop-data";
 
 export type NakanoContext = {
   member: Member;
@@ -155,6 +157,10 @@ function buildNakanoMentionPrefix(): string {
  * 担当に回す（Slack通知）。
  * 通知の失敗で会話自体を落とさない。ここで throw すると、
  * メンバーには「エラー」としか見えず、質問した事実まで失われてしまう。
+ *
+ * SLACK_BOT_TOKEN と SLACK_NAKANO_CHANNEL_ID が設定されていれば Bot 投稿にする。
+ * Bot投稿は投稿tsが取れるため、📚リアクション→知識化の逆引き（nakano_escalations）が可能になる。
+ * 未設定なら従来どおり Incoming Webhook（知識化は不可・通知のみ）。段階移行のため。
  */
 export async function notifyNakanoEscalation(params: {
   memberName: string;
@@ -162,15 +168,11 @@ export async function notifyNakanoEscalation(params: {
   question: string;
   reason: string;
   summary: string;
+  /** 知識ループ用。Bot投稿できたとき nakano_escalations に対応を残す */
+  conversationId?: string;
+  userId?: string;
 }): Promise<void> {
   try {
-    const url = resolveSlackWebhookUrl("nakano");
-    if (!url) {
-      console.warn("[nakano] escalation slack url not configured");
-      return;
-    }
-    // 誰からの質問かが分からないと返信できない。氏名だけだと同姓や表示名の揺れで
-    // 特定できないことがあるので、一意に決まるログインアカウント（メール）も必ず載せる。
     const text =
       buildNakanoMentionPrefix() +
       `🙋 中野くんが答えられない質問を受けました\n` +
@@ -179,7 +181,38 @@ export async function notifyNakanoEscalation(params: {
       `・質問: ${params.question}\n` +
       (params.summary ? `・要約: ${params.summary}\n` : "") +
       (params.reason ? `・理由: ${params.reason}\n` : "") +
-      `本人に回答をお願いします。前後のやりとりは管理画面の「中野くん」→「届いた質問」で確認できます。`;
+      `本人に回答をお願いします。前後のやりとりは管理画面の「中野くん」→「届いた質問」で確認できます。\n` +
+      `このスレッドに回答を書いて 📚 を付けると、中野くんの知識の文案になります。`;
+
+    const channelId = getNakanoSlackChannelId();
+    if (isSlackBotConfigured() && channelId) {
+      const r = await slackBotPostMessage({ channel: channelId, text });
+      if (!r.ok) {
+        console.warn("[nakano] escalation bot post failed:", r.error);
+        return;
+      }
+      if (params.conversationId && params.userId) {
+        try {
+          await insertNakanoEscalation({
+            conversationId: params.conversationId,
+            userId: params.userId,
+            question: params.question,
+            slackChannelId: channelId,
+            slackTs: r.ts,
+          });
+        } catch (e) {
+          // 対応表に残せなくても通知自体は成功している。📚は効かないが実害は知識化だけ
+          console.warn("[nakano] escalation record failed:", e instanceof Error ? e.message : String(e));
+        }
+      }
+      return;
+    }
+
+    const url = resolveSlackWebhookUrl("nakano");
+    if (!url) {
+      console.warn("[nakano] escalation slack url not configured");
+      return;
+    }
     const r = await postSlackIncomingWebhook(url, { text });
     if (!r.ok) console.warn("[nakano] escalation slack failed:", r.error, r.detail);
   } catch (e) {

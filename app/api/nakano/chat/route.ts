@@ -163,6 +163,8 @@ export async function POST(req: Request) {
                 question,
                 reason: ev.reason,
                 summary: ev.summary,
+                conversationId,
+                userId,
               });
               continue;
             }
@@ -188,6 +190,8 @@ export async function POST(req: Request) {
             question,
             reason: "AIが本文で担当対応を案内したがツール未使用のため、安全網で自動エスカレーション",
             summary: "",
+            conversationId,
+            userId,
           });
         }
 
