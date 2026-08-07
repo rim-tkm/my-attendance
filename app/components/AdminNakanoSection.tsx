@@ -148,6 +148,20 @@ export function useAdminNakanoKnowledge(): AdminNakanoKnowledgeState {
 }
 
 /* ------------------------------------------------------------------ *
+ * 知識の承認待ちドラフト
+ * ------------------------------------------------------------------ */
+
+type NakanoDraftRow = {
+  id: string;
+  question: string;
+  rawAnswer: string;
+  draftTitle: string;
+  draftBody: string;
+  slackPermalink: string | null;
+  createdAt: string;
+};
+
+/* ------------------------------------------------------------------ *
  * 会話ログ
  * ------------------------------------------------------------------ */
 
@@ -585,6 +599,171 @@ function KnowledgeForm({
 }
 
 /* ------------------------------------------------------------------ *
+ * 知識の承認待ちカード
+ * ------------------------------------------------------------------ */
+
+/**
+ * 知識の承認待ちドラフト。
+ * Slackで📚が付いた担当回答のAI整形案を、ここで人が確認してから正式知識にする。
+ * 0件のときはセクションごと出さない（画面を汚さない）。
+ */
+function DraftsCard() {
+  const [rows, setRows] = useState<NakanoDraftRow[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [edits, setEdits] = useState<Record<string, { title: string; body: string }>>({});
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/admin/nakano/drafts", { credentials: "include" });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; drafts?: NakanoDraftRow[]; error?: string }
+        | null;
+      if (!res.ok || !data?.ok || !Array.isArray(data.drafts)) {
+        throw new Error(data?.error || "読み込みに失敗しました");
+      }
+      setRows(data.drafts);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const getEdit = (r: NakanoDraftRow) => edits[r.id] ?? { title: r.draftTitle, body: r.draftBody };
+
+  const approve = useCallback(
+    async (r: NakanoDraftRow) => {
+      const edit = edits[r.id] ?? { title: r.draftTitle, body: r.draftBody };
+      if (!window.confirm(`「${edit.title}」を正式な知識として登録します。よろしいですか？`)) return;
+      setBusy(true);
+      try {
+        const res = await fetch(`/api/admin/nakano/drafts/${encodeURIComponent(r.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ action: "approve", title: edit.title, body: edit.body }),
+        });
+        const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+        if (!res.ok || !data?.ok) throw new Error(data?.error || "承認に失敗しました");
+        setRows((prev) => prev.filter((x) => x.id !== r.id));
+        window.alert("知識に登録しました。中野くんは次の質問から使います");
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [edits]
+  );
+
+  const reject = useCallback(async (r: NakanoDraftRow) => {
+    if (!window.confirm(`「${r.draftTitle}」の文案を破棄します。よろしいですか？`)) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/nakano/drafts/${encodeURIComponent(r.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ action: "reject" }),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) throw new Error(data?.error || "却下に失敗しました");
+      setRows((prev) => prev.filter((x) => x.id !== r.id));
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  if (rows.length === 0 && !error) return null;
+
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 p-5 shadow-sm">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-slate-900">知識の承認待ち（{rows.length}件）</h3>
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={busy}
+          className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+        >
+          更新
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-slate-600">
+        Slackで📚を付けた回答の文案です。内容を確認・編集して承認すると、中野くんが次の質問から使います。
+      </p>
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+      <div className="mt-3 space-y-4">
+        {rows.map((r) => {
+          const edit = getEdit(r);
+          return (
+            <div key={r.id} className="rounded-lg border border-slate-200 bg-white p-4">
+              <p className="text-xs text-slate-500">元の質問</p>
+              <p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-800">{r.question}</p>
+              <p className="mt-2 text-xs text-slate-500">担当の返信（原文）</p>
+              <p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-600">{r.rawAnswer}</p>
+              <div className="mt-3 space-y-2">
+                <input
+                  type="text"
+                  value={edit.title}
+                  onChange={(e) => setEdits((prev) => ({ ...prev, [r.id]: { ...edit, title: e.target.value } }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="知識のタイトル"
+                />
+                <textarea
+                  value={edit.body}
+                  rows={4}
+                  onChange={(e) => setEdits((prev) => ({ ...prev, [r.id]: { ...edit, body: e.target.value } }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="知識の本文"
+                />
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void approve(r)}
+                  disabled={busy}
+                  className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+                >
+                  承認して知識にする
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void reject(r)}
+                  disabled={busy}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  却下
+                </button>
+                {r.slackPermalink && (
+                  <a
+                    href={r.slackPermalink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="ml-auto text-xs text-slate-500 underline hover:text-slate-700"
+                  >
+                    Slackのスレッドを見る
+                  </a>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
  * 本体
  * ------------------------------------------------------------------ */
 
@@ -858,6 +1037,8 @@ export function AdminNakanoSection() {
           )}
         </div>
       </section>
+
+      <DraftsCard />
 
       {/* 知識の管理は普段は畳んでおく。日々見るのは上の2枚で、ここは直したいときだけ開けばいい。 */}
       <details className="rounded-xl border border-slate-200 bg-white shadow-sm">
