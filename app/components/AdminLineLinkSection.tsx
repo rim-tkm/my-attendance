@@ -10,6 +10,15 @@ const INVITE_TEMPLATE = `【お願い・10秒で終わります】
 → {あなたのコード}
 送信すると自動で「登録できました」と返信が届きます`;
 
+function buildInviteMessage(code: string): string {
+  return `【お願い・10秒で終わります】
+アプリとLINEの連携のため、このトークに次のコードだけをそのまま送ってください
+
+${code}
+
+送信すると自動で「登録できました」と返信が届きます。それで完了です！`;
+}
+
 function formatJstDateTimeLabel(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -43,6 +52,7 @@ export function AdminLineLinkSection() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -146,12 +156,30 @@ export function AdminLineLinkSection() {
     [load]
   );
 
+  const handleCopyInvite = useCallback(async (row: LineLinkRow) => {
+    const code = row.lineLinkCode;
+    if (!code) return;
+    const message = buildInviteMessage(code);
+    try {
+      await navigator.clipboard.writeText(message);
+      setCopiedRowId(row.id);
+      setTimeout(() => {
+        setCopiedRowId((current) => (current === row.id ? null : current));
+      }, 2000);
+    } catch {
+      window.alert(message);
+    }
+  }, []);
+
   return (
     <div className="space-y-6">
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-900">LINE連携</h2>
         <p className="mt-1 text-xs text-slate-500">
           メンバーの公式LINEとアプリのアカウントを紐付けます。コードを発行し、下の案内文をメンバーに送ってください。
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          各行の「案内文をコピー」を使うのが早いです。
         </p>
         <p className="mt-1 text-xs text-slate-500">
           「取り消す」を押すとコードもNULLになるため、取り消し後に再連携してもらう場合は「コード再発行」で新しいコードを案内し直してください。
@@ -252,6 +280,16 @@ export function AdminLineLinkSection() {
                               className="rounded border border-red-300 bg-red-50 px-3 py-1 text-[11px] text-red-700 hover:bg-red-100 disabled:opacity-50"
                             >
                               取り消す
+                            </button>
+                          )}
+                          {!linked && row.lineLinkCode && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void handleCopyInvite(row)}
+                              className="rounded border border-emerald-300 bg-emerald-50 px-3 py-1 text-[11px] text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                            >
+                              {copiedRowId === row.id ? "コピーしました✓" : "案内文をコピー"}
                             </button>
                           )}
                           <button
