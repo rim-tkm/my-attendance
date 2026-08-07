@@ -110,3 +110,21 @@ Slackスレッド回答に📚を付けると知識文案が作られ、承認�
 - スキーマ変更は Supabase 管理画面の「SQL Editor」で実行。`supabase-migration-*.sql` にファイルも残す。
 - **本番データの直接変更/削除は不可逆**。必ずユーザー確認のもとで。バックアップ/復元用スクリプトは `scripts/` にある。
 - メンバーの「無効化」は削除ではなく `is_active=false`（論理削除）。復元は `/admin/members/archived` から。
+
+---
+
+## 8. LINE連携（アカウント紐付け・個別コード方式）の本番結線手順
+
+管理画面でメンバーごとに発行した個別コードを、メンバーがLINE公式アカウントにメッセージ送信することで自分のLINEアカウントと紐付ける機能。コードは既にpush済みでも、以下の結線が終わるまでは無効（Webhookが署名検証で500になる）。
+
+1. **Supabaseでカラム追加SQLを実行**（`supabase-migration-users-line-link.sql`）。
+2. **Vercelに環境変数2つを設定してRedeploy**（Project Settings → Environment Variables）:
+   - `LINE_CHANNEL_SECRET`
+   - `LINE_CHANNEL_ACCESS_TOKEN`
+3. **LINE Developers（Messaging API設定）でWebhook URLを登録**:
+   - Webhook URL: `https://my-attendance-rho.vercel.app/api/webhooks/line-userid`
+   - 「検証」ボタンで成功することを確認する
+   - 応答設定は**チャット機能ON・Webhook利用ON・応答メッセージは現状のまま**にしておく
+4. **管理画面でコードを発行 → まず管理者自身のLINEで実機テスト → メンバーへ順次案内**。
+
+**順序の注意**: 手順②より先に③（Webhook URL登録）をやると、`LINE_CHANNEL_SECRET` が無い状態で検証を受けるため失敗する。**必ず②→③の順**で進める。

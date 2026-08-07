@@ -1,5 +1,38 @@
 # SESSION_LOG
 
+## 2026-08-07（その6）LINEアカウント紐付け（個別コード方式）を実装
+
+### 何を作ったか・なぜ
+メンバーが自分のLINEアカウントを自分のMyAttendanceアカウントに紐付けられるようにする機能。
+管理画面でメンバーごとに個別コードを発行し、メンバーがLINE公式アカウントにそのコードを
+メッセージ送信すると、Webhookが受けて自動で紐付ける「個別コード方式」を採用。
+
+作ったもの:
+- `supabase-migration-users-line-link.sql` — `users` にLINE紐付け用カラム追加のマイグレーションSQL
+- `lib/line-bot.ts` — LINE Messaging APIクライアント（署名検証・reply送信）
+- `lib/line-link-data.ts` — コード発行・突合・紐付けのデータ層
+- `app/api/webhooks/line-userid/route.ts` — コードを受けて自動紐付けするWebhook
+- `app/api/admin/line-links/` — 連携状況一覧・コード一括発行・取り消しの管理API
+- `AdminLineLinkSection.tsx` ＋ `app/page.tsx`（型 → navItems → AdminNavIcon → セクション本体の4点セット）— 管理画面「LINE連携」セクション
+- `.env.example` / `docs/DEPLOY.md`（§8として追記）— 環境変数と本番結線手順
+
+設計書: `docs/superpowers/specs/2026-08-07-line-account-linking-design.md`
+計画書: `docs/superpowers/plans/2026-08-07-line-account-linking.md`
+
+### 検証
+`npx tsc --noEmit` / `npm run build` ともに成功。
+
+### 申し送り
+1. **SQL実行済みか要確認**: `supabase-migration-users-line-link.sql` をSupabase SQL Editorで
+   実行済みかユーザーに確認すること（未実行だと連携機能全体が動かない）。
+2. **本番結線が未了**: Vercelに `LINE_CHANNEL_SECRET` / `LINE_CHANNEL_ACCESS_TOKEN` を設定して
+   Redeploy → LINE DevelopersでWebhook URL（`https://my-attendance-rho.vercel.app/api/webhooks/line-userid`）
+   を登録・検証・Webhook利用ON、の順で行う（`docs/DEPLOY.md` §8参照。順序を間違えると検証が失敗する）。
+3. **実機テスト未実施**: 管理画面でコードを発行 → 管理者自身のLINEで実機テスト →
+   問題なければメンバーへ案内、の流れで進める。
+4. **LINE側からの自動応答（プッシュ送信）は次フェーズ**。実装する前に課金通数（無料枠超過の有無）を
+   確認してから着手する。
+
 ## 2026-08-07（その5）中野くん知識化ボタンをモーダル入力方式に変更（回答者を自動記録）
 
 ### 何を作ったか・なぜ
