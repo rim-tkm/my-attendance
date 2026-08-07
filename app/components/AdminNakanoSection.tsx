@@ -656,11 +656,13 @@ function DraftsCard() {
         window.alert("知識に登録しました。中野くんは次の質問から使います");
       } catch (e) {
         window.alert(e instanceof Error ? e.message : String(e));
+        // 他の管理者が先に処理したケースで、古い行が画面に残り続けるのを防ぐ。
+        await load();
       } finally {
         setBusy(false);
       }
     },
-    [edits]
+    [edits, load]
   );
 
   const reject = useCallback(async (r: NakanoDraftRow) => {
@@ -678,10 +680,12 @@ function DraftsCard() {
       setRows((prev) => prev.filter((x) => x.id !== r.id));
     } catch (e) {
       window.alert(e instanceof Error ? e.message : String(e));
+      // 他の管理者が先に処理したケースで、古い行が画面に残り続けるのを防ぐ。
+      await load();
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [load]);
 
   if (rows.length === 0 && !error) return null;
 
