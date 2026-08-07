@@ -126,7 +126,10 @@ export async function slackBotPostMessage(params: {
 export async function slackBotGetPermalink(channel: string, messageTs: string): Promise<string | null> {
   try {
     const r = await callSlackApiGet("chat.getPermalink", { channel, message_ts: messageTs });
-    if (r.ok !== true) return null;
+    if (r.ok !== true) {
+      console.warn("[slack-bot] chat.getPermalink failed:", String(r.error ?? "unknown"));
+      return null;
+    }
     const link = r.permalink;
     return typeof link === "string" && link !== "" ? link : null;
   } catch {
@@ -141,8 +144,9 @@ export async function slackBotGetPermalink(channel: string, messageTs: string): 
  * 他の関数（slackBotPostMessage / slackBotGetPermalink）と違い、失敗時は throw する設計。
  * 呼び出し側が「API呼び出し自体の失敗」と「スレッドに返信が0件だった」を区別する必要があるため。
  *
- * limit: "50" — エスカレスレッドの人間の返信が50件を超える運用は想定しない。
- * 超えた場合は Slack API のページング仕様上、古い方から欠落する。
+ * limit: "50" — エスカレスレッドの返信が50件を超える運用は想定しない。
+ * conversations.replies は古い順に返すため、超えた場合は新しい方（直近の返信、
+ * 最終結論である可能性が高い）が欠落する。その規模になったらページネーション対応が必要。
  */
 export async function slackBotFetchThreadReplies(channel: string, threadTs: string): Promise<string[]> {
   const r = await callSlackApiGet("conversations.replies", { channel, ts: threadTs, limit: "50" });
