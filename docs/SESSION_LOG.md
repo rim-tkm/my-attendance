@@ -1,5 +1,38 @@
 # SESSION_LOG
 
+## 2026-08-07（その8）Slack返信→LINE自動送信（③最終形）を実装
+
+### 何を作ったか
+エスカレ通知の「✍️ 返信を作成」ボタン（旧・知識の文案を作る）から回答を書いて送信すると、
+**本人のLINEへ公式アカウントからプッシュ送信**される。あわせて「中野くんの知識に追加」を
+チェックボックスで毎回選べる。未連携メンバーには注意書きを出し知識追加のみ可能。
+
+- `lib/line-bot.ts` — `linePushText`（push API・リトライなし・2.5sタイムアウト）
+- `lib/line-link-data.ts` — `getLineLinkByUserId`
+- `lib/nakano-loop-data.ts` — `claimLineReply`/`releaseLineReply`（送信権claim）
+- `lib/nakano-loop-run.ts` — `runNakanoReplyFromModal`（LINE→ドラフト→スレッド記録の順）
+- `app/api/webhooks/slack-interactive/route.ts` — モーダル出し分け（宛先名表示・チェックボックス）
+- `supabase-migration-nakano-escalations-line-replied.sql` — **要実行**（line_replied_at列）
+
+設計書: `docs/superpowers/specs/2026-08-07-slack-line-reply-design.md`（改訂メモ含む）
+
+### レビューで塞いだ穴
+- **二重送信**: 3秒超過でモーダルが残り担当が押し直す／担当2人が同時に送る → 同じ回答が2通LINEに飛ぶ。
+  `nakano_escalations.line_replied_at` のclaim（先に送信権を取る）で防止。push失敗時はclaimを戻して再試行可
+- モーダルに宛先名が出ておらず取り違えに気付けない → 「送信先: ○○さん」を表示
+- ほか: 重複ドラフトを「失敗」と誤表示／旧モーダル互換／連携取得失敗と未連携の区別／pushタイムアウト
+
+### 課金の前提（ユーザー確認済み）
+公式LINEは**フリープラン=月200通**。プッシュのみ課金対象（replyは無料）。
+エスカレは月数十件ペースの見込みで当面は枠内。超過するとpushがエラー→モーダルに表示→手動LINEに切替。
+月間通数はLINE公式アカウント管理画面で確認。
+
+### 申し送り
+1. **マイグレーションSQL（line_replied_at）をユーザーが実行したか要確認**。未実行だとLINE送信チェック時に
+   claimが失敗して送信できない（エラーになるだけで事故にはならない）
+2. 実機E2E: エスカレ→返信を作成→LINE送信ON＋知識追加ONで送信→本人LINEに届く→承認待みに入る→スレッド記録、の一周
+3. 運用注意（コードで塞いだが念のため）: 同じ質問に2人で返信しようとすると後の人は「既に回答済み」エラーになる（正常動作）
+
 ## 2026-08-07（その7）LINE連携の本番結線完了・メンバー展開開始・整理導線の追加
 
 ### 到達点
