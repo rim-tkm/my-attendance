@@ -9,6 +9,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { isNakanoConfigured, NakanoNotConfiguredError } from "@/lib/nakano-client";
 
 const DRAFT_DEFAULT_MODEL = "claude-haiku-4-5-20251001";
 
@@ -16,8 +17,7 @@ export async function generateKnowledgeDraft(params: {
   question: string;
   rawAnswer: string;
 }): Promise<{ title: string; body: string }> {
-  const apiKey = (process.env.ANTHROPIC_API_KEY ?? "").trim();
-  if (apiKey === "") throw new Error("ANTHROPIC_API_KEY が設定されていません。");
+  if (!isNakanoConfigured()) throw new NakanoNotConfiguredError();
   const client = new Anthropic();
   const model = (process.env.NAKANO_DRAFT_MODEL ?? "").trim() || DRAFT_DEFAULT_MODEL;
 
@@ -41,16 +41,33 @@ export async function generateKnowledgeDraft(params: {
     ],
   });
 
+  if (res.stop_reason === "max_tokens") {
+    throw new Error("整形結果がmax_tokens(1000)で切れました。NAKANO_DRAFT_MODELの応答が長すぎます");
+  }
+
   const text = res.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
     .map((b) => b.text)
     .join("");
-  // 前後に説明文が付いても最初のJSONオブジェクトだけ拾う
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error("整形結果からJSONを取り出せませんでした");
-  const parsed = JSON.parse(match[0]) as { title?: unknown; body?: unknown };
+
+  // プロンプトはJSONのみを要求しているので、まず全体をそのままパースできるか試す。
+  // 貪欲な正規表現マッチは本文中に波括弧が含まれると壊れるため、フォールバックに留める。
+  let jsonText: string;
+  try {
+    JSON.parse(text.trim());
+    jsonText = text.trim();
+  } catch {
+    // 前後に説明文が付いても最初のJSONオブジェクトだけ拾う
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error(`整形結果からJSONを取り出せませんでした: ${text.slice(0, 200)}`);
+    jsonText = match[0];
+  }
+
+  const parsed = JSON.parse(jsonText) as { title?: unknown; body?: unknown };
   const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
   const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
-  if (title === "" || body === "") throw new Error("整形結果のtitle/bodyが空です");
+  if (title === "" || body === "") {
+    throw new Error(`整形結果のtitle/bodyが空です: ${jsonText.slice(0, 200)}`);
+  }
   return { title, body };
 }
