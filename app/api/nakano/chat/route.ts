@@ -26,8 +26,14 @@ const MAX_QUESTION_LENGTH = 2000;
 
 const OUTAGE_MESSAGE = `今つながりません。${NAKANO_LINE_FALLBACK}`;
 
-/** ツールだけ呼んで本文を書かなかったときに代わりに出す一言 */
-const ESCALATED_FALLBACK_TEXT = "担当に確認して折り返しますね。";
+/**
+ * ツールだけ呼んで本文を書かなかったときに代わりに出す一言。
+ * メンバーが「アプリ内で返事を待ち続ける」のを防ぐため、返信は公式LINEに来ることを必ず伝える。
+ */
+const ESCALATED_FALLBACK_TEXT = "確認しだい、担当から公式LINEでご連絡しますね🙇‍♂️";
+
+/** 本文が既にLINEでの返信に触れているとき、二重案内を避けるための判定 */
+const LINE_GUIDANCE_LINE = "\n（担当が確認して、公式LINEからご連絡します🙇‍♂️）";
 
 /**
  * 質問を受けて、回答を NDJSON（1行1JSON）で流し返す。
@@ -183,6 +189,14 @@ export async function POST(req: Request) {
             reason: "AIが本文で担当対応を案内したがツール未使用のため、安全網で自動エスカレーション",
             summary: "",
           });
+        }
+
+        // 担当に回すときは、返信が公式LINEに来ることを必ずメンバーに伝える。
+        // これが無いと、メンバーはアプリ内で返事を待ち続けて気づけない。
+        // 本文が空のときは上でLINE入りの定型文を入れているので、ここは本文がある場合だけ補う。
+        if (escalated && fullText.trim() !== "" && !fullText.includes("LINE")) {
+          fullText += LINE_GUIDANCE_LINE;
+          send({ type: "text", text: LINE_GUIDANCE_LINE });
         }
 
         if (truncated) {
