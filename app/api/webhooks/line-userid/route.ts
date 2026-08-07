@@ -61,13 +61,18 @@ export async function POST(req: Request) {
  * （コード生成側 lib/line-link-data.ts で 0/1/I/O/L/U を最初から除外しているため不要）。
  */
 function normalizeCode(text: string): string {
-  return text
-    .trim()
-    .replace(/[Ａ-Ｚａ-ｚ０-９－]/g, (c) =>
-      c === "－" ? "-" : String.fromCharCode(c.charCodeAt(0) - 0xfee0)
-    )
-    .replace(/[ー−‐—–]/g, "-")
-    .toUpperCase();
+  return (
+    text
+      // 空白（全角含む）とゼロ幅文字を全除去。コピペ・改行・「RIM - XXXX」のような分かち書きに耐える
+      .replace(/[\s​⁠﻿]/g, "")
+      .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      // ダッシュ類を包括的に "-" へ。当初は主要な5種だけ吸収していたが、手打ちの
+      // ｰ(半角長音 U+FF70) が漏れてコードが黙って弾かれた実事故（2026-08-07）があったため、
+      // 「見た目がハイフンに見える文字」を広めに拾う:
+      // U+2010〜U+2015(‐‑‒–—―) / U+2212(−) / U+30FC(ー) / U+FF70(ｰ) / U+FE58(﹘) / U+FE63(﹣) / U+FF0D(－)
+      .replace(/[‐-―−ーｰ﹘﹣－]/g, "-")
+      .toUpperCase()
+  );
 }
 
 // 正規化後は大文字のみで判定すればよい（コード生成の文字集合と一致させる）
