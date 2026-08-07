@@ -70,3 +70,35 @@ export async function lineReplyText(
     return { ok: false, error };
   }
 }
+
+/**
+ * プッシュ送信（課金対象。フリープランは月200通）。
+ * リトライしない: プッシュは冪等でなく、タイムアウト誤判定での二重送信は
+ * メンバー体験を直接損ねる。失敗は呼び出し側（担当のモーダル）に返して人が判断する。
+ */
+export async function linePushText(
+  lineUserId: string,
+  text: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch("https://api.line.me/v2/bot/message/push", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${channelAccessToken()}`,
+      },
+      body: JSON.stringify({ to: lineUserId, messages: [{ type: "text", text }] }),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const body = (await res.text().catch(() => "")).slice(0, 200);
+      console.warn("[line-bot] push failed:", res.status, body);
+      return { ok: false, error: `HTTP ${res.status}: ${body}` };
+    }
+    return { ok: true };
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    console.warn("[line-bot] push failed:", error);
+    return { ok: false, error };
+  }
+}

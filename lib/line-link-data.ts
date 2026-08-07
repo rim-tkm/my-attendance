@@ -203,6 +203,25 @@ export async function findUserByLineUserId(
   };
 }
 
+/** 質問者のLINE連携状態。モーダルの出し分けと送信時の再確認に使う */
+export async function getLineLinkByUserId(
+  userId: string
+): Promise<{ lineUserId: string; name: string } | null> {
+  const supabase = db();
+  const { data, error } = await supabase
+    .from("users")
+    .select("id, name, line_user_id")
+    .eq("id", userId)
+    .not("line_user_id", "is", null)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  return {
+    lineUserId: data.line_user_id as string,
+    name: ((data.name as string | null) ?? "").trim(),
+  };
+}
+
 /** 紐付け。line_user_id が未設定の行だけを更新し、勝てたかを返す（同時送信の後勝ち上書きを防ぐ） */
 export async function linkLineUser(userId: string, lineUserId: string): Promise<boolean> {
   const supabase = db();
