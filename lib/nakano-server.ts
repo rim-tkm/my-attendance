@@ -160,7 +160,8 @@ function buildNakanoMentionPrefix(): string {
  *
  * SLACK_BOT_TOKEN と SLACK_NAKANO_CHANNEL_ID が設定されていれば Bot 投稿にする。
  * Bot投稿は投稿tsが取れるため、📚リアクション→知識化の逆引き（nakano_escalations）が可能になる。
- * 未設定なら従来どおり Incoming Webhook（知識化は不可・通知のみ）。段階移行のため。
+ * 未設定、または Bot 投稿自体が失敗した場合（設定ミス等）は Incoming Webhook にフォールバックする。
+ * 「通知が届かない」方が「経路が混在する・重複する」より実害が大きいため。
  */
 export async function notifyNakanoEscalation(params: {
   memberName: string;
@@ -168,12 +169,12 @@ export async function notifyNakanoEscalation(params: {
   question: string;
   reason: string;
   summary: string;
-  /** 知識ループ用。Bot投稿できたとき nakano_escalations に対応を残す */
-  conversationId?: string;
-  userId?: string;
+  /** 知識ループ用。nakano_escalations に対応を残すために必須 */
+  conversationId: string;
+  userId: string;
 }): Promise<void> {
   try {
-    const text =
+    const baseText =
       buildNakanoMentionPrefix() +
       `🙋 中野くんが答えられない質問を受けました\n` +
       `・氏名: ${params.memberName || "（氏名不明）"}\n` +
@@ -181,31 +182,42 @@ export async function notifyNakanoEscalation(params: {
       `・質問: ${params.question}\n` +
       (params.summary ? `・要約: ${params.summary}\n` : "") +
       (params.reason ? `・理由: ${params.reason}\n` : "") +
-      `本人に回答をお願いします。前後のやりとりは管理画面の「中野くん」→「届いた質問」で確認できます。\n` +
-      `このスレッドに回答を書いて 📚 を付けると、中野くんの知識の文案になります。`;
+      `本人に回答をお願いします。前後のやりとりは管理画面の「中野くん」→「届いた質問」で確認できます。`;
+    // 📚案内はBot経路だけに付ける。Webhook投稿はtsが取れず nakano_escalations に残らないため、
+    // 📚を押しても知識化が起きない。案内だけ出すと担当が混乱する。
+    const KNOWLEDGE_HINT_LINE = "このスレッドに回答を書いて 📚 を付けると、中野くんの知識の文案になります。";
 
     const channelId = getNakanoSlackChannelId();
     if (isSlackBotConfigured() && channelId) {
-      const r = await slackBotPostMessage({ channel: channelId, text });
-      if (!r.ok) {
-        console.warn("[nakano] escalation bot post failed:", r.error);
+      const r = await slackBotPostMessage({ channel: channelId, text: `${baseText}\n${KNOWLEDGE_HINT_LINE}` });
+      if (r.ok) {
+        if (!r.ts) {
+          // ts無しでは逆引きできない行になるだけなので、対応表には残さない。
+          console.warn("[nakano] bot post returned empty ts, skip escalation record");
+        } else {
+          try {
+            await Promise.race([
+              insertNakanoEscalation({
+                conversationId: params.conversationId,
+                userId: params.userId,
+                question: params.question,
+                slackChannelId: channelId,
+                slackTs: r.ts,
+              }),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("escalation record timeout (5s)")), 5000)
+              ),
+            ]);
+          } catch (e) {
+            // 対応表に残せなくても通知自体は成功している。📚は効かないが実害は知識化だけ
+            console.warn("[nakano] escalation record failed:", e instanceof Error ? e.message : String(e));
+          }
+        }
         return;
       }
-      if (params.conversationId && params.userId) {
-        try {
-          await insertNakanoEscalation({
-            conversationId: params.conversationId,
-            userId: params.userId,
-            question: params.question,
-            slackChannelId: channelId,
-            slackTs: r.ts,
-          });
-        } catch (e) {
-          // 対応表に残せなくても通知自体は成功している。📚は効かないが実害は知識化だけ
-          console.warn("[nakano] escalation record failed:", e instanceof Error ? e.message : String(e));
-        }
-      }
-      return;
+      // Bot投稿が失敗しても、設定ミス（not_in_channel等）である可能性があり Webhook は生きていることがある。
+      // Bot失敗時もWebhookに落とす。通知が消えるより重複・経路の混在の方がマシ。ここではreturnせず下に落とす。
+      console.warn("[nakano] escalation bot post failed:", r.error);
     }
 
     const url = resolveSlackWebhookUrl("nakano");
@@ -213,7 +225,7 @@ export async function notifyNakanoEscalation(params: {
       console.warn("[nakano] escalation slack url not configured");
       return;
     }
-    const r = await postSlackIncomingWebhook(url, { text });
+    const r = await postSlackIncomingWebhook(url, { text: baseText });
     if (!r.ok) console.warn("[nakano] escalation slack failed:", r.error, r.detail);
   } catch (e) {
     console.warn("[nakano] escalation slack threw:", e instanceof Error ? e.message : String(e));
