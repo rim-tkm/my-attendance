@@ -1,12 +1,16 @@
 /**
- * 中野くん知識ループの本体処理。
+ * 中野くん知識ループ／Slack→LINE返信の本体処理。
  *
  * 📚リアクション（app/api/webhooks/slack-events/route.ts）と
- * 「📚 知識の文案を作る」ボタン（app/api/webhooks/slack-interactive/route.ts）の
+ * 「✍️ 返信を作成」ボタン（app/api/webhooks/slack-interactive/route.ts）の
  * 両方から呼ばれる共通処理。channel と ts（エスカレ通知 or その返信のいずれかのts）が
  * 確定した後の、親ts解決→escalation逆引き→重複チェック→AI整形→保存→案内までを担う。
  *
+ * runNakanoReplyFromModal はモーダル経路専用で、LINEプッシュ送信（設計書
+ * docs/superpowers/specs/2026-08-07-slack-line-reply-design.md）を追加で担う。
+ *
  * 設計: docs/superpowers/specs/2026-08-07-nakano-knowledge-loop-design.md §6
+ *       docs/superpowers/specs/2026-08-07-slack-line-reply-design.md §4〜§6
  */
 
 import { generateKnowledgeDraft } from "@/lib/nakano-draft";
@@ -15,6 +19,8 @@ import {
   findNakanoEscalationBySlackTs,
   insertNakanoKnowledgeDraft,
 } from "@/lib/nakano-loop-data";
+import { getLineLinkByUserId } from "@/lib/line-link-data";
+import { linePushText } from "@/lib/line-bot";
 import { notifyNakanoLoopFailure } from "@/lib/nakano-server";
 import {
   slackBotFetchThreadReplies,
@@ -124,7 +130,7 @@ export async function runNakanoKnowledgeCapture(params: { channel: string; ts: s
 }
 
 /**
- * モーダル（「📚 知識の文案を作る」ボタン→入力ボックス）からの送信を保存する。
+ * モーダル（「✍️ 返信を作成」ボタン→入力ボックス）からの送信を処理する。
  * 📚リアクション/旧ボタン経路（runNakanoKnowledgeCapture）と違い、AI整形を挟まない
  * （view_submission はSlack側の3秒応答制限があり、AI呼び出しを待つと間に合わないため）。
  * タイトルは質問の先頭30字、本文は入力そのまま。
@@ -135,14 +141,30 @@ export async function runNakanoKnowledgeCapture(params: { channel: string; ts: s
  * 重複チェック（findActiveDraftByEscalationId）はここでのみ行う。
  * モーダルを開く時点（block_actions）では trigger_id が発行から3秒で失効するため、
  * 質問文取得の1クエリだけに絞り、重複チェックはこの送信時点に寄せている。
+ *
+ * 処理順は **LINE送信 → 知識ドラフト作成 → スレッド記録**（設計書§4）。
+ * LINEプッシュは取り返しがつかない（冪等でない・課金対象）ため最初に確定させ、
+ * それ以降（ドラフト作成・スレッド記録）の失敗は warn に留めて処理を続ける。
+ * ここで errors を返して呼び出し元にモーダルを再表示させると、担当が「送信」を
+ * もう一度押してしまい LINE が二重に送られてしまうため。
  */
-export async function runNakanoKnowledgeCaptureFromModal(params: {
+export async function runNakanoReplyFromModal(params: {
   channel: string;
   ts: string;
   answer: string;
   responderName: string;
+  sendLine: boolean;
+  saveKnowledge: boolean;
 }): Promise<NakanoModalSubmitResult> {
-  const { channel, ts, answer, responderName } = params;
+  const { channel, ts, answer, responderName, sendLine, saveKnowledge } = params;
+
+  if (!sendLine && !saveKnowledge) {
+    return {
+      kind: "errors",
+      errors: { answer_block: "送信先（LINE）か知識追加のどちらかを選んでください" },
+    };
+  }
+
   try {
     const escalation = await findNakanoEscalationBySlackTs(channel, ts);
     if (!escalation) {
@@ -154,43 +176,102 @@ export async function runNakanoKnowledgeCaptureFromModal(params: {
       return { kind: "clear" };
     }
 
-    const existing = await findActiveDraftByEscalationId(escalation.id);
-    if (existing) {
-      return {
-        kind: "errors",
-        errors: { answer_block: "この質問の文案は既に承認待ちまたは登録済みです" },
-      };
+    // ① LINE送信（要求されていれば最優先で確定させる。何も保存していない時点での失敗なので
+    // errors を返して再試行を促すのが最も安全）
+    let lineSentToName: string | null = null;
+    if (sendLine) {
+      // モーダルを開いた時点(block_actions)ではなく、送信直前の状態で再確認する。
+      // モーダルを開いたまま放置されている間に紐付けが解除される等の変化に対応するため。
+      const lineLink = await getLineLinkByUserId(escalation.userId);
+      if (!lineLink) {
+        return {
+          kind: "errors",
+          errors: {
+            options_block: "この方はLINE未連携のため送信できません。チェックを外して再送信してください",
+          },
+        };
+      }
+      const pushed = await linePushText(lineLink.lineUserId, `ご質問いただいた件、担当より回答します😊\n\n${answer}`);
+      if (!pushed.ok) {
+        console.warn("[nakano-loop] LINE push failed:", pushed.error);
+        return {
+          kind: "errors",
+          errors: {
+            options_block:
+              "LINEの送信に失敗しました（通数上限・ブロック等の可能性）。時間を置くか、手動でLINEしてください",
+          },
+        };
+      }
+      lineSentToName = lineLink.name || "本人";
     }
 
-    const rawAnswer = `回答者: ${responderName}\n${answer}`;
-    const draftTitle = escalation.question.slice(0, 30);
-    const draftBody = answer;
+    // ② 知識ドラフト作成（要求されていれば）。LINE送信が既に成功している場合、
+    // ここでの失敗（重複含む）を errors にすると担当が「送信」を再度押して二重LINE送信になるため、
+    // 続行してスレッド記録に「知識追加は失敗」を添えるだけにとどめる。
+    let knowledgeSaved = false;
+    let knowledgeFailed = false;
+    if (saveKnowledge) {
+      try {
+        const existing = await findActiveDraftByEscalationId(escalation.id);
+        if (existing) {
+          if (lineSentToName === null) {
+            return {
+              kind: "errors",
+              errors: { answer_block: "この質問の文案は既に承認待ちまたは登録済みです" },
+            };
+          }
+          knowledgeFailed = true;
+        } else {
+          const rawAnswer = `回答者: ${responderName}\n${answer}`;
+          // permalink取得は失敗しても致命ではない一方、views.open→view_submission応答は
+          // Slackの3秒制限があるため、AI整形なしでもここで足を引っ張らせない(取得しない)。
+          await insertNakanoKnowledgeDraft({
+            escalationId: escalation.id,
+            question: escalation.question,
+            rawAnswer,
+            draftTitle: escalation.question.slice(0, 30),
+            draftBody: answer,
+            slackPermalink: null,
+          });
+          knowledgeSaved = true;
+        }
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e);
+        console.error("[nakano-loop] modal knowledge capture failed:", detail);
+        if (lineSentToName === null) {
+          await notifyNakanoLoopFailure(`知識化(モーダル)の処理に失敗: ${detail}`);
+          return {
+            kind: "errors",
+            errors: { answer_block: "保存に失敗しました。時間を置いてもう一度お試しください" },
+          };
+        }
+        knowledgeFailed = true;
+        await notifyNakanoLoopFailure(`知識化(モーダル/LINE送信後)の処理に失敗: ${detail}`);
+      }
+    }
 
-    // permalink取得は失敗しても致命ではない一方、views.open→view_submission応答は
-    // Slackの3秒制限があるため、AI整形なしでもここで足を引っ張らせない(取得しない)。
-    await insertNakanoKnowledgeDraft({
-      escalationId: escalation.id,
-      question: escalation.question,
-      rawAnswer,
-      draftTitle,
-      draftBody,
-      slackPermalink: null,
-    });
-
-    await slackBotPostMessage({
-      channel,
-      threadTs: ts,
-      text: `📚 ${responderName} さんの回答を承認待ちに入れました\n> ${answer}\n管理画面の「知識の承認待ち」から承認してください`,
-    }).catch(() => undefined);
+    // ③ スレッド記録（best-effort。失敗しても本体処理は成立している）
+    let threadText: string;
+    if (lineSentToName !== null) {
+      threadText = `📤 ${lineSentToName}さん宛にLINEで回答を送信しました（回答者: ${responderName}）\n> ${answer}`;
+      if (knowledgeSaved) {
+        threadText += "\n📚 知識の承認待ちにも入れました";
+      } else if (knowledgeFailed) {
+        threadText += "\n（知識追加は失敗しました。📚リアクションでやり直せます）";
+      }
+    } else {
+      threadText = `📚 ${responderName} さんの回答を承認待ちに入れました\n> ${answer}\n管理画面の「知識の承認待ち」から承認してください`;
+    }
+    await slackBotPostMessage({ channel, threadTs: ts, text: threadText }).catch(() => undefined);
 
     return { kind: "clear" };
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
-    console.error("[nakano-loop] modal knowledge capture failed:", detail);
-    await notifyNakanoLoopFailure(`知識化(モーダル)の処理に失敗: ${detail}`);
+    console.error("[nakano-loop] modal reply failed:", detail);
+    await notifyNakanoLoopFailure(`返信(モーダル)の処理に失敗: ${detail}`);
     return {
       kind: "errors",
-      errors: { answer_block: "保存に失敗しました。時間を置いてもう一度お試しください" },
+      errors: { answer_block: "処理に失敗しました。時間を置いてもう一度お試しください" },
     };
   }
 }

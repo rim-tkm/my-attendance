@@ -189,7 +189,7 @@ export async function notifyNakanoEscalation(params: {
     // ボタンはモーダル方式（押す→回答を書いて送信で1ステップ）に変更済み。
     // 旧来の「スレッド返信→📚」もAI整形付きの経路として残っているため併記する。
     const KNOWLEDGE_HINT_LINE =
-      "下の「📚 知識の文案を作る」ボタンを押して回答を書くと、中野くんの知識になります（スレッドに回答して📚リアクションでも可）。";
+      "下の「✍️ 返信を作成」から回答を書くと、LINEでの本人への送信と中野くんへの知識追加ができます（スレッドに回答して📚リアクションでも知識化のみ可能）。";
 
     const channelId = getNakanoSlackChannelId();
     if (isSlackBotConfigured() && channelId) {
@@ -203,7 +203,7 @@ export async function notifyNakanoEscalation(params: {
           elements: [
             {
               type: "button",
-              text: { type: "plain_text", text: "📚 知識の文案を作る", emoji: true },
+              text: { type: "plain_text", text: "✍️ 返信を作成", emoji: true },
               action_id: "nakano_make_knowledge",
               style: "primary",
             },

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { runNakanoKnowledgeCaptureFromModal } from "@/lib/nakano-loop-run";
+import { runNakanoReplyFromModal } from "@/lib/nakano-loop-run";
 import { findNakanoEscalationBySlackTs } from "@/lib/nakano-loop-data";
+import { getLineLinkByUserId } from "@/lib/line-link-data";
 import {
   getNakanoSlackChannelId,
   slackBotOpenView,
@@ -14,26 +15,33 @@ export const maxDuration = 60;
 
 const KNOWLEDGE_MODAL_CALLBACK_ID = "nakano_knowledge_modal";
 
-/** 対象外(escalationが見つからない)時の案内文。runNakanoKnowledgeCaptureFromModal と同一文言 */
+/** 対象外(escalationが見つからない)時の案内文。runNakanoReplyFromModal と同一文言 */
 const NOT_FOUND_TEXT =
   "この投稿からは元の質問を特定できませんでした(エスカレーション通知とそのスレッドでのみ知識化が使えます。Bot導入前の古い通知も対象外です)";
+
+/** 送信オプション（checkboxes）の選択肢。value は view_submission 側の判定と対応させる */
+const LINE_OPTION = { text: { type: "plain_text", text: "LINEで本人に送信" }, value: "send_line" };
+const KNOWLEDGE_OPTION = {
+  text: { type: "plain_text", text: "中野くんの知識に追加（承認待ちへ）" },
+  value: "save_knowledge",
+};
 
 /**
  * Slack Interactivity（block_actions / view_submission）の受け口。
  *
- * - block_actions: エスカレ通知の「📚 知識の文案を作る」ボタン押下。質問文を取得し、
+ * - block_actions: エスカレ通知の「✍️ 返信を作成」ボタン押下。質問文とLINE連携状態を取得し、
  *   回答入力用のモーダルを開く（views.open）。
- * - view_submission: モーダルの「承認待ちに送る」送信。回答を承認待ちドラフトとして保存する。
+ * - view_submission: モーダルの「送信」送信。LINEへのプッシュ送信・承認待ちドラフト作成を行う。
  *
- * trigger_id は発行から3秒で失効するため、block_actions では「質問文取得（1クエリ）→
- * モーダルを開く」だけに絞り、重複チェック等は view_submission 側（lib/nakano-loop-run.ts の
- * runNakanoKnowledgeCaptureFromModal）に寄せている。
+ * trigger_id は発行から3秒で失効するため、block_actions では「質問文・連携状態の取得（数クエリ）→
+ * モーダルを開く」だけに絞り、実際の送信処理（LINE再確認・重複チェック等）は view_submission 側
+ * （lib/nakano-loop-run.ts の runNakanoReplyFromModal）に寄せている。
  *
  * 📚リアクション（app/api/webhooks/slack-events/route.ts）と「スレッド返信→📚/ボタン」の
- * 旧2ステップ経路（runNakanoKnowledgeCapture、AI整形あり）は変更せずそのまま残す。
+ * 旧2ステップ経路（runNakanoKnowledgeCapture、AI整形あり）は変更せずそのまま残す（LINE送信はしない）。
  * このモーダル経路はAI整形を挟まない（view_submissionの3秒応答制限に収めるため）。
  *
- * 設計: docs/superpowers/specs/2026-08-07-nakano-knowledge-loop-design.md §6
+ * 設計: docs/superpowers/specs/2026-08-07-slack-line-reply-design.md §4〜§6
  */
 export async function POST(req: Request) {
   const rawBody = await req.text();
@@ -107,12 +115,48 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true });
   }
 
+  // 連携状態はここでは「モーダルに何を出すか」の判定にだけ使う。実際の送信可否は
+  // view_submission 側で改めて取り直して判定する（モーダル放置中の状態変化・改竄対策。設計書§4）。
+  let lineLink: { lineUserId: string; name: string } | null = null;
+  try {
+    lineLink = await getLineLinkByUserId(escalation.userId);
+  } catch (e) {
+    console.warn("[nakano-loop] line link lookup failed:", e instanceof Error ? e.message : String(e));
+    lineLink = null;
+  }
+
+  const optionsBlock = lineLink
+    ? {
+        type: "input",
+        block_id: "options_block",
+        optional: true,
+        label: { type: "plain_text", text: "送信オプション" },
+        element: {
+          type: "checkboxes",
+          action_id: "options_input",
+          initial_options: [LINE_OPTION, KNOWLEDGE_OPTION],
+          options: [LINE_OPTION, KNOWLEDGE_OPTION],
+        },
+      }
+    : {
+        type: "input",
+        block_id: "options_block",
+        optional: true,
+        label: { type: "plain_text", text: "送信オプション" },
+        element: {
+          type: "checkboxes",
+          action_id: "options_input",
+          initial_options: [KNOWLEDGE_OPTION],
+          options: [KNOWLEDGE_OPTION],
+        },
+      };
+
   const view = {
     type: "modal",
     callback_id: KNOWLEDGE_MODAL_CALLBACK_ID,
     private_metadata: JSON.stringify({ channel, ts }),
-    title: { type: "plain_text", text: "知識の文案を作る" },
-    submit: { type: "plain_text", text: "承認待ちに送る" },
+    title: { type: "plain_text", text: "返信を作成" },
+    submit: { type: "plain_text", text: "送信" },
     close: { type: "plain_text", text: "キャンセル" },
     blocks: [
       { type: "section", text: { type: "mrkdwn", text: `*質問:* ${escalation.question}` } },
@@ -134,6 +178,17 @@ export async function POST(req: Request) {
           text: "この人向けの返事ではなく、誰にでも当てはまる書き方にすると、そのまま知識になります",
         },
       },
+      ...(lineLink
+        ? []
+        : [
+            {
+              type: "context",
+              elements: [
+                { type: "mrkdwn", text: "⚠️ この方はLINE未連携のため、回答は手動でLINEしてください" },
+              ],
+            },
+          ]),
+      optionsBlock,
     ],
   };
 
@@ -143,7 +198,7 @@ export async function POST(req: Request) {
     await slackBotPostMessage({
       channel,
       threadTs: ts,
-      text: "文案作成の画面を開けませんでした。お手数ですが、もう一度ボタンを押してください",
+      text: "返信作成の画面を開けませんでした。お手数ですが、もう一度ボタンを押してください",
     }).catch(() => undefined);
   }
   return NextResponse.json({ ok: true });
@@ -188,7 +243,22 @@ async function handleViewSubmission(payload: Record<string, unknown>): Promise<R
         ? userObj.name
         : "担当者";
 
-  const result = await runNakanoKnowledgeCaptureFromModal({ channel, ts, answer, responderName });
+  // options_block は optional な checkboxes なので、1つもチェックしていないと
+  // selected_options が存在しない（undefined）ことがある。安全に既定[]へ倒す。
+  const optionsBlock = (values.options_block ?? {}) as Record<string, unknown>;
+  const optionsInput = (optionsBlock.options_input ?? {}) as Record<string, unknown>;
+  const selectedOptions = Array.isArray(optionsInput.selected_options)
+    ? (optionsInput.selected_options as Record<string, unknown>[])
+    : [];
+  const selectedValues = new Set(
+    selectedOptions
+      .map((o) => o.value)
+      .filter((v): v is string => typeof v === "string")
+  );
+  const sendLine = selectedValues.has(LINE_OPTION.value);
+  const saveKnowledge = selectedValues.has(KNOWLEDGE_OPTION.value);
+
+  const result = await runNakanoReplyFromModal({ channel, ts, answer, responderName, sendLine, saveKnowledge });
   if (result.kind === "errors") {
     return NextResponse.json({ response_action: "errors", errors: result.errors });
   }
