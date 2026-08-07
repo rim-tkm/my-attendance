@@ -1648,6 +1648,10 @@ function AdminDashboard(props: {
   /** 未稼働メンバーの一括無効化：選択中のID・処理中フラグ */
   const [neverWorkedSelectedIds, setNeverWorkedSelectedIds] = useState<Set<string>>(new Set());
   const [neverWorkedBulkBusy, setNeverWorkedBulkBusy] = useState(false);
+  /** 全メンバー（在籍中）一覧：検索語・選択中のID・処理中フラグ（休眠/未稼働に当てはまらない契約終了者の無効化用） */
+  const [allMembersSearch, setAllMembersSearch] = useState("");
+  const [allMembersSelectedIds, setAllMembersSelectedIds] = useState<Set<string>>(new Set());
+  const [allMembersBulkBusy, setAllMembersBulkBusy] = useState(false);
   const [newMemberName, setNewMemberName] = useState("");
   const [newMemberLogin, setNewMemberLogin] = useState("");
   const [newMemberPassword, setNewMemberPassword] = useState("12345");
@@ -2320,7 +2324,7 @@ function AdminDashboard(props: {
       if (diff !== 0) return diff;
       return a.member.name.localeCompare(b.member.name, "ja");
     });
-    return { dormant, neverWorked, threshold };
+    return { dormant, neverWorked, threshold, lastByUser };
   }, [activeMembers, allRecords, todayStr]);
   /** メンバー数サマリー：総登録（退会含む）・稼働（直近30日打刻）・在籍/退会/一般/インターンの内訳 */
   const memberCountSummary = useMemo(() => {
@@ -2469,6 +2473,77 @@ function AdminDashboard(props: {
       );
     } finally {
       setNeverWorkedBulkBusy(false);
+    }
+  };
+  /** 全メンバー（在籍中）一覧：休眠・未稼働の条件に当てはまらない人（契約終了したばかりの人等）も
+   *  無効化できるようにするための一覧。氏名・ふりがなの部分一致で検索し、氏名昇順で表示する。 */
+  const allMembersForDeactivation = useMemo(() => {
+    const q = allMembersSearch.trim();
+    const rows = activeMembers
+      .filter((m) => (m.loginAccount ?? "").trim().toLowerCase() !== "admin") // 自分自身を無効化してログイン不能になる事故を防ぐ
+      .filter((m) => q === "" || m.name.includes(q) || (m.furigana ?? "").includes(q))
+      .map((m) => ({ member: m, lastWorkDate: dormantMembers.lastByUser.get(m.id) ?? null }));
+    rows.sort((a, b) => a.member.name.localeCompare(b.member.name, "ja"));
+    return rows;
+  }, [activeMembers, allMembersSearch, dormantMembers.lastByUser]);
+  const allMembersAllSelected =
+    allMembersForDeactivation.length > 0 &&
+    allMembersForDeactivation.every((r) => allMembersSelectedIds.has(r.member.id));
+  const toggleAllMembersSelected = (id: string) => {
+    setAllMembersSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleAllMembersSelectAll = () => {
+    setAllMembersSelectedIds((prev) => {
+      if (allMembersForDeactivation.length > 0 && allMembersForDeactivation.every((r) => prev.has(r.member.id))) {
+        return new Set();
+      }
+      return new Set(allMembersForDeactivation.map((r) => r.member.id));
+    });
+  };
+  /** 選択した在籍中メンバーを一括で無効化。休眠・未稼働の一括無効化と同じ経路（adminUpdateMemberViaApi）を再利用。 */
+  const handleBulkDeactivateAllMembers = async () => {
+    const idSet = new Set(allMembersForDeactivation.map((r) => r.member.id));
+    const ids = Array.from(allMembersSelectedIds).filter((id) => idSet.has(id));
+    if (ids.length === 0 || allMembersBulkBusy) return;
+    const names = allMembersForDeactivation
+      .filter((r) => ids.includes(r.member.id))
+      .map((r) => r.member.name)
+      .join("、");
+    if (
+      !window.confirm(
+        `選択した ${ids.length} 名を無効化します。\n\n${names}\n\n一覧から非表示になり、ログインできなくなります（データは残り、アーカイブ一覧から復元できます）。実行しますか？`
+      )
+    )
+      return;
+    setAllMembersBulkBusy(true);
+    let okCount = 0;
+    const failures: string[] = [];
+    try {
+      for (const id of ids) {
+        try {
+          await adminUpdateMemberViaApi(id, { isActive: false });
+          okCount += 1;
+        } catch (e) {
+          const nm = members.find((m) => m.id === id)?.name ?? id;
+          failures.push(`${nm}（${e instanceof Error ? e.message : String(e)}）`);
+        }
+      }
+      const mems = await fetchMembersViaApi();
+      setMembers(mems ?? []);
+      setAllMembersSelectedIds(new Set());
+      onRefresh();
+      alert(
+        failures.length === 0
+          ? `${okCount} 名を無効化しました。`
+          : `${okCount} 名を無効化しました。\n\n失敗 ${failures.length} 名:\n${failures.join("\n")}`
+      );
+    } finally {
+      setAllMembersBulkBusy(false);
     }
   };
   const [adminMemberTableSort, setAdminMemberTableSort] = useState<{
@@ -7762,6 +7837,114 @@ function AdminDashboard(props: {
               </div>
             </>
           )}
+        </section>
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <details className="group">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+              <h2 className="text-sm font-semibold text-slate-900">全メンバー（在籍中）</h2>
+              <svg viewBox="0 0 24 24" className="h-5 w-5 flex-none text-slate-400 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 9l6 6l6 -6" />
+              </svg>
+            </summary>
+            <p className="mt-1 text-xs leading-relaxed text-slate-600">
+              在籍中の全メンバーです。上の2つの条件に当てはまらない人（最近まで稼働していた契約終了者など）もここから無効化できます。
+            </p>
+            <div className="mt-4">
+              <input
+                type="text"
+                value={allMembersSearch}
+                onChange={(e) => setAllMembersSearch(e.target.value)}
+                placeholder="氏名で検索"
+                className="w-full max-w-xs rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder:text-slate-400 focus:border-slate-500 focus:outline-none"
+              />
+            </div>
+            {allMembersForDeactivation.length === 0 ? (
+              <p className="mt-4 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                {allMembersSearch.trim() === "" ? "在籍中のメンバーはいません。" : "検索条件に一致するメンバーはいません。"}
+              </p>
+            ) : (
+              <>
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkDeactivateAllMembers()}
+                    disabled={allMembersSelectedIds.size === 0 || allMembersBulkBusy}
+                    className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {allMembersBulkBusy ? "無効化中…" : `選択した ${allMembersSelectedIds.size} 名を無効化`}
+                  </button>
+                  {allMembersSelectedIds.size > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setAllMembersSelectedIds(new Set())}
+                      disabled={allMembersBulkBusy}
+                      className="text-xs font-medium text-slate-500 underline hover:text-slate-700 disabled:opacity-40"
+                    >
+                      選択をクリア
+                    </button>
+                  )}
+                  <span className="text-xs text-slate-500">
+                    無効化すると一覧非表示・ログイン不可になります（アーカイブ一覧から復元可）。
+                  </span>
+                </div>
+                <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+                  <table className="w-full min-w-[600px] border-collapse text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-50">
+                        <th className="w-10 px-3 py-2.5">
+                          <input
+                            type="checkbox"
+                            aria-label="全選択"
+                            checked={allMembersAllSelected}
+                            onChange={toggleAllMembersSelectAll}
+                            className="h-4 w-4 cursor-pointer accent-amber-600"
+                          />
+                        </th>
+                        <th className="px-3 py-2.5 font-medium text-slate-600">氏名</th>
+                        <th className="px-3 py-2.5 font-medium text-slate-600">最終稼働日</th>
+                        <th className="px-3 py-2.5 font-medium text-slate-600">管理番号</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {allMembersForDeactivation.map(({ member, lastWorkDate }) => {
+                        const checked = allMembersSelectedIds.has(member.id);
+                        return (
+                          <tr
+                            key={member.id}
+                            className={`border-b border-slate-100 last:border-b-0 ${checked ? "bg-amber-50/60" : ""}`}
+                          >
+                            <td className="px-3 py-2.5">
+                              <input
+                                type="checkbox"
+                                aria-label={`${member.name} を選択`}
+                                checked={checked}
+                                onChange={() => toggleAllMembersSelected(member.id)}
+                                className="h-4 w-4 cursor-pointer accent-amber-600"
+                              />
+                            </td>
+                            <td className="px-3 py-2.5 font-medium text-slate-800">
+                              {member.name}
+                              {member.isIntern === true && (
+                                <span className="ml-1.5 inline-block rounded bg-violet-100 px-1.5 py-0.5 align-middle text-[10px] font-medium text-violet-800">
+                                  インターン
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5 font-mono text-xs tabular-nums text-slate-700 sm:text-sm">
+                              {lastWorkDate ?? "—"}
+                            </td>
+                            <td className="px-3 py-2.5 tabular-nums text-slate-500">
+                              {formatMemberInvoiceNumberThreeDigits(member.invoiceNumber) ?? "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </details>
         </section>
         </div>
       )}
