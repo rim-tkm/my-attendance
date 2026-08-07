@@ -186,8 +186,10 @@ export async function notifyNakanoEscalation(params: {
     // 📚案内はBot経路だけに付ける。Webhook投稿はtsが取れず nakano_escalations に残らないため、
     // 📚を押しても知識化が起きない。案内だけ出すと担当が混乱する。
     // ボタン（Interactivity）も同じ理由でBot経路だけに出す。
+    // ボタンはモーダル方式（押す→回答を書いて送信で1ステップ）に変更済み。
+    // 旧来の「スレッド返信→📚」もAI整形付きの経路として残っているため併記する。
     const KNOWLEDGE_HINT_LINE =
-      "スレッドに回答を書いてから、上の「📚 知識の文案を作る」ボタンを押してください（📚リアクションでも同じことができます）。";
+      "下の「📚 知識の文案を作る」ボタンを押して回答を書くと、中野くんの知識になります（スレッドに回答して📚リアクションでも可）。";
 
     const channelId = getNakanoSlackChannelId();
     if (isSlackBotConfigured() && channelId) {

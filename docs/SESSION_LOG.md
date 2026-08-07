@@ -1,5 +1,53 @@
 # SESSION_LOG
 
+## 2026-08-07（その5）中野くん知識化ボタンをモーダル入力方式に変更（回答者を自動記録）
+
+### 何を作ったか・なぜ
+「その4」で追加した「📚 知識の文案を作る」ボタンは「スレッドに回答を書いてから押す」2ステップで、
+順番を間違えやすいという問題があった。ボタンを押すと**モーダル（入力ボックス）**が開き、
+回答を書いて送信すれば1ステップで承認待ちに入るように変更。回答者はSlackのユーザー情報から
+自動記録されるため、誰が答えたかを別途聞く必要がなくなった。
+
+**設計上のトレードオフ（意図的な決定）**:
+- モーダル経路（`nakano_knowledge_modal`）は**AI整形を挟まない**。`view_submission` はSlack側の
+  3秒応答制限があり、AI呼び出し（`generateKnowledgeDraft`、Haiku経由）を待つと間に合わないため。
+  タイトルは質問の先頭30字、本文は入力文そのまま保存する。入力欄の `hint` で
+  「誰にでも当てはまる書き方にすると、そのまま知識になります」と促すことで質を担保する。
+- 従来経路（スレッド返信→📚リアクション、`runNakanoKnowledgeCapture`。AI整形あり）は**そのまま残す**。
+- 「スレッド返信→ボタン」の旧2ステップフローは廃止（ボタンの意味がモーダルを開くことに変わった）。
+- `trigger_id` は発行から3秒で失効するため、`block_actions` 側では「質問文取得（1クエリ）→
+  モーダルを開く」だけに絞り、承認待ち/承認済みの重複チェックは `view_submission` 側
+  （`runNakanoKnowledgeCaptureFromModal`）に寄せた。モーダルを開いた後に重複が判明した場合は
+  送信時に `response_action: "errors"` でインラインエラーを返す（開く前に毎回チェックするより
+  trigger_id失効のリスクが下がる）。
+- `view_submission` の3秒制限に配慮し、`slackBotGetPermalink`（パーマリンク取得）は呼ばない
+  （`slackPermalink: null` で保存）。従来経路（📚リアクション）はそのままパーマリンクを取得する。
+
+主要ファイル:
+- `lib/slack-bot.ts` — `slackBotOpenView(triggerId, view)` を追加（`views.open` を叩く）
+- `lib/nakano-loop-run.ts` — `runNakanoKnowledgeCaptureFromModal({channel, ts, answer, responderName})`
+  を追加。escalation逆引き→重複チェック→ドラフト保存→スレッド案内投稿を行い、
+  `{kind:"clear"}` / `{kind:"errors", errors}` を返す（route側で `response_action` に変換）
+- `app/api/webhooks/slack-interactive/route.ts` — `block_actions`（ボタン押下→モーダルを開く）と
+  `view_submission`（モーダル送信→保存）の2分岐に変更。旧来の
+  `runNakanoKnowledgeCapture` 直接呼び出しは削除（📚リアクション経路の
+  `app/api/webhooks/slack-events/route.ts` からの呼び出しは変更なし）
+- `lib/nakano-server.ts` — `KNOWLEDGE_HINT_LINE` を「ボタンを押して回答を書くと知識になる」
+  （モーダル前提）の文言に更新。旧来経路への言及も残す
+
+### 検証
+`npx tsc --noEmit` / `npm run build` ともに成功。
+
+### 申し送り
+1. **実機E2E未確認**: ボタン押下→モーダル表示→送信→承認待ちに出る、の一連は未テスト。
+   Slack側の `Interactivity & Shortcuts` の Request URL は「その4」で設定済みのはずだが、
+   モーダル（`views.open`）を使うには Bot トークンに `chat:write` に加えて
+   モーダル表示に必要なスコープが揃っているか（通常は追加スコープ不要だが要確認）。
+2. 重複チェックをモーダル送信時点に寄せたため、ごく短時間に同じ質問へ2人がほぼ同時に
+   ボタンを押した場合、両方にモーダルが開きうる。片方の送信は `insertNakanoKnowledgeDraft` 後の
+   重複チェックでは救えない（先着1件が保存された後に2件目が送信されると
+   `findActiveDraftByEscalationId` で弾かれるので、データの重複自体は防げる）。
+
 ## 2026-08-07（その4）中野くん知識ループにボタン起動を追加（📚リアクション誤操作対策）
 
 ### 何を作ったか・なぜ

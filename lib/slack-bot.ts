@@ -147,6 +147,23 @@ export async function slackBotResolveThreadParentTs(
   }
 }
 
+/** モーダルを開く。trigger_id は発行から3秒で失効するため、受信後すぐ呼ぶこと */
+export async function slackBotOpenView(
+  triggerId: string,
+  view: Record<string, unknown>
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await callSlackApiPost("views.open", { trigger_id: triggerId, view });
+    if (r.ok !== true) {
+      console.warn("[slack-bot] views.open failed:", String(r.error ?? "unknown"));
+      return { ok: false, error: String(r.error ?? "unknown") };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** 投稿へのパーマリンク。失敗しても致命ではないので null を返す */
 export async function slackBotGetPermalink(channel: string, messageTs: string): Promise<string | null> {
   try {
